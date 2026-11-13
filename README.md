@@ -68,12 +68,18 @@ and reduced-motion preferences are supported.
 
 ## Get started
 
-Yamori is an early personal extension, currently distributed as a VSIX.
+Yamori is an early preview. Its public extension ID is **`cowana-ai.yamori`**.
 
-1. Download **yamori-0.12.0.vsix** from the [latest prerelease](https://github.com/cowana-ai/yamori/releases/tag/v0.12.0).
-2. In Cursor or VS Code, open **Extensions → … → Install from VSIX** and select it.
-3. Open a code file, then run **Yamori: Read as Pseudocode** from the Command Palette.
-4. Choose **Overview**, **Logic** or **Detailed** in the reading panel.
+1. Open a code file in Cursor or VS Code.
+2. Run **Yamori: Read as Pseudocode** from the Command Palette.
+3. Choose **Overview**, **Logic** or **Detailed** in the reading panel.
+
+Install through your editor’s Extensions panel when the store listing is available.
+For manual installation, download a VSIX from [GitHub Releases](https://github.com/cowana-ai/yamori/releases),
+then choose **Extensions → … → Install from VSIX**. If you previously installed
+the local `chingis-local.yamori` preview, disable that extension before using
+`cowana-ai.yamori` to avoid duplicate commands. The public publisher ID has its
+own extension storage; the old preview’s stored explanations remain in its old folder.
 
 The editor toolbar's book button opens Yamori too. Use **⌘⌥P** on macOS or
 **Ctrl+Alt+P** elsewhere. Select a range first to explain only those lines.
@@ -196,7 +202,7 @@ edits/instructions are sent through the selected provider. Nothing is sent
 until you request generation, refresh, folder processing or a block update.
 
 Explanations are saved in Cursor/VS Code extension storage, outside your project,
-under `globalStorage/chingis-local.yamori/cache/`. Generated views are separated
+under `globalStorage/cowana-ai.yamori/cache/`. Generated views are separated
 by source, location, provider, model, effort and approved revision. Up to 100
 generated responses are retained. Approved user edits are stored separately in
 `cache/revisions/` until cleared.
