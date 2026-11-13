@@ -1,0 +1,137 @@
+{
+  "name": "yamori",
+  "displayName": "Yamori",
+  "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
+  "version": "0.9.0",
+  "publisher": "chingis-local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Yamori runs your local AI CLI to explain code."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "yamori.read",
+        "title": "Yamori: Read as Pseudocode",
+        "icon": "$(book)"
+      },
+      {
+        "command": "yamori.browse",
+        "title": "Yamori: Choose a File"
+      },
+      {
+        "command": "yamori.project",
+        "title": "Yamori: Read a Folder or Project"
+      },
+      {
+        "command": "yamori.provider",
+        "title": "Yamori: Choose Provider"
+      },
+      {
+        "command": "yamori.clear",
+        "title": "Yamori: Clear Cached Explanations"
+      },
+      {
+        "command": "yamori.model",
+        "title": "Yamori: Choose Model"
+      },
+      {
+        "command": "yamori.effort",
+        "title": "Yamori: Choose Effort"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "yamori.read",
+          "when": "resourceScheme == file",
+          "group": "navigation@99"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "yamori.read",
+          "when": "resourceScheme == file",
+          "group": "yamori"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "yamori.read",
+          "when": "!explorerResourceIsFolder && resourceScheme == file",
+          "group": "yamori"
+        },
+        {
+          "command": "yamori.project",
+          "when": "explorerResourceIsFolder",
+          "group": "yamori"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "yamori.read",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p",
+        "when": "editorTextFocus && !editorReadonly"
+      }
+    ],
+    "configuration": {
+      "title": "Yamori",
+      "properties": {
+        "yamori.codexPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional absolute path to Codex CLI. Otherwise detected automatically."
+        },
+        "yamori.claudePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional absolute path to Claude Code CLI."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test.js",
+    "check": "node --check extension.js && node --check engine.js && node --check panel.js"
+  },
+  "files": [
+    "extension.js",
+    "engine.js",
+    "panel.js",
+    "README.md",
+    "demo.py",
+    "yamori.png",
+    "katex.min.js",
+    "LICENSE"
+  ],
+  "icon": "yamori.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cowana-ai/yamori.git"
+  },
+  "homepage": "https://github.com/cowana-ai/yamori#readme",
+  "bugs": {
+    "url": "https://github.com/cowana-ai/yamori/issues"
+  },
+  "keywords": [
+    "pseudocode",
+    "code-understanding",
+    "cursor",
+    "codex",
+    "claude"
+  ]
+}

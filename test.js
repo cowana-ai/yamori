@@ -1,0 +1,520 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, schemaFor, lowerView, partialView, streamCodex, editPrompt, revisionPrompt, listModels, listEfforts } = require('./engine');
+const { panelHTML, tokenize, pseudocodeLines, mathParts } = require('./panel');
+const source = { uri: 'file:///example.py', name: 'example.py', language: 'python', startLine: 10, text: 'x = 1\nprint(x)' };
+const valid = { title: 'Print a number', summary: 'Sets and prints a number.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Set x to 1\nPrint x' }] };
+
+test('all levels use original selection line numbers and distinct instructions', () => {
+  for (const level of Object.keys(LEVELS)) {
+    const prompt = promptFor(source, level);
+    assert.match(prompt, /10: x = 1\n11: print\(x\)/);
+    assert.ok(prompt.includes(LEVELS[level].instruction));
+    assert.match(prompt, /untrusted data/);
+  }
+  assert.throws(() => promptFor(source, 'bogus'));
+});
+test('cache invalidates for source, location, level, provider and model changes', () => {
+  const key = cacheKey(source, 'logic', 'codex');
+  for (const changed of [{ ...source, text: 'x = 2' }, { ...source, startLine: 20 }, { ...source, uri: 'file:///other.py' }]) assert.notEqual(cacheKey(changed, 'logic', 'codex'), key);
+  assert.notEqual(cacheKey(source, 'detailed', 'codex'), key);
+  assert.notEqual(cacheKey(source, 'logic', 'claude'), key);
+  assert.notEqual(cacheKey(source, 'logic', 'claude', 'a'), cacheKey(source, 'logic', 'claude', 'b'));
+  assert.equal(cacheKey({ ...source }, 'logic', 'codex'), key);
+});
+test('accepts structured output and fenced JSON', () => {
+  assert.deepEqual(parseResult(JSON.stringify(valid), source), valid);
+  assert.deepEqual(parseResult('```json\n' + JSON.stringify(valid) + '\n```', source), valid);
+});
+test('rejects truncated JSON, empty output and invented source ranges', () => {
+  for (const raw of ['{', '{}', '{"sections":[]}']) assert.throws(() => parseResult(raw, source));
+  for (const section of [{ startLine: 1 }, { endLine: 500 }, { startLine: 11, endLine: 10 }, { pseudocode: '' }, { endLine: 10.5 }]) {
+    assert.throws(() => parseResult(JSON.stringify({ ...valid, sections: [{ ...valid.sections[0], ...section }] }), source));
+  }
+});
+test('process input travels over stdin without shell interpretation', async () => {
+  const input = '$(touch /tmp/should-not-exist); `echo unsafe`';
+  const output = await runProcess(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], input);
+  assert.equal(output, input);
+});
+test('process cancellation terminates a running request', async () => {
+  const controller = new AbortController();
+  const promise = runProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], '', { signal: controller.signal });
+  setTimeout(() => controller.abort(), 40);
+  await assert.rejects(promise, /Cancelled/);
+});
+test('process timeout and nonzero exit become errors, credentials are redacted', async () => {
+  await assert.rejects(runProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], '', { timeout: 40 }), /too long/);
+  await assert.rejects(runProcess(process.execPath, ['-e', 'console.error("sk-private-secret"); process.exit(1)'], ''), error => error.message.includes('[redacted]') && !error.message.includes('sk-private'));
+});
+test('webview scripts compile and model content is inserted as text, never HTML', () => {
+  const html = panelHTML();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
+  new vm.Script(script);
+  assert.match(html, /default-src 'none'/);
+  assert.ok(!script.includes('innerHTML'));
+  assert.match(script, /textContent/);
+  assert.match(html, /aria-pressed/);
+  assert.match(script, /node\('details'\)/);
+  assert.match(script, /tokenize\(text\)/);
+});
+
+test('highlighting preserves exact text and distinguishes rationale from strings', () => {
+  const text = 'IF x > 1e-8: RETURN softmax(x) # subtract max for numerical stability';
+  const tokens = tokenize(text);
+  assert.equal(tokens.map(t => t.text).join(''), text);
+  assert.ok(tokens.some(t => t.kind === 'keyword' && t.text === 'IF'));
+  assert.ok(tokens.some(t => t.kind === 'output' && t.text === 'RETURN'));
+  assert.ok(tokens.some(t => t.kind === 'number' && t.text === '1e-8'));
+  assert.ok(tokens.some(t => t.kind === 'function' && t.text === 'softmax'));
+  assert.ok(tokens.some(t => t.kind === 'comment' && t.text.includes('numerical stability')));
+  const quoted = tokenize('PRINT "# this is a string, not a comment"');
+  assert.ok(quoted.some(t => t.kind === 'string'));
+  assert.ok(!quoted.some(t => t.kind === 'comment'));
+  const hostile = '<script>alert("x")</script> # <img onerror="oops">';
+  assert.equal(tokenize(hostile).map(t => t.text).join(''), hostile);
+});
+
+test('important source rationale is requested at every detail level', () => {
+  for (const level of Object.keys(LEVELS)) {
+    const prompt = promptFor({ ...source, text: '# subtract max for numerical stability\nz = x - max(x)' }, level);
+    assert.match(prompt, /Preserve important explanatory source comments as # comments/);
+    assert.match(prompt, /at EVERY detail level, including Overview/);
+    assert.match(prompt, /Do not invent rationale absent from the source/);
+  }
+});
+
+test('readability instructions require task headings and expanded decisions', () => {
+  for (const level of Object.keys(LEVELS)) {
+    const prompt = promptFor(source, level);
+    assert.match(prompt, /purpose-based title and the original symbol/);
+    assert.match(prompt, /one action or structuring element per line/);
+    assert.match(prompt, /Put IF, ELSE and each consequence on separate lines/);
+    assert.match(prompt, /without Markdown emphasis, HTML entities or code fences/);
+  }
+});
+
+test('higher generations prepare lower views in the same request', () => {
+  assert.deepEqual(schemaFor('logic').properties.views.required, ['overview']);
+  assert.deepEqual(schemaFor('detailed').properties.views.required, ['overview', 'logic']);
+  assert.deepEqual(schemaFor('overview').properties.views.required, []);
+  assert.match(promptFor(source, 'logic'), /4–10 concise action lines/);
+});
+
+test('validates and preserves step links and companion views across disk serialization', () => {
+  const mapped = { ...valid, sections: [{ ...valid.sections[0], lineMap: [{ pseudocodeLine: 2, startLine: 11, endLine: 11 }] }] };
+  const parsed = parseResult(JSON.stringify({ ...mapped, views: { overview: mapped } }), source);
+  assert.deepEqual(lowerView(parsed, 'logic', 'overview'), mapped);
+  assert.equal(parsed.sections[0].lineMap[0].startLine, 11);
+  for (const bad of [{ pseudocodeLine: 5, startLine: 10, endLine: 10 }, { pseudocodeLine: 1, startLine: 1, endLine: 10 }, { pseudocodeLine: 1, startLine: 11, endLine: 10 }]) {
+    assert.throws(() => parseResult(JSON.stringify({ ...valid, sections: [{ ...valid.sections[0], lineMap: [bad] }] }), source), /Invalid step/);
+  }
+  assert.equal(lowerView(parsed, 'overview', 'detailed'), undefined);
+});
+
+test('Codex receives a schema object and returns companion views through its output file', async () => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-cli-test-'));
+  const executable = path.join(dir, 'codex');
+  const response = { ...valid, views: { overview: valid } };
+  try {
+    await fs.writeFile(executable, '#!' + process.execPath + '\n' +
+      'const fs=require("node:fs");const a=process.argv.slice(2);' +
+      'const schema=JSON.parse(fs.readFileSync(a[a.indexOf("--output-schema")+1],"utf8"));' +
+      'if(schema.type!=="object"||!schema.properties.views.properties.overview||a[a.indexOf("--model")+1]!=="test-choice")process.exit(3);' +
+      'process.stdin.resume();process.stdin.on("end",()=>fs.writeFileSync(a[a.indexOf("--output-last-message")+1],' + JSON.stringify(JSON.stringify(response)) + '));', { mode: 0o700 });
+    const value = await generate({ source, level: 'logic', provider: 'codex', cliPath: executable, model: 'test-choice' });
+    assert.equal(value.views.overview.title, valid.title);
+    assert.equal(value.requestedModel, 'test-choice');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('line formatting preserves real newlines, indentation, blank lines and note styles', () => {
+  const text = 'WHEN training starts\r\n    # Count restored updates.\r\n\r\n    IF the first reduction is due\r\n        Halve the rate.';
+  const rows = pseudocodeLines(text);
+  assert.equal(rows.length, 5);
+  assert.deepEqual(rows.map(r => r.kind), ['routine', 'note', 'blank', 'decision', '']);
+  assert.equal(rows[4].text, '        Halve the rate.');
+});
+
+test('actual embedded webview renders multiline steps as separate styled rows', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.style = {}; }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+    setAttribute() {} addEventListener(type, callback) { (this.events ||= {})[type] = callback; }
+  }
+  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'source'].map(id => [id, new Element('div')]));
+  let receive;
+  const document = { getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
+  const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
+  const sent = [];
+  vm.runInNewContext(script, { document, DOMParser: class { parseFromString(markup) { return { querySelector: () => { const el = new Element('math'); el.markup = markup; return el; } }; } }, acquireVsCodeApi: () => ({ postMessage(m) { sent.push(m); } }), window: { addEventListener: (name, fn) => { if (name === 'message') receive = fn; } } });
+  const renderedState = { requestedEffort: 'medium', documentKey: 'test-document', providerLabel: 'Codex', level: 'logic', name: 'test.py', result: { ...valid, sections: [{ ...valid.sections[0], lineMap: [{ pseudocodeLine: 5, startLine: 11, endLine: 11 }], pseudocode: 'WHEN training starts\n    # Preserve restored updates.\n\n    IF reduction is due\n        Halve the learning rate $\\eta \\leftarrow \\frac{\\eta}{2}$.' }] } };
+  receive({ data: { type: 'state', state: renderedState } });
+  assert.equal(elements.effort.textContent, 'Effort: medium ▾');
+  elements.effort.events.click(); assert.equal(sent.at(-1).type, 'effort');
+  const all = []; const visit = el => { all.push(el); (el.children || []).forEach(visit); }; visit(elements.content);
+  const rows = all.filter(el => el.className?.startsWith('code-line'));
+  assert.equal(rows.length, 5, 'actual newlines must not collapse into one text row');
+  assert.ok(rows[1].className.includes('note'));
+  assert.ok(rows[2].className.includes('blank'));
+  assert.ok(rows[3].className.includes('decision'));
+  assert.ok(rows[4].className.includes('linked'));
+  rows[4].events.mouseenter();
+  assert.equal(sent.at(-1).type, 'hoverStep');
+  rows[4].events.mouseleave();
+  assert.equal(sent.at(-1).type, 'clearHover');
+  rows[4].events.click();
+  assert.equal(sent.at(-1).type, 'revealStep');
+  assert.equal(sent.at(-1).pseudocodeLine, 5);
+  assert.equal(elements.content.className, 'paper');
+  const math = all.find(el => el.tag === 'math');
+  assert.ok(math, 'equations use native math rather than plain text');
+  assert.match(math.markup, /<mfrac>/);
+  const copy = all.find(el => el.tag === 'button' && el.textContent === 'Copy');
+  copy.events.click({ preventDefault() {} });
+  assert.equal(sent.at(-1).type, 'copyBlock');
+  assert.equal(sent.at(-1).documentKey, 'test-document');
+  all.find(el => el.textContent === 'Edit').events.click({ preventDefault() {} });
+  const editorNodes = []; const findEditor = el => { editorNodes.push(el); (el.children || []).forEach(findEditor); }; findEditor(elements.content);
+  const fields = editorNodes.filter(el => el.tag === 'textarea');
+  assert.equal(fields.length, 2);
+  fields[0].value = 'Count completed examples'; fields[0].events.input();
+  fields[1].value = 'Explain the accumulator'; fields[1].events.input();
+  editorNodes.find(el => el.textContent === 'Update with Codex').events.click();
+  assert.equal(sent.at(-1).type, 'updateBlock');
+  assert.equal(sent.at(-1).draft, 'Count completed examples');
+  assert.equal(sent.at(-1).instruction, 'Explain the accumulator');
+  assert.equal(sent.at(-1).baseText, renderedState.result.sections[0].pseudocode);
+  editorNodes.find(el => el.textContent === 'Cancel').events.click();
+  receive({ data: { type: 'state', state: { ...renderedState, stale: true } } });
+  const staleNodes = []; const scan = el => { staleNodes.push(el); (el.children || []).forEach(scan); }; scan(elements.content);
+  assert.ok(!staleNodes.some(el => el.className?.includes('linked')));
+  receive({ data: { type: 'state', state: { ...renderedState, busy: true, partial: true, progress: 'Writing pseudocode', model: 'test-model', activity: ['Connecting', 'Writing pseudocode'] } } });
+  const draftNodes = []; const draftScan = el => { draftNodes.push(el); (el.children || []).forEach(draftScan); }; draftScan(elements.content);
+  assert.ok(draftNodes.some(el => el.tag === 'img'), 'loading view includes the gecko');
+  assert.ok(draftNodes.some(el => el.textContent === 'Writing pseudocode'));
+  assert.ok(!draftNodes.some(el => el.className?.includes('linked')), 'partial drafts have no actionable source links');
+});
+
+test('extension workflow switches levels, reuses cache, marks edits stale and ignores cancelled results', async () => {
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+  const os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-test-'));
+  const commands = new Map(), state = new Map(), messages = [];
+  let receive, change, calls = 0, deferred, copied, lastRevision, lastModel, lastEffort, nextPick;
+  class Uri { constructor(value) { this.value = value; this.scheme = 'file'; this.fsPath = value.replace('file://', ''); } toString() { return this.value; } static parse(v) { return new Uri(v); } }
+  class Range { constructor(a, b, c, d) { if (typeof a === 'object') { this.start = a; this.end = b; } else { this.start = { line: a, character: b }; this.end = { line: c, character: d }; } } }
+  class Selection extends Range { get isEmpty() { return this.start.line === this.end.line && this.start.character === this.end.character; } }
+  let documentText = 'x = 1\nprint(x)';
+  const doc = { uri: new Uri('file:///sample.py'), languageId: 'python', lineCount: 2, getText: () => documentText, lineAt: i => ({ text: documentText.split('\n')[i] }) };
+  let highlights = [], sourceOpens = 0, scrolls = 0;
+  const editor = { document: doc, selection: new Selection(0, 0, 0, 0), setDecorations(_, ranges) { highlights = ranges; }, revealRange() { scrolls++; } };
+  const noop = () => ({ dispose() {} });
+  const vscode = {
+    Uri, Range, Selection, ThemeColor: class {}, ViewColumn: { One: 1, Beside: 2 }, TextEditorRevealType: { InCenterIfOutsideViewport: 1 },
+    commands: { registerCommand(id, fn) { commands.set(id, fn); return noop(); } },
+    workspace: { isTrusted: true, textDocuments: [doc], asRelativePath: () => 'sample.py', openTextDocument: async () => doc, getConfiguration: () => ({ get: (_, fallback) => fallback }), onDidChangeTextDocument(fn) { change = fn; return noop(); } },
+    window: { showQuickPick: async items => { const rows = await items; return rows.find(row => row.id === nextPick || row.value === nextPick); }, activeTextEditor: editor, visibleTextEditors: [editor], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showTextDocument: async () => { sourceOpens++; return editor; },
+      showErrorMessage(message) { throw new Error(message); }, setStatusBarMessage() {},
+      createWebviewPanel: () => ({ reveal() {}, onDidDispose: noop, webview: { postMessage: m => messages.push(structuredClone(m.state)), onDidReceiveMessage(fn) { receive = fn; return noop(); } } }) },
+    env: { clipboard: { writeText: async text => { copied = text; } } }
+  };
+  const engine = { ...require('./engine'), listModels: async () => [{ id: 'test-choice', label: 'Test model', effort: 'high' }], listEfforts: async () => [{ id: 'low', description: 'Quick' }, { id: 'medium', description: 'Balanced' }, { id: 'high', description: 'Deep' }], generate: async opts => {
+    calls++;
+    lastRevision = opts.revision; lastModel = opts.model; lastEffort = opts.effort;
+    if (deferred) return new Promise(resolve => { deferred.resolve = resolve; deferred.progress = opts.onProgress; });
+    if (opts.edit) return { ...valid, sections: [{ ...opts.edit.section, pseudocode: opts.edit.draft + '\n# Polished', lineMap: [{ pseudocodeLine: 2, startLine: 2, endLine: 2 }] }] };
+    const make = name => ({ ...valid, title: name, sections: [{ ...valid.sections[0], pseudocode: opts.revision?.value.sections[0].pseudocode || valid.sections[0].pseudocode, startLine: 1, endLine: 2, lineMap: [{ pseudocodeLine: 2, startLine: 2, endLine: 2 }] }, { title: 'Unchanged neighbor', pseudocode: 'Print result', startLine: 2, endLine: 2 }] });
+    return { ...make(opts.level), requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, views: Object.fromEntries(['overview', 'logic', 'detailed'].slice(0, ['overview', 'logic', 'detailed'].indexOf(opts.level)).map(name => [name, make(name)])) };
+  } };
+  const moduleStub = { exports: {} };
+  const context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (k, fallback) => state.get(k) ?? fallback, update: async (k, v) => state.set(k, v) }, secrets: { get: async () => undefined } };
+  try {
+    const code = await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8');
+    vm.runInNewContext(code, { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout });
+    await moduleStub.exports.activate(context);
+    await commands.get('yamori.read')();
+    assert.equal(messages.at(-1).result.title, 'logic');
+    assert.equal(calls, 1);
+    await commands.get('yamori.read')();
+    assert.equal(calls, 1, 'unchanged source uses cached explanation');
+    await receive({ type: 'level', level: 'overview' });
+    assert.equal(messages.at(-1).result.title, 'overview');
+    assert.equal(calls, 1, 'downgrade requires no second model request');
+    await receive({ type: 'level', level: 'detailed' });
+    assert.equal(messages.at(-1).result.title, 'detailed');
+    await receive({ type: 'level', level: 'logic' });
+    assert.equal(calls, 2, 'returning to an earlier level uses cache');
+    await receive({ type: 'hoverStep', index: 0, pseudocodeLine: 2 });
+    assert.equal(highlights[0].start.line, 1);
+    assert.equal(editor.selection.start.line, 0, 'hover must not move the caret');
+    assert.equal(sourceOpens, 0, 'hover must not open or focus editors');
+    assert.equal(scrolls, 0, 'hover must not scroll editors');
+    await receive({ type: 'clearHover' });
+    assert.equal(highlights.length, 0);
+    await receive({ type: 'revealStep', index: 0, pseudocodeLine: 2 });
+    assert.equal(editor.selection.start.line, 1, 'step jumps to its precise range, not the entire section');
+    editor.selection = new Selection(0, 0, 0, 0);
+    // A fresh extension activation has no memory cache; it must recover the
+    // companion Overview from the stored Logic/Detailed response without inference.
+    context.subscriptions.splice(0).forEach(d => d?.dispose?.());
+    assert.equal(highlights.length, 0, 'deactivation clears existing highlights');
+    await moduleStub.exports.activate(context);
+    await commands.get('yamori.read')();
+    await receive({ type: 'level', level: 'overview' });
+    assert.equal(calls, 2, 'companion views survive extension restart');
+    await receive({ type: 'level', level: 'logic' });
+    documentText = 'x = 2\nprint(x)'; change({ document: doc });
+    assert.equal(messages.at(-1).stale, true);
+    await receive({ type: 'hoverStep', index: 0, pseudocodeLine: 2 });
+    assert.equal(highlights.length, 0, 'stale source must never highlight');
+    await receive({ type: 'refresh' });
+    assert.equal(calls, 3, 'refresh translates edited source');
+    assert.equal(messages.at(-1).stale, false);
+    const beforeEdit = messages.at(-1), neighbor = JSON.stringify(beforeEdit.result.sections[1]);
+    await receive({ type: 'copyBlock', index: 0, documentKey: beforeEdit.documentKey });
+    assert.equal(copied, beforeEdit.result.sections[0].pseudocode);
+    await receive({ type: 'updateBlock', index: 0, documentKey: beforeEdit.documentKey, baseText: beforeEdit.result.sections[0].pseudocode, draft: 'Set x to $x^2$\nPrint x', instruction: 'Keep the equation' });
+    const edited = messages.at(-1).result.sections[0].pseudocode;
+    assert.match(edited, /Polished/);
+    assert.equal(JSON.stringify(messages.at(-1).result.sections[1]), neighbor, 'neighboring blocks must remain byte-for-byte unchanged');
+    assert.equal(messages.at(-1).result.edited, true);
+    assert.equal(calls, 4);
+    await receive({ type: 'level', level: 'overview' });
+    assert.equal(calls, 5, 'a stale lower view is regenerated lazily');
+    assert.ok(lastRevision?.value.sections[0].pseudocode.includes('$x^2$'));
+    await receive({ type: 'level', level: 'logic' });
+    assert.equal(calls, 5);
+    assert.equal(messages.at(-1).result.sections[0].pseudocode, edited, 'approved block is preserved exactly');
+    await receive({ type: 'level', level: 'detailed' });
+    await receive({ type: 'level', level: 'logic' });
+    assert.equal(messages.at(-1).result.sections[0].pseudocode, edited, 'derived companion views cannot replace the approved edit');
+    context.subscriptions.splice(0).forEach(d => d?.dispose?.());
+    await moduleStub.exports.activate(context);
+    await commands.get('yamori.read')();
+    assert.equal(messages.at(-1).result.sections[0].pseudocode, edited, 'approved edits survive extension restart');
+    deferred = {};
+    const request = receive({ type: 'refresh' });
+    while (!deferred.resolve) await new Promise(resolve => setTimeout(resolve, 1));
+    deferred.progress({ phase: 'Writing pseudocode', preview: { ...valid, title: 'live draft' }, model: 'test-stream-model' });
+    assert.equal(messages.at(-1).partial, true);
+    assert.equal(messages.at(-1).model, 'test-stream-model');
+    await receive({ type: 'stop' });
+    deferred.progress({ phase: 'Writing pseudocode', preview: { ...valid, title: 'obsolete progress' } });
+    assert.notEqual(messages.at(-1).result?.title, 'obsolete progress');
+    deferred.resolve({ ...valid, title: 'obsolete result' });
+    await request;
+    assert.notEqual(messages.at(-1).result.title, 'obsolete result');
+    assert.equal(messages.at(-1).busy, false);
+    deferred = undefined;
+    const beforeChoice = calls;
+    nextPick = 'test-choice'; await commands.get('yamori.model')();
+    assert.equal(calls, beforeChoice, 'choosing a model must not start inference');
+    assert.equal(state.get('codexModel').id, 'test-choice');
+    assert.equal(messages.at(-1).requestedModel, 'test-choice');
+    await receive({ type: 'refresh' });
+    assert.equal(lastModel, 'test-choice', 'new generation receives selected model');
+    assert.equal(calls, beforeChoice + 1);
+    await receive({ type: 'level', level: 'overview' });
+    assert.equal(calls, beforeChoice + 1, 'model-specific companion view is cached');
+    nextPick = 'claude'; await receive({ type: 'provider' });
+    assert.equal(lastModel, '', 'Claude has a separate default');
+    nextPick = 'test-choice'; await commands.get('yamori.model')();
+    assert.equal(state.get('claudeModel').id, 'test-choice');
+    nextPick = 'codex'; await receive({ type: 'provider' });
+    assert.equal(messages.at(-1).requestedModel, 'test-choice', 'Codex choice is restored');
+    const beforeEffort = calls;
+    nextPick = 'medium'; await commands.get('yamori.effort')();
+    assert.equal(calls, beforeEffort, 'choosing effort must not start inference');
+    assert.equal(messages.at(-1).requestedEffort, 'medium');
+    await receive({ type: 'refresh' });
+    assert.equal(lastEffort, 'medium');
+    assert.equal(calls, beforeEffort + 1);
+    nextPick = 'auto'; await commands.get('yamori.effort')();
+    await receive({ type: 'refresh' });
+    assert.equal(lastEffort, null, 'provider default omits the effort override');
+    nextPick = ''; await commands.get('yamori.model')();
+    nextPick = 'high'; await commands.get('yamori.effort')();
+    await commands.get('yamori.read')();
+    assert.equal(lastEffort, 'high', 'effort-only changes invalidate default-model cache keys');
+    nextPick = 'test-choice'; await commands.get('yamori.model')();
+    assert.equal(messages.at(-1).requestedEffort, null, 'each model restores its saved effort');
+    context.subscriptions.splice(0).forEach(d => d?.dispose?.());
+    await moduleStub.exports.activate(context); await commands.get('yamori.read')();
+    assert.equal(messages.at(-1).requestedEffort, null, 'effort choices survive restart');
+
+  } finally { context.subscriptions.forEach(d => d?.dispose?.()); await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+test('identity migration imports valid preferences once without overwriting newer choices', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-migration-test-'));
+  const state = new Map([['provider', 'codex']]);
+  const context = { globalStorageUri: { fsPath: dir }, globalState: { get: k => state.get(k), update: async (k, v) => state.set(k, v) } };
+  const stub = { exports: {} };
+  try {
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? {} : require(id) });
+    const file = path.join(dir, 'migration.json');
+    await fs.writeFile(file, JSON.stringify({ detail: 'detailed', provider: 'gemini' }));
+    await stub.exports.migratePreferences(context);
+    assert.equal(state.get('detail'), 'detailed');
+    assert.equal(state.get('provider'), 'codex');
+    await assert.rejects(fs.access(file));
+    await stub.exports.migratePreferences(context);
+    assert.equal(state.get('detail'), 'detailed');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('live JSON preview handles incomplete strings and never displays companion JSON', () => {
+  const raw = JSON.stringify({ ...valid, sections: [valid.sections[0], { ...valid.sections[0], title: 'Second algorithm' }], views: { overview: { title: 'Hidden lower view' } } });
+  const preview = partialView(raw);
+  assert.equal(preview.sections.length, 2);
+  assert.equal(preview.title, valid.title);
+  assert.equal(preview.sections[1].title, 'Second algorithm');
+  assert.ok(!JSON.stringify(preview).includes('Hidden lower view'));
+  const partial = partialView('{"title":"A","sections":[{"title":"Step","pseudocode":"IF ready\\n    Print \\u');
+  assert.match(partial.sections[0].pseudocode, /IF ready\n    Print/);
+});
+
+test('Codex streaming uses saved auth, emits output deltas, reports model, rejects failed turns', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-stream-test-'));
+  const binary = path.join(dir, 'codex');
+  const program = `#!${process.execPath}
+const rl = require('node:readline').createInterface({input:process.stdin});
+const out = event => process.stdout.write(JSON.stringify(event)+'\\n');
+rl.on('line', line => {
+ const request=JSON.parse(line);
+ if(request.id===1) out({id:1,result:{}});
+ if(request.id===2) {
+   if(request.params.model && (request.params.model!=='test-selected'||request.params.config.model_reasoning_effort!=='high')) return out({id:2,error:{message:'wrong model selection'}});
+   out({id:2,result:{thread:{id:'test-thread'},model:request.params.model||'test-codex-model'}});
+ }
+ if(request.id===4) out({id:4,result:{data:[{model:'live-low',displayName:'Live low',isDefault:true,supportedReasoningEfforts:[{reasoningEffort:'low'}],defaultReasoningEffort:'medium'},{model:'live-high',displayName:'Live high',supportedReasoningEfforts:[{reasoningEffort:'high'}],defaultReasoningEffort:'high'}],nextCursor:null}});
+ if(request.id===3) {
+   out({method:'item/reasoning/summaryTextDelta',params:{delta:'NOT DISPLAYABLE'}});
+   const text=${JSON.stringify(JSON.stringify(valid))};
+   for(let i=0;i<text.length;i+=12) out({method:'item/agentMessage/delta',params:{delta:text.slice(i,i+12)}});
+   out({method:'turn/completed',params:{turn:{status:request.params.input[0].text==='FAIL'?'failed':'completed',error:{message:'simulated failure'}}}});
+ }
+});`;
+  try {
+    await fs.writeFile(binary, program, { mode: 0o700 });
+    const deltas = [], phases = [];
+    const result = await streamCodex(binary, 'Translate', schemaFor('logic'), { cwd: dir, onText: value => deltas.push(value), onPhase: (phase, model) => phases.push({ phase, model }) });
+    assert.equal(result, JSON.stringify(valid));
+    assert.ok(deltas.length > 3);
+    assert.ok(!deltas.some(text => text.includes('NOT DISPLAYABLE')));
+    assert.ok(phases.some(p => p.model === 'test-codex-model'));
+    await streamCodex(binary, 'Translate', schemaFor('logic'), { cwd: dir, model: 'test-selected', effort: 'high' });
+    const catalog = await listModels('codex', binary);
+    assert.deepEqual(catalog.map(m => [m.id, m.effort]), [['live-low', 'low'], ['live-high', 'high']]);
+    assert.deepEqual((await listEfforts('codex', 'live-high', binary)).map(e => e.id), ['high']);
+    assert.deepEqual((await listEfforts('codex', '', binary)).map(e => e.id), ['low']);
+    await assert.rejects(streamCodex(binary, 'FAIL', SCHEMA, { cwd: dir }), /simulated failure/);
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(streamCodex(binary, 'Translate', SCHEMA, { cwd: dir, signal: controller.signal }), /Cancelled/);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('math delimiters preserve prose and typeset subscripts, sums and fractions', () => {
+  const line = String.raw`Count samples $c_{t+1} \leftarrow c_t + \frac{n}{2}$ safely.`;
+  const parts = mathParts(line);
+  assert.equal(parts.map(p => p.text).join(''), line);
+  assert.equal(parts.length, 3);
+  const katex = require('./katex.min');
+  const markup = katex.renderToString(parts[1].tex, { output: 'mathml', trust: false });
+  assert.match(markup, /<msub>/); assert.match(markup, /<mfrac>/);
+  assert.match(markup, /<math/);
+  assert.equal(mathParts('No equations here.')[0].text, 'No equations here.');
+  assert.equal(mathParts('Unfinished $x').length, 1);
+});
+
+test('edit requests ground one block and revisions preserve user intent across levels', () => {
+  const prompt = editPrompt(source, 'logic', { section: valid.sections[0], draft: 'Print two numbers', instruction: 'Make it clearer' });
+  assert.match(prompt, /exactly ONE/); assert.match(prompt, /Do not use tools, edit files/);
+  assert.match(prompt, /Make it clearer/); assert.match(prompt, /Print two numbers/);
+  const revised = revisionPrompt(source, 'overview', { level: 'logic', value: valid });
+  assert.match(revised, /Never silently revert edits/);
+  assert.match(promptFor(source, 'logic'), /\\leftarrow/);
+});
+
+test('custom calls use bounded workspace definitions and callable model forward bodies', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-context-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-outside-'));
+  class Uri { constructor(file) { this.fsPath = file; this.scheme = 'file'; } toString() { return 'file://' + this.fsPath; } static parse(value) { return new Uri(value.replace('file://', '')); } }
+  const code = await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8');
+  const moduleStub = { exports: {} };
+  vm.runInNewContext(code, { require: id => id === 'vscode' ? {} : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout });
+  const collect = moduleStub.exports.collectCallContext;
+  try {
+    const body = ['class Student:', '    def __init__(self):', ...Array.from({ length: 85 }, (_, i) => '        self.layer_' + i + ' = None'), '    def forward(self, inputs, times, labels):', '        return inputs * 2', '', 'def unrelated():', '    return 5'].join('\n');
+    await fs.writeFile(path.join(dir, 'network.py'), body);
+    await fs.writeFile(path.join(outside, 'hidden.py'), 'SECRET = 123');
+    await fs.symlink(path.join(outside, 'hidden.py'), path.join(dir, 'linked.py'));
+    const target = { targetUri: new Uri(path.join(dir, 'network.py')), targetRange: { start: { line: 0 }, end: { line: 89 } } };
+    const api = {
+      Uri, Position: class { constructor(line, character) { this.line = line; this.character = character; } },
+      workspace: { getWorkspaceFolder: uri => uri.fsPath.startsWith(dir + '/') ? { uri: new Uri(dir) } : undefined, asRelativePath: uri => path.basename(uri.fsPath), openTextDocument: async uri => ({ languageId: 'python', getText: () => body }) },
+      commands: { executeCommand: async (command, uri, position) => position.line === 0 ? [target] : [{ uri: new Uri(path.join(dir, 'linked.py')), range: { start: { line: 0 }, end: { line: 0 } } }] }
+    };
+    const main = { ...source, uri: 'file://' + path.join(dir, 'train.py'), startLine: 1, endLine: 2, text: 'predictions = self.student_model(inputs, times, labels)\nresult = unknown_custom(predictions)' };
+    const enriched = await collect(main, api);
+    assert.equal(enriched.callContext.definitions.length, 1, 'duplicate definition/type targets are deduplicated');
+    assert.match(enriched.callContext.definitions[0].text, /def forward/);
+    assert.match(enriched.callContext.definitions[0].text, /return inputs \* 2/);
+    assert.ok(enriched.callContext.unresolved.includes('unknown_custom'), 'outside-workspace symlink is not followed');
+    assert.ok(!JSON.stringify(enriched.callContext).includes('SECRET'));
+    assert.notEqual(cacheKey(main, 'logic', 'codex'), cacheKey(enriched, 'logic', 'codex'));
+    assert.equal(cacheKey(main, 'revision', 'codex'), cacheKey(enriched, 'revision', 'codex'), 'approved user edits survive context upgrades');
+    const prompt = promptFor(enriched, 'logic');
+    assert.match(prompt, /network.py/); assert.match(prompt, /zero label does not prove unconditional/);
+    assert.match(prompt, /# Unresolved/); assert.match(prompt, /ORIGINAL call site/);
+    api.commands.executeCommand = () => new Promise(() => {});
+    const partial = await collect(main, api, 20);
+    assert.equal(partial.callContext.definitions.length, 0);
+    assert.ok(partial.callContext.unresolved.includes('self.student_model'), 'language server timeout remains useful');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); await fs.rm(outside, { recursive: true, force: true }); }
+});
+
+test('Claude receives the selected alias and reports the actual response model', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-claude-model-'));
+  const binary = path.join(dir, 'claude');
+  try {
+    const envelope = { type: 'result', structured_output: { ...valid, views: { overview: valid } }, modelUsage: { 'claude-actual-version': {} } };
+    await fs.writeFile(binary, '#!' + process.execPath + '\n' +
+      'const a=process.argv.slice(2);if(a[a.indexOf("--model")+1]!=="opus"||a.includes("--effort"))process.exit(3);' +
+      'process.stdin.resume();process.stdin.on("end",()=>console.log(' + JSON.stringify(JSON.stringify(envelope)) + '));', { mode: 0o700 });
+    for (const onProgress of [undefined, () => {}]) {
+      const value = await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: null, onProgress });
+      assert.equal(value.model, 'claude-actual-version');
+      assert.equal(value.requestedModel, 'opus');
+      assert.equal(parseResult(JSON.stringify(value), source).requestedModel, 'opus');
+    }
+    assert.ok((await listModels('claude')).some(m => m.id === 'sonnet'));
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('friendly explanation targets capable readers without coding experience and grounds insights', async () => {
+  const prompt = promptFor(source, 'logic');
+  assert.match(prompt, /strong in mathematics but inexperienced in programming/);
+  assert.match(prompt, /what changes in place, what remains fixed/);
+  assert.match(prompt, /# Insight:/);
+  assert.match(prompt, /author's stated intention/);
+  assert.match(prompt, /Use plain words for simple counters/);
+  assert.ok(!prompt.includes('Use compact research-paper algorithm style'));
+  assert.match(editPrompt(source, 'logic', {section: valid.sections[0], draft: 'Print x'}), /mathematically capable reader/);
+  const values = await listEfforts('claude', 'sonnet');
+  assert.ok(values.some(v => v.id === 'high'));
+  assert.ok(!(await listEfforts('claude', 'claude-opus-4-6')).some(v => v.id === 'xhigh'));
+  assert.equal((await listEfforts('claude', 'unknown-deployment')).length, 0);
+});
