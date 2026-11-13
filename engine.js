@@ -239,25 +239,61 @@ function parseResult(raw, source) {
   }
   return result;
 }
-async function findCLI(provider, configured) {
+async function findCLI(provider, configured, system = {}) {
+  const platform = system.platform || process.platform, env = system.env || process.env;
+  const home = system.home || os.homedir(), io = system.fs || fs;
+  const windows = platform === 'win32', paths = windows ? path.win32 : path.posix;
   const name = provider === 'claude' ? 'claude' : 'codex';
-  const candidates = configured ? [configured] : [
-    ...String(process.env.PATH || '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, name)),
-    path.join(os.homedir(), '.local/bin', name), `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`,
-    ...(name === 'codex' ? [
+  const packageName = provider === 'claude' ? '@anthropic-ai/claude-code' : '@openai/codex';
+  const names = windows ? [name + '.exe', name + '.cmd', name + '.ps1', name + '.bat', name] : [name];
+  const directories = [
+    ...String(env.PATH || env.Path || env.path || '').split(paths.delimiter).map(dir => dir.replace(/^"(.*)"$/, '$1')).filter(Boolean),
+    paths.join(home, '.local', 'bin'),
+    ...(windows ? [paths.join(env.APPDATA || paths.join(home, 'AppData', 'Roaming'), 'npm')] : ['/opt/homebrew/bin', '/usr/local/bin'])
+  ];
+  const candidates = configured ? [configured.trim().replace(/^"(.*)"$/, '$1')] : [
+    ...directories.flatMap(dir => names.map(name => paths.join(dir, name))),
+    ...(!windows && name === 'codex' ? [
       '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex',
       '/Applications/Codex.app/Contents/Resources/codex'
     ] : [])
   ];
-  for (const candidate of candidates) {
-    try { await fs.access(candidate, 1); return candidate; } catch { /* continue */ }
+  let launcherFound = false;
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      if (!(await io.stat(candidate)).isFile()) continue;
+      await io.access(candidate, windows || /\.[cm]?js$/i.test(candidate) ? 0 : 1);
+      if (windows && /\.(?:cmd|bat|ps1)$/i.test(candidate)) {
+        launcherFound = true;
+        // Resolve standard npm launchers to their JS entry instead of passing
+        // model names or JSON schemas through cmd.exe / PowerShell quoting.
+        const root = paths.join(paths.dirname(candidate), 'node_modules', packageName);
+        const manifest = JSON.parse(await io.readFile(paths.join(root, 'package.json'), 'utf8'));
+        const entry = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.[name];
+        if (manifest.name !== packageName || typeof entry !== 'string') continue;
+        const target = paths.resolve(root, entry), relative = paths.relative(root, target);
+        if (relative === '..' || relative.startsWith('..' + paths.sep) || paths.isAbsolute(relative) || !/\.(?:[cm]?js|exe|com)$/i.test(target)) continue;
+        if ((await io.stat(target)).isFile()) { await io.access(target, 0); return target; }
+        continue;
+      }
+      return candidate;
+    } catch { /* Try another installed executable. */ }
   }
-  throw new Error(`${PROVIDERS[provider]} CLI was not found. Install it or set its executable path in Yamori settings, then sign in using its own terminal command.`);
+  if (launcherFound) throw new Error(`${PROVIDERS[provider]} has a Windows launcher Yamori could not resolve. Install the native CLI, or set Yamori's executable path to its .exe file.`);
+  throw new Error(`${PROVIDERS[provider]} CLI was not found. ${provider === 'claude' ? 'The Claude desktop app alone does not provide the terminal CLI Yamori needs. Use Connect Claude to install or select Claude Code.' : 'Install Codex or set its executable path in Yamori settings.'}`);
+}
+function cliLaunch(binary, args, env = process.env) {
+  if (/\.[cm]?js$/i.test(binary)) return { command: process.execPath, args: [binary, ...args], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
+  return { command: binary, args, env };
+}
+function spawnCLI(binary, args, options) {
+  const launch = cliLaunch(binary, args, options.env);
+  return spawn(launch.command, launch.args, { ...options, env: launch.env, shell: false, windowsHide: true });
 }
 function runProcess(binary, args, input, options = {}) {
   return new Promise((resolve, reject) => {
     let child;
-    try { child = spawn(binary, args, { cwd: options.cwd, env: process.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }); }
+    try { child = spawnCLI(binary, args, { cwd: options.cwd, env: process.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }); }
     catch (error) { reject(error); return; }
     let stdout = '', stderr = '', settled = false, forced, killTimer;
     const stop = () => {
@@ -289,6 +325,23 @@ function runProcess(binary, args, input, options = {}) {
   });
 }
 function redact(text) { return text.replace(/AIza[\w-]+|sk-[\w-]+/g, '[redacted]'); }
+const claudeSettingsCache = new Map();
+async function claudeSettingsArgs(binary, signal) {
+  if (claudeSettingsCache.has(binary)) return claudeSettingsCache.get(binary);
+  try {
+    const help = await runProcess(binary, ['--help'], '', { provider: 'claude', signal, timeout: 10000 });
+    // Current Claude Code safe mode preserves authentication and networking
+    // settings while excluding user customizations. Older CLIs retain the
+    // existing isolated fallback until the user updates their CLI.
+    const flags = /--safe-mode\b/.test(help) ? ['--safe-mode'] : ['--setting-sources', ''];
+    claudeSettingsCache.set(binary, flags);
+    if (claudeSettingsCache.size > 32) claudeSettingsCache.delete(claudeSettingsCache.keys().next().value);
+    return flags;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return ['--setting-sources', ''];
+  }
+}
 // Read only display strings from the requested view. Never expose unfinished
 // JSON, companion views, or reasoning; source links wait for final validation.
 function partialView(raw) {
@@ -324,7 +377,7 @@ function partialView(raw) {
 function requestTimeout(effort) { return effort === 'low' ? 180000 : effort === 'medium' || !effort ? 300000 : 600000; }
 function streamCodex(binary, prompt, schema, { cwd, signal, onText, onPhase, model, effort = 'low', listModels = false }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, ['app-server', '--listen', 'stdio://', '-c', 'mcp_servers={}', '--disable', 'shell_tool', '--disable', 'apps', '--disable', 'plugins', '--disable', 'hooks'], { cwd, env: process.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+    const child = spawnCLI(binary, ['app-server', '--listen', 'stdio://', '-c', 'mcp_servers={}', '--disable', 'shell_tool', '--disable', 'apps', '--disable', 'plugins', '--disable', 'hooks'], { cwd, env: process.env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let buffer = '', stderr = '', answer = '', settled = false, killTimer, threadId;
     const send = value => { if (!child.stdin.destroyed) child.stdin.write(JSON.stringify(value) + '\n'); };
     const stop = () => {
@@ -381,7 +434,7 @@ function streamCodex(binary, prompt, schema, { cwd, signal, onText, onPhase, mod
     child.stdout.setEncoding('utf8');
     if (signal?.aborted) { abort(); return; }
     onPhase?.('Connecting to Codex');
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'yamori', title: 'Yamori', version: '0.14.0' }, capabilities: { experimentalApi: true } } });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'yamori', title: 'Yamori', version: '0.15.0' }, capabilities: { experimentalApi: true } } });
   });
 }
 
@@ -409,7 +462,7 @@ async function listEfforts(provider, model, cliPath, signal) {
   return (selected?.efforts || []).filter(item => typeof item.reasoningEffort === 'string').map(item => ({ id: item.reasoningEffort, description: item.description || '' }));
 }
 
-async function generate({ source, level, provider, cliPath, model = '', effort = 'low', signal, onProgress: listener, edit, revision }) {
+async function generate({ source, level, provider, cliPath, model = '', effort = provider === 'claude' ? null : 'low', signal, onProgress: listener, edit, revision }) {
   const prompt = edit ? editPrompt(source, level, edit) : revision ? revisionPrompt(source, level, revision) : promptFor(source, level);
   const schema = edit ? { ...SCHEMA, properties: { ...SCHEMA.properties, sections: { ...SCHEMA.properties.sections, minItems: 1, maxItems: 1 } } } : schemaFor(level);
   let actualModel;
@@ -457,9 +510,11 @@ async function generate({ source, level, provider, cliPath, model = '', effort =
             }
           }
         };
-        raw = await runProcess(binary, ['-p', ...(model ? ['--model', model] : []), '--output-format', onProgress ? 'stream-json' : 'json', ...(onProgress ? ['--verbose', '--include-partial-messages'] : []), ...(effort ? ['--effort', effort] : []), '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '', '--disable-slash-commands', '--no-session-persistence', '--json-schema', JSON.stringify(schema)], prompt, { cwd: dir, provider, signal, onStdout, timeout: requestTimeout(effort) });
-        if (!envelope) { try { envelope = JSON.parse(raw); } catch { throw new Error('Claude returned an invalid response. Check Claude Code sign-in in your terminal.'); } }
-        if (envelope.is_error) throw new Error(redact(String(envelope.result || 'Claude could not complete the request.')));
+        const settingsArgs = await claudeSettingsArgs(binary, signal);
+        raw = await runProcess(binary, ['-p', ...(model ? ['--model', model] : []), '--output-format', onProgress ? 'stream-json' : 'json', ...(onProgress ? ['--verbose', '--include-partial-messages'] : []), ...(effort ? ['--effort', effort] : []), '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', ...settingsArgs, '--disable-slash-commands', '--no-session-persistence', '--json-schema', JSON.stringify(schema)], prompt, { cwd: dir, provider, signal, onStdout, timeout: requestTimeout(effort) });
+        if (onStdout && pending.trim()) onStdout('\n');
+        if (!envelope) { try { envelope = JSON.parse(raw); } catch { throw new Error('Claude Code returned an unexpected response. Use Connect Claude to check setup, and update Claude Code if your CLI is older.'); } }
+        if (envelope.is_error) throw new Error(redact(String(envelope.result || envelope.errors?.join('\n') || 'Claude could not complete the request.')));
         const used = Object.keys(envelope.modelUsage || {});
         if (used.length) actualModel = used.join(', ');
         raw = envelope.structured_output ? JSON.stringify(envelope.structured_output) : envelope.result || '';
@@ -480,4 +535,4 @@ async function generate({ source, level, provider, cliPath, model = '', effort =
   if (revision) result.edited = true;
   return result;
 }
-module.exports = { listEfforts, listModels, editPrompt, revisionPrompt, partialView, streamCodex, schemaFor, lowerView, ORDER, LEVELS, PROVIDERS, SCHEMA, cacheKey, promptFor, parseResult, findCLI, runProcess, generate, hash };
+module.exports = { listEfforts, listModels, editPrompt, revisionPrompt, partialView, streamCodex, schemaFor, lowerView, ORDER, LEVELS, PROVIDERS, SCHEMA, cacheKey, promptFor, parseResult, findCLI, cliLaunch, runProcess, generate, hash };

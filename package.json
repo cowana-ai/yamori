@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -37,6 +37,10 @@
       {
         "command": "yamori.provider",
         "title": "Yamori: Choose Provider"
+      },
+      {
+        "command": "yamori.connectClaude",
+        "title": "Yamori: Connect Claude"
       },
       {
         "command": "yamori.clear",

@@ -2,7 +2,8 @@
 const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts } = require('./engine');
+const os = require('node:os');
+const { LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch } = require('./engine');
 const { panelHTML } = require('./panel');
 
 const INCLUDE = '**/*.{py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,h,hpp,rb,php,swift,dart,r,R,sh,bash,lua,pl,sql,vue,svelte}';
@@ -80,6 +81,33 @@ async function migratePreferences(context) {
   await fs.unlink(file);
 }
 
+async function connectClaude(context, api = vscode, system = {}) {
+  const config = api.workspace.getConfiguration('yamori');
+  let binary;
+  try { binary = await findCLI('claude', config.get('claudePath'), system); }
+  catch (error) {
+    const choice = await api.window.showInformationMessage(error.message + ' Yamori can open Anthropic’s official installer in a visible terminal, then start its browser sign-in.', 'Install and sign in', 'Choose executable', 'Setup guide');
+    if (choice === 'Choose executable') { await api.commands.executeCommand('workbench.action.openSettings', 'yamori.claudePath'); return ''; }
+    if (choice === 'Setup guide') { await api.env.openExternal(api.Uri.parse('https://code.claude.com/docs/en/setup')); return ''; }
+    if (choice !== 'Install and sign in') return '';
+    const windows = (system.platform || process.platform) === 'win32';
+    const terminal = api.window.createTerminal(windows ? {
+      name: 'Yamori · Install Claude Code',
+      shellPath: path.win32.join((system.env || process.env).SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      shellArgs: ['-NoProfile', '-NoExit', '-Command', '$ErrorActionPreference = "Stop"; irm https://claude.ai/install.ps1 | iex; $claudeExe = Join-Path $env:USERPROFILE ".local\\bin\\claude.exe"; if (Test-Path -LiteralPath $claudeExe) { & $claudeExe auth login } else { Write-Error "Claude Code installation did not finish. See the installer output above." }']
+    } : {
+      name: 'Yamori · Install Claude Code', shellPath: '/bin/bash',
+      shellArgs: ['-lc', 'set -euo pipefail; curl -fsSL https://claude.ai/install.sh | /bin/bash; "$HOME/.local/bin/claude" auth login']
+    });
+    context.subscriptions.push(terminal); terminal.show();
+    return 'Complete Claude Code installation and browser sign-in in the Yamori terminal, then press Refresh.';
+  }
+  const launch = cliLaunch(binary, ['auth', 'login']);
+  const terminal = api.window.createTerminal({ name: 'Yamori · Claude sign-in', shellPath: launch.command, shellArgs: launch.args, env: launch.env, cwd: system.home || os.homedir() });
+  context.subscriptions.push(terminal); terminal.show();
+  return 'Complete Claude’s browser sign-in from the Yamori terminal, then press Refresh. Your credentials stay with Claude Code.';
+}
+
 async function activate(context) {
   await migratePreferences(context);
   await context.secrets.delete?.('geminiKey');
@@ -92,7 +120,7 @@ async function activate(context) {
       const local = { subscriptions: [], globalState: context.globalState, globalStorageUri: context.globalStorageUri, extensionUri: context.extensionUri };
       const reader = createReader(local, {
         uri: key, column: () => readingColumn || vscode.ViewColumn.Beside,
-        open, browse, switchFile,
+        open, browse, switchFile, connectClaude: () => connectClaude(context),
         active(value, panel) { activeReader = value; if (panel.viewColumn) readingColumn = panel.viewColumn; void value.showSource().catch(() => {}); },
         closed(value) { if (readers.get(key) === value) readers.delete(key); if (activeReader === value) activeReader = undefined; if (!readers.size) readingColumn = undefined; }
       });
@@ -169,6 +197,7 @@ async function activate(context) {
     try { return await fn(...args); } catch (e) { vscode.window.showErrorMessage(e.message); }
   }));
   command('yamori.read', open); command('yamori.browse', browse); command('yamori.project', project); command('yamori.switchFile', switchFile);
+  command('yamori.connectClaude', () => connectClaude(context));
   for (const [id, method] of [['provider', 'chooseProvider'], ['model', 'chooseModel'], ['effort', 'chooseEffort'], ['colors', 'chooseReadingColors']]) {
     command('yamori.' + id, async () => { const reader = current(); if (!reader) return browse(); reader.focus(); await reader[method](); });
   }
@@ -243,6 +272,11 @@ function createReader(context, navigation) {
           case 'read': await navigation.open(); break;
           case 'browse': await navigation.browse(); break;
           case 'switchFile': await navigation.switchFile(); break;
+          case 'connectClaude': {
+            const notice = await navigation.connectClaude();
+            if (notice) { error = ''; modelNotice = notice; post(); }
+            break;
+          }
           case 'provider': await chooseProvider(); break;
           case 'model': await chooseModel(); break;
           case 'effort': await chooseEffort(); break;
@@ -300,7 +334,7 @@ function createReader(context, navigation) {
     const choice = context.globalState.get(provider + 'Model');
     const model = typeof choice?.id === 'string' ? choice.id : '';
     const override = context.globalState.get('effortChoices', {})[provider + ':' + model];
-    const effort = override === 'auto' ? null : typeof override === 'string' ? override : model ? choice.effort ?? null : 'low';
+    const effort = override === 'auto' ? null : typeof override === 'string' ? override : model ? choice.effort ?? null : provider === 'claude' ? null : 'low';
     return { provider, level, model, effort, cliPath: config.get(provider === 'claude' ? 'claudePath' : 'codexPath'), revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
   }
   async function cached(s, opts) {
@@ -551,4 +585,4 @@ function createReader(context, navigation) {
   };
   return reader;
 }
-module.exports = { activate, migratePreferences, collectCallContext };
+module.exports = { activate, migratePreferences, collectCallContext, connectClaude };

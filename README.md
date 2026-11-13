@@ -102,12 +102,30 @@ subscription tokens.
 | Provider | Setup |
 | --- | --- |
 | **Codex** | Install Codex and sign in with `codex login`. Yamori also detects the macOS app-bundled CLI. |
-| **Claude Code** | Install Claude Code and sign in by running `claude` in a terminal. |
+| **Claude Code** | Run **Yamori: Connect Claude**. It opens Claude Code’s browser sign-in in a visible editor terminal. If the CLI is missing, choose **Install and sign in** to run Anthropic’s official installer first. |
 
 Choose the provider at the top of the panel. Existing eligible subscription access
 uses the provider's allowance; API-key authentication can use API billing.
 Account limits still apply. Optional executable paths are available under
 **Settings → Yamori** if automatic detection cannot find your CLI.
+
+For Claude, a **Connect Claude** button also appears on an empty reading panel
+or after an error. Finish the browser sign-in, then press **Refresh**. Selecting
+a Claude model only chooses the model; it does not sign you in.
+
+**Claude Desktop alone is not enough:** Yamori needs the separate Claude Code
+CLI for programmatic generation. The connection action can install it with your
+approval, then let Claude handle the account sign-in. See Anthropic’s
+[setup guide](https://code.claude.com/docs/en/setup) and
+[CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+On Windows, Yamori detects native installs in `%USERPROFILE%\\.local\\bin`,
+executables on `PATH`, and standard npm launchers in `%APPDATA%\\npm`, including
+paths with spaces. npm launchers are resolved to their package entry point and
+run without a command shell. Supported Claude versions use safe mode to preserve
+authentication and network settings while excluding customizations; older versions
+retain the isolated fallback. Update Claude Code if your older installation needs
+user settings to authenticate.
 
 ## Reading colors
 
@@ -259,7 +277,7 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 29 offline tests passed, including independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
+**Validation:** 34 offline tests passed, including simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
 Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
 response handling are tested with a mock executable; live Claude generation has
 not yet been verified.

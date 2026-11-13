@@ -258,7 +258,15 @@ function render(s) {
   refresh.textContent = s.busy ? 'Stop' : 'Refresh'; refresh.disabled = !s.name;
   content.setAttribute('aria-busy', String(!!s.busy)); content.replaceChildren();
   if (s.modelNotice) content.append(node('p', s.modelNotice, 'notice'));
-  if (s.error) { const el = node('p', s.error, 'notice error'); el.setAttribute('role', 'alert'); content.append(el); }
+  if (s.error) {
+    const el = node('div', undefined, 'notice error'); el.setAttribute('role', 'alert'); el.append(node('p', s.error));
+    if (s.providerLabel === 'Claude Code') {
+      const connect = node('button', 'Connect Claude', 'primary'); connect.disabled = !!s.busy;
+      connect.title = 'Open Claude Code sign-in, or install its CLI if missing';
+      connect.addEventListener('click', () => send('connectClaude')); el.append(connect);
+    }
+    content.append(el);
+  }
   else if (s.busy) {
     const waiting = node('div', undefined, 'waiting');
     const mascot = node('img'); mascot.src = ${JSON.stringify(logo)}; mascot.alt = '';
@@ -375,7 +383,12 @@ function render(s) {
   } else {
     const empty = node('div', undefined, 'empty');
     empty.append(node('h1', 'Read the logic.'), node('p', 'Open a code file or select a few lines, then read it in plain English. Choose how deep you want to go.'));
-    const button = node('button', 'Read current file', 'primary'); button.addEventListener('click', () => send('read')); empty.append(button); content.append(empty);
+    const button = node('button', 'Read current file', 'primary'); button.addEventListener('click', () => send('read')); empty.append(button);
+    if (s.providerLabel === 'Claude Code' && !s.error) {
+      const connect = node('button', 'Connect Claude'); connect.title = 'Sign in with Claude Code or install its CLI';
+      connect.addEventListener('click', () => send('connectClaude')); empty.append(connect);
+    }
+    content.append(empty);
   }
   updateElapsed();
 }

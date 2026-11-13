@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, schemaFor, lowerView, partialView, streamCodex, editPrompt, revisionPrompt, listModels, listEfforts } = require('./engine');
+const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, schemaFor, lowerView, partialView, streamCodex, editPrompt, revisionPrompt, listModels, listEfforts, findCLI, cliLaunch } = require('./engine');
 const { panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts } = require('./panel');
 const source = { uri: 'file:///example.py', name: 'example.py', language: 'python', startLine: 10, text: 'x = 1\nprint(x)' };
 const valid = { title: 'Print a number', summary: 'Sets and prints a number.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Set x to 1\nPrint x' }] };
@@ -38,6 +38,82 @@ test('process input travels over stdin without shell interpretation', async () =
   const input = '$(touch /tmp/should-not-exist); `echo unsafe`';
   const output = await runProcess(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], input);
   assert.equal(output, input);
+});
+
+function windowsFixture(files = {}) {
+  const paths = require('node:path').win32, entries = new Map(Object.entries(files).map(([key, value]) => [paths.normalize(key).toLowerCase(), value]));
+  const get = key => { const value = entries.get(paths.normalize(key).toLowerCase()); if (value === undefined) throw new Error('ENOENT'); return value; };
+  return { platform: 'win32', home: 'C:\\Users\\A Person', env: { Path: '"C:\\Tool Folder";C:\\Other', APPDATA: 'C:\\Users\\A Person\\AppData\\Roaming' }, fs: {
+    stat: async key => ({ isFile: () => get(key) !== 'directory' }), access: async key => { get(key); }, readFile: async key => get(key)
+  } };
+}
+test('Windows discovery handles native installs, quoted PATH folders and configured executables', async () => {
+  const native = 'C:\\Users\\A Person\\.local\\bin\\claude.exe';
+  assert.equal(await findCLI('claude', '', windowsFixture({ [native]: '' })), native);
+  assert.equal(await findCLI('claude', '', windowsFixture({ 'C:\\Tool Folder\\claude.exe': '' })), 'C:\\Tool Folder\\claude.exe');
+  assert.equal(await findCLI('claude', '"D:\\Custom Folder\\claude.exe"', windowsFixture({ 'D:\\Custom Folder\\claude.exe': '' })), 'D:\\Custom Folder\\claude.exe');
+  await assert.rejects(findCLI('claude', '', windowsFixture({ [native]: 'directory' })), /desktop app alone/);
+});
+test('Windows npm launchers resolve only expected package entry points without a shell', async () => {
+  const root = 'C:\\Users\\A Person\\AppData\\Roaming\\npm';
+  for (const provider of ['claude', 'codex']) {
+    const pkg = provider === 'claude' ? '@anthropic-ai\\claude-code' : '@openai\\codex';
+    const packageName = pkg.replace('\\', '/'), entry = root + '\\node_modules\\' + pkg + '\\cli.js';
+    for (const ext of ['cmd', 'ps1', 'bat']) {
+      const files = { [root + '\\' + provider + '.' + ext]: '', [root + '\\node_modules\\' + pkg + '\\package.json']: JSON.stringify({ name: packageName, bin: { [provider]: 'cli.js' } }), [entry]: '' };
+      assert.equal(await findCLI(provider, '', windowsFixture(files)), entry);
+      files[root + '\\node_modules\\' + pkg + '\\package.json'] = JSON.stringify({ name: packageName, bin: '../../outside.js' });
+      await assert.rejects(findCLI(provider, '', windowsFixture(files)), /could not resolve/);
+      files[root + '\\node_modules\\' + pkg + '\\package.json'] = JSON.stringify({ name: 'foreign-package', bin: 'cli.js' });
+      await assert.rejects(findCLI(provider, '', windowsFixture(files)), /could not resolve/);
+    }
+  }
+});
+test('npm JavaScript CLI runs with literal arguments and stdin through the Node runtime', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-js-launch-'));
+  try {
+    const binary = path.join(dir, 'cli with spaces.js'), args = ['--model', 'a & b | c', '{"x":"$HOME `echo hi`"}'];
+    await fs.writeFile(binary, 'let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>console.log(JSON.stringify({args:process.argv.slice(2),text,node:process.env.ELECTRON_RUN_AS_NODE})));');
+    const launch = cliLaunch(binary, args, { TEST: 'keep' });
+    assert.equal(launch.command, process.execPath); assert.equal(launch.env.TEST, 'keep');
+    const output = JSON.parse(await runProcess(binary, args, 'literal $(echo source)'));
+    assert.deepEqual(output, { args, text: 'literal $(echo source)', node: '1' });
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+test('Claude safe mode preserves auth setup, uses default effort, and parses a final event without newline', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-claude-safe-'));
+  try {
+    for (const safe of [true, false]) {
+      const binary = path.join(dir, safe ? 'modern.js' : 'legacy.js');
+      await fs.writeFile(binary, 'const a=process.argv.slice(2);if(a.includes("--help")){console.log(' + JSON.stringify(safe ? '--safe-mode' : '--setting-sources') + ');process.exit(0)};' +
+        'if(a.includes("--safe-mode")!==' + safe + '||a.includes("--setting-sources")===' + safe + '||a.includes("--effort")||a[a.indexOf("--tools")+1]!=="")process.exit(3);' +
+        'process.stdin.resume();process.stdin.on("end",()=>{console.log(JSON.stringify({type:"system",subtype:"init",model:"test"}));process.stdout.write(' + JSON.stringify(JSON.stringify({ type: 'result', structured_output: { ...valid, views: { overview: valid } } })) + ')});');
+      const result = await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, onProgress() {} });
+      assert.equal(result.title, valid.title); assert.equal(result.requestedEffort, null);
+    }
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+test('Connect Claude opens provider login, and installation requires an explicit choice', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), terminals = [], commands = [], links = [];
+  let choice;
+  const api = { workspace: { getConfiguration: () => ({ get: () => '' }) }, Uri: { parse: value => value },
+    commands: { executeCommand: async (...args) => commands.push(args) }, env: { openExternal: async value => links.push(value) },
+    window: { showInformationMessage: async () => choice, createTerminal(options) { const t = { options, show() { t.visible = true; }, dispose() {} }; terminals.push(t); return t; } } };
+  const stub = { exports: {} };
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : require(id), Buffer, AbortController, setTimeout, clearTimeout });
+  const context = { subscriptions: [] }, native = 'C:\\Users\\A Person\\.local\\bin\\claude.exe';
+  await stub.exports.connectClaude(context, api, windowsFixture({ [native]: '' }));
+  assert.equal(terminals[0].options.shellPath, native); assert.deepEqual([...terminals[0].options.shellArgs], ['auth', 'login']); assert.equal(terminals[0].visible, true);
+  await stub.exports.connectClaude(context, api, windowsFixture()); assert.equal(terminals.length, 1, 'dismiss never installs');
+  choice = 'Choose executable'; await stub.exports.connectClaude(context, api, windowsFixture()); assert.equal(commands[0][1], 'yamori.claudePath');
+  choice = 'Setup guide'; await stub.exports.connectClaude(context, api, windowsFixture()); assert.equal(links[0], 'https://code.claude.com/docs/en/setup');
+  choice = 'Install and sign in'; await stub.exports.connectClaude(context, api, windowsFixture());
+  const win = terminals.at(-1); assert.equal(win.visible, true); assert.equal(win.options.shellPath, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  assert.match(win.options.shellArgs.at(-1), /irm https:\/\/claude.ai\/install.ps1 \| iex/); assert.match(win.options.shellArgs.at(-1), /& \$claudeExe auth login/);
+  await stub.exports.connectClaude(context, api, { platform: 'darwin', home: '/missing', env: {}, fs: windowsFixture().fs });
+  assert.equal(terminals.at(-1).options.shellPath, '/bin/bash'); assert.match(terminals.at(-1).options.shellArgs.at(-1), /"\$HOME\/\.local\/bin\/claude" auth login/);
 });
 test('process cancellation terminates a running request', async () => {
   const controller = new AbortController();
@@ -240,6 +316,16 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   assert.ok(draftNodes.some(el => el.textContent === 'Writing pseudocode'));
   assert.ok(!draftNodes.some(el => el.className?.includes('linked')), 'partial drafts have no actionable source links');
   assert.ok(draftNodes.find(el => el.className === 'block-reactions').children.every(b => b.disabled), 'partial output cannot start a block reaction');
+  const beforeConnect = sent.length;
+  receive({ data: { type: 'state', state: { ...renderedState, providerLabel: 'Claude Code', error: 'Sign in required' } } });
+  all.length = 0; visit(elements.content);
+  const connect = all.find(el => el.textContent === 'Connect Claude');
+  assert.ok(connect); assert.ok(!sent.slice(beforeConnect).some(message => message.type === 'connectClaude'), 'an error never opens login automatically');
+  connect.events.click(); assert.equal(sent.at(-1).type, 'connectClaude');
+  receive({ data: { type: 'state', state: { ...renderedState, providerLabel: 'Claude Code', error: 'Sign in required', busy: true } } });
+  all.length = 0; visit(elements.content); assert.equal(all.find(el => el.textContent === 'Connect Claude').disabled, true);
+  receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', level: 'logic' } } });
+  all.length = 0; visit(elements.content); assert.ok(all.find(el => el.textContent === 'Connect Claude'), 'initial Claude screen offers setup');
 });
 
 test('extension workflow switches levels, reuses cache, marks edits stale and ignores cancelled results', async () => {
