@@ -15,18 +15,28 @@ function mathParts(text) {
 function pseudocodeLines(text) {
   return text.split(/\r?\n/).map(text => ({
     text,
-    kind: !text.trim() ? 'blank' : /^\s*#/.test(text) ? 'note' : /^\s*(FUNCTION|PROCEDURE|WHEN)\b/i.test(text) ? 'routine' : /^\s*(IF|ELSE|FOR|WHILE|REPEAT|TRY|CATCH)\b/i.test(text) ? 'decision' : ''
+    kind: !text.trim() ? 'blank' : /^\s*#/.test(text) ? 'note' : /^\s*(FUNCTION|PROCEDURE|WHEN)\b/i.test(text) ? 'routine' : /^\s*(IF\b|ELSE\b|OTHERWISE\b|FOR\s+EACH\b|WHILE\b|REPEAT\b|UNTIL\b)/i.test(text) ? 'decision' : ''
   }));
 }
 
-// Tokens retain their original text. The webview renders them with textContent.
+function emphasisParts(text) {
+  const parts = []; let offset = 0;
+  for (const match of text.matchAll(/\*\*([^*\n]{1,100})\*\*/g)) {
+    if (match.index > offset) parts.push({ text: text.slice(offset, match.index) });
+    parts.push({ text: match[1], strong: true }); offset = match.index + match[0].length;
+  }
+  if (offset < text.length) parts.push({ text: text.slice(offset) });
+  return parts;
+}
+
+// Highlight real control at the start of a step. Ordinary prose stays quiet.
 function tokenize(text) {
-  const pattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#.*$|\/\/.*$|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|\b(?:FUNCTION|PROCEDURE|DEFINE|IF|THEN|ELSE|ELSEIF|END|ENDIF|FOR|EACH|IN|WHILE|REPEAT|UNTIL|TRY|CATCH|EXCEPT|FINALLY|RAISE|BREAK|CONTINUE|RETURN|YIELD|PRINT|OUTPUT|TRUE|FALSE|NULL|NONE|AND|OR|NOT)\b|\b[A-Za-z_]\w*(?=\s*\())/gim;
+  const pattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#.*$|\/\/.*$|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|^\s*(?:FOR\s+EACH|IF|OTHERWISE|ELSE|WHILE|REPEAT|UNTIL|WHEN|RETURN|YIELD|PRINT|OUTPUT|REJECT|STOP)\b)/gim;
   const tokens = []; let offset = 0;
   for (const match of text.matchAll(pattern)) {
     if (match.index > offset) tokens.push({ text: text.slice(offset, match.index), kind: '' });
     const value = match[0];
-    const kind = /^(#|\/\/)/.test(value) ? 'comment' : /^["']/.test(value) ? 'string' : /^\d/.test(value) ? 'number' : /^(RETURN|YIELD|PRINT|OUTPUT)$/i.test(value) ? 'output' : /^(TRUE|FALSE|NULL|NONE)$/i.test(value) ? 'literal' : /^[A-Za-z_]\w*$/.test(value) && !/^(FUNCTION|PROCEDURE|DEFINE|IF|THEN|ELSE|ELSEIF|END|ENDIF|FOR|EACH|IN|WHILE|REPEAT|UNTIL|TRY|CATCH|EXCEPT|FINALLY|RAISE|BREAK|CONTINUE|AND|OR|NOT)$/i.test(value) ? 'function' : 'keyword';
+    const kind = /^(#|\/\/)/.test(value) ? 'comment' : /^["']/.test(value) ? 'string' : /^\d/.test(value) ? 'number' : /^(RETURN|YIELD|PRINT|OUTPUT)$/i.test(value.trim()) ? 'output' : 'keyword';
     tokens.push({ text: value, kind }); offset = match.index + value.length;
   }
   if (offset < text.length) tokens.push({ text: text.slice(offset), kind: '' });
@@ -85,7 +95,7 @@ header { position: sticky; top: 0; z-index: 1; padding: 14px 22px 12px; backgrou
 .segments button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 #refresh { margin-left: auto; font-size: 12px; }
 #source { display: block; max-width: 100%; padding-left: 0; margin-top: 12px; text-align: left; color: var(--vscode-descriptionForeground); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-main { max-width: 78ch; margin: 0 auto; padding: 28px 26px 48px; }
+main { max-width: 74ch; margin: 0 auto; padding: 28px 26px 48px; }
 h1 { font-size: 22px; line-height: 1.3; font-weight: 600; margin: 0 0 12px; letter-spacing: -.025em; }
 .summary { color: var(--vscode-descriptionForeground); margin: 0 0 28px; }
 details { margin: 0 0 18px; border: 1px solid var(--vscode-widget-border, color-mix(in oklch, var(--flow) 22%, transparent)); border-radius: 9px; overflow: hidden; background: color-mix(in oklch, var(--vscode-editor-background) 96%, var(--flow)); }
@@ -97,12 +107,12 @@ details:not([open]) .section-heading::after { content: '›'; }
 .block-index { display: inline-flex; justify-content: center; align-items: center; min-width: 24px; height: 24px; border-radius: 6px; background: color-mix(in oklch, var(--flow) 14%, transparent); color: var(--flow); font-size: 11px; font-weight: 600; }
 h2 { flex: 1; font-size: 13px; font-weight: 600; margin: 0; line-height: 1.4; }
 .line { flex-shrink: 0; color: var(--vscode-textLink-foreground); font-size: 11px; padding: 0 3px; }
-pre { font: 13px/1.95 var(--vscode-editor-font-family, monospace); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; tab-size: 4; padding: 16px; }
-.code-line { display: block; min-height: 1.95em; }
-.code-line.blank { min-height: .9em; line-height: .9; }
+pre { font: 13px/1.8 var(--vscode-editor-font-family, monospace); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; tab-size: 4; padding: 18px 12px; }
+.code-line { display: grid; grid-template-columns: 2.1em minmax(0, 1fr); align-items: baseline; min-height: 1.8em; padding-block: 2px; }
+.step-body { min-width: 0; }
+.code-line.blank { min-height: 1.1em; line-height: 1; padding: 0; }
 .code-line.routine:not(:first-child) { margin-top: 1.2em; }
-.step-number { display: inline-block; width: 2.6em; margin-left: -2.6em; color: var(--vscode-descriptionForeground); font: 10px/1.8 var(--vscode-font-family); user-select: none; }
-pre { padding-left: 46px; }
+.step-number { color: var(--vscode-descriptionForeground); font: 10px/1.8 var(--vscode-font-family); user-select: none; padding-top: 3px; }
 .code-line.linked { cursor: pointer; }
 .code-line.linked:hover { background: var(--vscode-editor-hoverHighlightBackground, var(--vscode-toolbar-hoverBackground)); }
 .code-line.linked:hover .step-number { color: var(--vscode-textLink-foreground); }
@@ -113,14 +123,15 @@ pre { padding-left: 46px; }
 .paper pre { font-family: var(--vscode-font-family, system-ui); font-size: 14px; line-height: 1.8; }
 .paper .code-line { min-height: 1.7em; }
 .paper .legend { display: none; }
-.code-line.decision { background: color-mix(in oklch, var(--flow) 7%, transparent); border-radius: 3px; }
+.code-line.decision { margin-top: 5px; }
+.important { color: var(--vscode-editor-foreground); font-weight: 650; text-decoration: underline; text-decoration-color: color-mix(in oklch, var(--value) 45%, transparent); text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .keyword { color: var(--flow); font-weight: 600; }
 .number, .literal { color: var(--value); }
 .string { color: var(--string); }
 .output { color: var(--output); font-weight: 600; }
 .function { color: var(--call); }
-.comment { color: var(--note); font-style: italic; }
-.code-line.note { margin-block: 5px; padding: 5px 8px; border: 1px solid color-mix(in oklch, var(--note) 24%, transparent); border-radius: 4px; background: color-mix(in oklch, var(--note) 7%, transparent); }
+.comment { color: var(--note); }
+.code-line.note { margin-block: 3px 6px; padding-block: 3px; font-size: 12px; line-height: 1.65; color: var(--note); border-radius: 4px; background: color-mix(in oklch, var(--note) 5%, transparent); }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; margin: -12px 0 20px; color: var(--vscode-descriptionForeground); }
 .legend span::before { content: '●'; margin-right: 5px; }
 .legend .flow-key::before { color: var(--flow); } .legend .note-key::before { color: var(--note); } .legend .output-key::before { color: var(--output); }
@@ -134,6 +145,14 @@ footer { display: flex; gap: 8px; justify-content: space-between; color: var(--v
 footer button { padding: 0 4px; font-size: 11px; }
 .skeleton { height: 10px; margin: 16px 0; background: var(--vscode-textBlockQuote-background, var(--vscode-button-secondaryBackground)); border-radius: 2px; }
 @media(max-width: 380px) { header { padding: 12px; } main { padding: 24px 16px; } .segments button { padding: 3px 7px; } }
+@media(max-width: 560px) {
+  .section-heading { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto 12px; gap: 5px 8px; }
+  .section-heading .block-index { grid-column: 1; grid-row: 1; }
+  .section-heading h2 { grid-column: 2 / 4; grid-row: 1; min-width: 0; overflow-wrap: anywhere; }
+  .section-heading::after { grid-column: 4; grid-row: 1; }
+  .section-heading .line { grid-column: 2; grid-row: 2; justify-self: start; }
+  .section-heading .block-actions { grid-column: 3 / 5; grid-row: 2; justify-self: end; }
+}
 @media(forced-colors: active) { button, .segments, details, .code-line.note { border: 1px solid ButtonText; } .keyword, .output { color: LinkText; } .comment { color: CanvasText; } }
 </style></head><body>
 <header><div class="top"><span class="brand"><img src="${logo}" alt="Gecko samurai"><span class="wordmark">Yamori</span></span><span class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Low ▾</button></span></div>
@@ -156,6 +175,7 @@ let editing;
 const tokenize = ${tokenize.toString()};
 const pseudocodeLines = ${pseudocodeLines.toString()};
 const mathParts = ${mathParts.toString()};
+const emphasisParts = ${emphasisParts.toString()};
 const send = (type, extra = {}) => vscode.postMessage({ type, ...extra });
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el; };
 function appendText(parent, text) { for (const token of tokenize(text)) parent.append(node('span', token.text, token.kind)); }
@@ -167,6 +187,12 @@ function appendMath(parent, text) {
       const parsed = new DOMParser().parseFromString(markup, 'text/html');
       parent.append(document.importNode(parsed.querySelector('math'), true));
     } catch { appendText(parent, part.text); }
+  }
+}
+function appendInline(parent, text) {
+  for (const part of emphasisParts(text)) {
+    const target = part.strong ? node('strong', undefined, 'important') : parent;
+    appendMath(target, part.text); if (part.strong) parent.append(target);
   }
 }
 function render(s) {
@@ -229,7 +255,7 @@ function render(s) {
       pseudocodeLines(section.pseudocode).forEach(({ text, kind }, lineIndex) => {
         const row = node('span', undefined, 'code-line' + (kind ? ' ' + kind : ''));
         const mapping = section.lineMap?.find(m => m.pseudocodeLine === lineIndex + 1);
-        if (text.trim()) row.append(node('span', String(++stepNumber), 'step-number'));
+        row.append(node('span', text.trim() && kind !== 'note' ? String(++stepNumber) : '', 'step-number'));
         if (mapping && !s.stale && !s.partial) {
           row.className += ' linked'; row.setAttribute('role', 'button'); row.setAttribute('tabindex', '0');
           row.title = 'Hover to highlight source L' + mapping.startLine + '–' + mapping.endLine + ' · Click to jump';
@@ -242,8 +268,11 @@ function render(s) {
           row.addEventListener('blur', () => send('clearHover'));
           row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); } });
         }
-        appendMath(row, text);
-        if (!text) row.append(document.createTextNode(' '));
+        const body = node('span', undefined, 'step-body');
+        body.style.paddingInlineStart = Math.min(text.length - text.trimStart().length, 40) * .55 + 'em';
+        appendInline(body, text.trimStart());
+        if (!text) body.append(document.createTextNode(' '));
+        row.append(body);
         code.append(row);
       });
       el.append(heading);
@@ -251,7 +280,7 @@ function render(s) {
         el.open = true;
         const record = drafts.get(editing.key);
         const editor = node('div', undefined, 'block-editor');
-        const label = node('label', 'Edit pseudocode · use $LaTeX$ for equations');
+        const label = node('label', 'Edit pseudocode · **key terms** · $LaTeX$');
         const draft = node('textarea'); draft.value = record.draft; draft.disabled = !!s.busy; draft.setAttribute('aria-label', 'Pseudocode draft');
         draft.addEventListener('input', () => { record.draft = draft.value; });
         const instruction = node('textarea', undefined, 'instruction'); instruction.value = record.instruction; instruction.disabled = !!s.busy;
@@ -293,4 +322,4 @@ window.addEventListener('blur', () => send('clearHover'));
 send('ready');
 </script></body></html>`;
 }
-module.exports = { panelHTML, tokenize, pseudocodeLines, mathParts };
+module.exports = { panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts };

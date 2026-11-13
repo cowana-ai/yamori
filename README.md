@@ -62,7 +62,7 @@ available definitions. A function's name alone does not establish its behavior.
 - **Make an explanation your own.** Copy a block, edit it in place, then ask Codex or Claude to update that block. Approved edits are cached; other views are rebuilt when requested.
 - **Move between views quickly.** Generation prepares the lower-detail views too. Returning to them uses memory or disk cache.
 
-Blocks use color, spacing and clear headings. Useful equations render as math.
+Blocks use short, casual action lines, phase breaks and sparse emphasis on behavior-defining phrases. Terms such as state and level get a short definition note on first use. Ordinary connective words stay plain; definition notes are visually subordinate and are not numbered as actions. Wrapped lines align beneath their own text. Useful equations render as math.
 Simple actions stay in words. Light and dark editor themes, keyboard navigation
 and reduced-motion preferences are supported.
 
@@ -70,7 +70,7 @@ and reduced-motion preferences are supported.
 
 Yamori is an early personal extension, currently distributed as a VSIX.
 
-1. Download **yamori-0.9.0.vsix** from the [latest prerelease](https://github.com/cowana-ai/yamori/releases/tag/v0.9.0).
+1. Download **yamori-0.10.0.vsix** from the [latest prerelease](https://github.com/cowana-ai/yamori/releases/tag/v0.10.0).
 2. In Cursor or VS Code, open **Extensions → … → Install from VSIX** and select it.
 3. Open a code file, then run **Yamori: Read as Pseudocode** from the Command Palette.
 4. Choose **Overview**, **Logic** or **Detailed** in the reading panel.
@@ -120,7 +120,7 @@ policies can cap or override it.
 
 ## Edit the explanation
 
-Click **Edit** on a block, change its pseudocode and optionally add an instruction.
+Click **Edit** on a block, change its pseudocode and optionally add an instruction. Use `**key phrases**` for emphasis and `$...$` for LaTeX equations.
 Press **Update with Codex/Claude Code** to revise and cache that block. Neighboring
 blocks retain their text. Failed or cancelled updates keep the approved result
 and leave the draft editable.
@@ -131,6 +131,14 @@ your intended changes across views and editor restarts.
 
 <details>
 <summary><strong>How Yamori explains code</strong></summary>
+
+The generation and block-edit prompts explicitly use this communication objective:
+
+$$
+\min_X H(B \mid X,K) + \lambda\,\mathrm{ReadCost}(X)
+$$
+
+Here **B** is relevant code behavior, **X** is the explanation and **K** is the reader's existing knowledge. Reading cost includes length, jargon, nested clauses and visual clutter. Semantic fidelity is a hard constraint. The agent uses this as a qualitative criterion: keep details that distinguish behavior, add short definitions when they remove confusion, and cut low-value wording. It does not estimate entropy numerically.
 
 Blocks group coherent ideas at a consistent level of abstraction. Necessary
 concepts such as callbacks, mutable state, smoothed model copies and detached
@@ -227,7 +235,7 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 25 offline tests passed. Live Codex checks cover model selection,
+**Validation:** 27 offline tests passed. Live Codex checks cover model selection,
 Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
 response handling are tested with a mock executable; live Claude generation has
 not yet been verified.

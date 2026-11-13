@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, schemaFor, lowerView, partialView, streamCodex, editPrompt, revisionPrompt, listModels, listEfforts } = require('./engine');
-const { panelHTML, tokenize, pseudocodeLines, mathParts } = require('./panel');
+const { panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts } = require('./panel');
 const source = { uri: 'file:///example.py', name: 'example.py', language: 'python', startLine: 10, text: 'x = 1\nprint(x)' };
 const valid = { title: 'Print a number', summary: 'Sets and prints a number.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Set x to 1\nPrint x' }] };
 
@@ -66,9 +66,9 @@ test('highlighting preserves exact text and distinguishes rationale from strings
   const tokens = tokenize(text);
   assert.equal(tokens.map(t => t.text).join(''), text);
   assert.ok(tokens.some(t => t.kind === 'keyword' && t.text === 'IF'));
-  assert.ok(tokens.some(t => t.kind === 'output' && t.text === 'RETURN'));
+  assert.ok(!tokens.some(t => t.kind === 'output' && t.text === 'RETURN'), 'inline prose words are not syntax-highlighted');
   assert.ok(tokens.some(t => t.kind === 'number' && t.text === '1e-8'));
-  assert.ok(tokens.some(t => t.kind === 'function' && t.text === 'softmax'));
+  assert.ok(!tokens.some(t => t.kind === 'function'), 'function names are not automatically emphasized');
   assert.ok(tokens.some(t => t.kind === 'comment' && t.text.includes('numerical stability')));
   const quoted = tokenize('PRINT "# this is a string, not a comment"');
   assert.ok(quoted.some(t => t.kind === 'string'));
@@ -92,7 +92,7 @@ test('readability instructions require task headings and expanded decisions', ()
     assert.match(prompt, /purpose-based title and the original symbol/);
     assert.match(prompt, /one action or structuring element per line/);
     assert.match(prompt, /Put IF, ELSE and each consequence on separate lines/);
-    assert.match(prompt, /without Markdown emphasis, HTML entities or code fences/);
+    assert.match(prompt, /no HTML entities, HTML markup or code fences/);
   }
 });
 
@@ -152,7 +152,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
   const sent = [];
   vm.runInNewContext(script, { document, DOMParser: class { parseFromString(markup) { return { querySelector: () => { const el = new Element('math'); el.markup = markup; return el; } }; } }, acquireVsCodeApi: () => ({ postMessage(m) { sent.push(m); } }), window: { addEventListener: (name, fn) => { if (name === 'message') receive = fn; } } });
-  const renderedState = { requestedEffort: 'medium', documentKey: 'test-document', providerLabel: 'Codex', level: 'logic', name: 'test.py', result: { ...valid, sections: [{ ...valid.sections[0], lineMap: [{ pseudocodeLine: 5, startLine: 11, endLine: 11 }], pseudocode: 'WHEN training starts\n    # Preserve restored updates.\n\n    IF reduction is due\n        Halve the learning rate $\\eta \\leftarrow \\frac{\\eta}{2}$.' }] } };
+  const renderedState = { requestedEffort: 'medium', documentKey: 'test-document', providerLabel: 'Codex', level: 'logic', name: 'test.py', result: { ...valid, sections: [{ ...valid.sections[0], lineMap: [{ pseudocodeLine: 5, startLine: 11, endLine: 11 }], pseudocode: 'WHEN training starts\n    # Preserve restored updates.\n\n    IF reduction is due\n        Halve the **learning rate** $\\eta \\leftarrow \\frac{\\eta}{2}$.' }] } };
   receive({ data: { type: 'state', state: renderedState } });
   assert.equal(elements.effort.textContent, 'Effort: medium ▾');
   elements.effort.events.click(); assert.equal(sent.at(-1).type, 'effort');
@@ -163,6 +163,10 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   assert.ok(rows[2].className.includes('blank'));
   assert.ok(rows[3].className.includes('decision'));
   assert.ok(rows[4].className.includes('linked'));
+  assert.ok(all.some(el => el.tag === 'strong' && el.className === 'important'));
+  assert.equal(rows[1].children[0].textContent, '', 'definition notes are not numbered as actions');
+  assert.equal(rows[4].children[0].textContent, '3');
+  assert.equal(rows[4].children[1].style.paddingInlineStart, '4.4em');
   rows[4].events.mouseenter();
   assert.equal(sent.at(-1).type, 'hoverStep');
   rows[4].events.mouseleave();
@@ -517,4 +521,29 @@ test('friendly explanation targets capable readers without coding experience and
   assert.ok(values.some(v => v.id === 'high'));
   assert.ok(!(await listEfforts('claude', 'claude-opus-4-6')).some(v => v.id === 'xhigh'));
   assert.equal((await listEfforts('claude', 'unknown-deployment')).length, 0);
+});
+
+
+test('emphasis preserves meaning and ordinary connective words stay plain', () => {
+  const parts = emphasisParts('Pick K items **without repeats** and copy **their states**');
+  assert.equal(parts.filter(p => p.strong).length, 2);
+  assert.equal(parts.map(p => p.text).join(''), 'Pick K items without repeats and copy their states');
+  const tokens = tokenize('Use teacher and guide for the next state');
+  assert.ok(!tokens.some(t => t.kind === 'keyword'));
+  assert.equal(pseudocodeLines('For teacher_step, use the teacher')[0].kind, '');
+  assert.equal(pseudocodeLines('For each selected item')[0].kind, 'decision');
+  assert.equal(tokenize('Return the original states')[0].kind, 'output');
+  assert.equal(emphasisParts('Incomplete **key')[0].text, 'Incomplete **key');
+  const hostile = emphasisParts('Keep **<img onerror=alert(1)>**');
+  assert.equal(hostile[1].text, '<img onerror=alert(1)>');
+});
+
+
+test('all generation and edit paths contain the explicit communication objective', () => {
+  const prompts = [...Object.keys(LEVELS).map(level => promptFor(source, level)), editPrompt(source, 'logic', { section: valid.sections[0], draft: 'Print x' }), revisionPrompt(source, 'overview', {level:'logic',value:valid})];
+  for (const prompt of prompts) {
+    assert.ok(prompt.includes('min_X [ H(B | X, K) + λ · ReadCost(X) ]'));
+    assert.match(prompt, /subject to semantic fidelity/);
+    assert.match(prompt, /not a request to invent numerical entropy estimates/);
+  }
 });
