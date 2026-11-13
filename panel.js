@@ -96,6 +96,9 @@ textarea:focus { outline: 1px solid var(--read-accent); }
 math { font-size: 1.12em; font-family: 'STIX Two Math', 'Cambria Math', math; margin-inline: 2px; }
 header { position: sticky; top: 0; z-index: 1; padding: 14px 22px 12px; background: var(--read-page); border-bottom: 1px solid var(--read-border); }
 .top, .controls { display: flex; align-items: center; gap: 8px; }
+.file-nav { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+.file-nav #source { min-width: 0; flex: 1; margin-top: 0; text-align: left; }
+.file-nav #files { flex-shrink: 0; color: var(--read-accent); font-size: 12px; }
 .top { justify-content: space-between; margin-bottom: 12px; }
 .wordmark { font-size: 12px; font-weight: 600; letter-spacing: .03em; }
 .brand { display: flex; align-items: center; gap: 8px; }
@@ -197,7 +200,7 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
 <button data-level="logic" aria-pressed="true" title="Readable steps and important decisions">Logic</button>
 <button data-level="detailed" aria-pressed="false" title="Formulas, edge cases and error handling">Detailed</button>
 </div><button id="refresh" title="Generate a fresh explanation">Refresh</button><button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Aa</button></div>
-<button id="source" title="Choose a different project file">Choose a file…</button></header>
+<div class="file-nav"><button id="source" title="Open another project file in Yamori">Choose a file…</button><button id="files" title="Switch open Yamori tabs or open another file" aria-label="Switch Yamori files">▤ Files</button></div></header>
 <main id="content" aria-busy="false"></main>
 <script nonce="${nonce}">
 ${mathLibrary}
@@ -250,7 +253,7 @@ function render(s) {
   document.getElementById('effort').textContent = 'Effort: ' + (s.requestedEffort || 'Default') + ' ▾';
   document.getElementById('effort').title = 'New requests: ' + (s.requestedEffort || 'CLI default') + ' reasoning effort';
   document.getElementById('source').textContent = s.name || 'Choose a file…';
-  document.getElementById('source').title = s.name ? s.name + ' · Choose a different file' : 'Choose a file';
+  document.getElementById('source').title = s.name ? s.name + ' · Open another file in its own Yamori tab' : 'Choose a file';
   document.querySelectorAll('[data-level]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.level === s.level)); });
   refresh.textContent = s.busy ? 'Stop' : 'Refresh'; refresh.disabled = !s.name;
   content.setAttribute('aria-busy', String(!!s.busy)); content.replaceChildren();
@@ -386,6 +389,7 @@ document.getElementById('model').addEventListener('click', () => send('model'));
 document.getElementById('effort').addEventListener('click', () => send('effort'));
 document.getElementById('colors').addEventListener('click', () => send('palette'));
 document.getElementById('source').addEventListener('click', () => send('browse'));
+document.getElementById('files').addEventListener('click', () => send('switchFile'));
 refresh.addEventListener('click', () => send(state.busy ? 'stop' : 'refresh'));
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => send('level', { level: b.dataset.level })));
 window.addEventListener('message', e => { if (e.data.type === 'state') render(e.data.state); });

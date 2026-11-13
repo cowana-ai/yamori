@@ -146,7 +146,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     replaceChildren(...children) { this.children = children; }
     setAttribute(name, value) { (this.attributes ||= {})[name] = value; } addEventListener(type, callback) { (this.events ||= {})[type] = callback; }
   }
-  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'colors', 'source'].map(id => [id, new Element('div')]));
+  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'colors', 'source', 'files'].map(id => [id, new Element('div')]));
   let receive;
   const document = { body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
   const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
@@ -156,6 +156,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   receive({ data: { type: 'state', state: renderedState } });
   assert.equal(document.body.attributes['data-palette'], 'paper');
   elements.colors.events.click(); assert.equal(sent.at(-1).type, 'palette');
+  elements.files.events.click(); assert.equal(sent.at(-1).type, 'switchFile');
   assert.equal(elements.effort.textContent, 'Effort: medium ▾');
   elements.effort.events.click(); assert.equal(sent.at(-1).type, 'effort');
   const all = []; const visit = el => { all.push(el); (el.children || []).forEach(visit); }; visit(elements.content);
@@ -604,4 +605,102 @@ test('generation and editing permit grounded internal algorithm knowledge for wh
     assert.match(prompt, /Do not turn a standard rationale into an unconditional guarantee/);
     assert.ok(prompt.includes('min_X [ H(B | X, K) + λ · ReadCost(X) ]'));
   }
+});
+
+test('file tabs reuse one reader column and isolate generation, detail, edits, closure and prepared files', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-tabs-test-'));
+  const commands = new Map(), settings = new Map(), panels = [], shown = [];
+  let change, nextPick, calls = 0, holdA = true, holdB = false, pendingA, pendingB, startA, startB;
+  const aStarted = new Promise(resolve => { startA = resolve; });
+  let bStarted;
+  class Uri { constructor(value) { this.value = value; this.scheme = 'file'; this.fsPath = value.replace('file://', ''); } toString() { return this.value; } static parse(value) { return new Uri(value); } }
+  class Range { constructor(a, b, c, d) { this.start = { line: a, character: b }; this.end = { line: c, character: d }; } }
+  class Selection extends Range { get isEmpty() { return this.start.line === this.end.line && this.start.character === this.end.character; } }
+  const docs = ['first.py', 'second.py', 'third.py'].map(name => ({ uri: new Uri('file:///project/' + name), languageId: 'python', lineCount: 2, getText: () => 'x = 1\nprint(x)', lineAt: i => ({ text: ['x = 1', 'print(x)'][i] }) }));
+  const editors = docs.map(document => ({ document, viewColumn: 1, selection: new Selection(0, 0, 0, 0), setDecorations() {}, revealRange() {} }));
+  const noop = () => ({ dispose() {} });
+  const vscode = {
+    Uri, Range, Selection, RelativePattern: class {}, ThemeColor: class {}, ViewColumn: { One: 1, Beside: -2 }, ProgressLocation: { Notification: 1 }, TextEditorRevealType: { InCenterIfOutsideViewport: 1 },
+    commands: { registerCommand(id, fn) { assert.ok(!commands.has(id), 'commands are registered only once'); commands.set(id, fn); return noop(); } },
+    workspace: { isTrusted: true, workspaceFolders: [{ uri: new Uri('file:///project') }], textDocuments: docs, asRelativePath: uri => path.basename(uri.fsPath), openTextDocument: async uri => docs.find(doc => doc.uri.toString() === uri.toString()), getConfiguration: () => ({ get: (_, fallback) => fallback }), findFiles: async () => docs.map(doc => doc.uri), onDidChangeTextDocument(fn) { change = fn; return noop(); } },
+    window: {
+      activeTextEditor: editors[0], visibleTextEditors: [editors[0]], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop,
+      showErrorMessage(message) { throw new Error(message); }, setStatusBarMessage() {}, showInformationMessage() {},
+      showTextDocument: async (doc, options) => { const editor = editors.find(editor => editor.document === doc); shown.push({ doc, options }); vscode.window.visibleTextEditors = [editor]; return editor; },
+      showQuickPick: async (items, options) => { const rows = await items; return options?.canPickMany ? rows.filter(row => row.label === 'third.py') : rows.find(row => row.label === nextPick); },
+      withProgress: async (_, fn) => fn({ report() {} }, { onCancellationRequested: noop }),
+      createWebviewPanel(_, title, options) {
+        const panel = { title, viewColumn: options.viewColumn === -2 ? 2 : options.viewColumn, active: true, visible: true, messages: [],
+          reveal(column) { assert.equal(column, 2, 'reusing a tab must not split a new column'); vscode.window.activeTextEditor = undefined; panel.active = true; panel.changed?.({ webviewPanel: panel }); },
+          onDidDispose(fn) { panel.closed = fn; return noop(); }, onDidChangeViewState(fn) { panel.changed = fn; return noop(); },
+          dispose() { if (panel.disposed) return; panel.disposed = true; panel.closed?.(); },
+          webview: { postMessage(message) { panel.messages.push(structuredClone(message.state)); }, onDidReceiveMessage(fn) { panel.receive = fn; return noop(); } }
+        };
+        panels.push(panel); return panel;
+      }
+    }, env: { clipboard: { writeText: async () => {} } }
+  };
+  const valueFor = opts => {
+    const make = level => ({ title: opts.source.name + ' ' + level, summary: 'Read the file.', sections: [{ title: 'Print', startLine: 1, endLine: 2, pseudocode: opts.edit?.draft || 'Print ' + opts.source.name, lineMap: [{ pseudocodeLine: 1, startLine: 2, endLine: 2 }] }] });
+    return { ...make(opts.level), requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, views: Object.fromEntries(['overview', 'logic', 'detailed'].slice(0, ['overview', 'logic', 'detailed'].indexOf(opts.level)).map(level => [level, make(level)])) };
+  };
+  const engine = { ...require('./engine'), generate: async opts => {
+    calls++;
+    if (holdA && opts.source.name === 'first.py') { startA(); return new Promise(resolve => { pendingA = { resolve: () => resolve(valueFor(opts)), signal: opts.signal }; }); }
+    if (holdB && opts.source.name === 'second.py') { startB(); return new Promise(resolve => { pendingB = { resolve: () => resolve(valueFor(opts)), signal: opts.signal }; }); }
+    return valueFor(opts);
+  } };
+  const stub = { exports: {} }, context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (key, fallback) => settings.get(key) ?? fallback, update: async (key, value) => settings.set(key, value) }, secrets: {} };
+  try {
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), Buffer, AbortController, setTimeout, clearTimeout });
+    await stub.exports.activate(context);
+    const first = commands.get('yamori.read')(); await aStarted;
+    const repeat = commands.get('yamori.read')();
+    assert.equal(panels.length, 1, 'repeated opening reuses the existing tab and request');
+    vscode.window.activeTextEditor = editors[1]; vscode.window.visibleTextEditors = [editors[1]];
+    await commands.get('yamori.read')();
+    assert.equal(panels.length, 2);
+    assert.deepEqual(panels.map(panel => panel.title), ['first.py · Yamori', 'second.py · Yamori']);
+    assert.deepEqual(panels.map(panel => panel.viewColumn), [2, 2]);
+    assert.equal(pendingA.signal.aborted, false, 'opening another file does not cancel the first');
+    assert.equal(panels[1].messages.at(-1).name, 'second.py');
+    holdA = false; pendingA.resolve(); await Promise.all([first, repeat]);
+    assert.equal(calls, 2);
+    assert.equal(panels[0].messages.at(-1).result.title, 'first.py logic');
+    await panels[1].receive({ type: 'level', level: 'overview' });
+    assert.equal(panels[1].messages.at(-1).level, 'overview');
+    assert.equal(panels[0].messages.at(-1).level, 'logic');
+    const beforeEdit = panels[1].messages.at(-1);
+    await panels[1].receive({ type: 'updateBlock', index: 0, documentKey: beforeEdit.documentKey, baseText: beforeEdit.result.sections[0].pseudocode, draft: 'My second-file explanation', instruction: 'Keep this meaning' });
+    assert.equal(panels[1].messages.at(-1).result.sections[0].pseudocode, 'My second-file explanation');
+    assert.equal(panels[0].messages.at(-1).result.sections[0].pseudocode, 'Print first.py');
+    nextPick = 'first.py'; const beforeSwitch = calls;
+    await commands.get('yamori.switchFile')();
+    assert.equal(calls, beforeSwitch, 'switching native tabs does not regenerate');
+    assert.equal(shown.at(-1).doc, docs[0]);
+    assert.equal(shown.at(-1).options.preserveFocus, true);
+    assert.equal(editors[0].selection.start.line, 0, 'restoring the source does not move the caret');
+    holdB = true; bStarted = new Promise(resolve => { startB = resolve; });
+    const refresh = panels[1].receive({ type: 'refresh' }); await bStarted;
+    panels[0].dispose();
+    assert.equal(pendingB.signal.aborted, false, 'closing one tab does not stop another file');
+    holdB = false; pendingB.resolve(); await refresh;
+    const beforeReopen = calls;
+    vscode.window.activeTextEditor = editors[0];
+    await commands.get('yamori.read')();
+    assert.equal(panels.length, 3, 'a closed file can be reopened');
+    assert.equal(calls, beforeReopen, 'reopening a closed tab uses disk cache');
+    nextPick = undefined;
+    await commands.get('yamori.project')(new Uri('file:///project'));
+    assert.equal(panels.length, 3, 'folder preparation must not open a panel for every file');
+    nextPick = 'third.py'; const beforePrepared = calls;
+    await commands.get('yamori.switchFile')();
+    assert.equal(panels.length, 4);
+    assert.equal(panels[3].title, 'third.py · Yamori');
+    assert.equal(calls, beforePrepared, 'prepared explanations open without inference');
+    docs[2].getText = () => 'x = 2\nprint(x)'; change({ document: docs[2] });
+    assert.equal(panels[3].messages.at(-1).stale, true);
+    assert.equal(panels[1].messages.at(-1).stale, false, 'source changes affect only related tabs');
+  } finally { context.subscriptions.forEach(item => item.dispose?.()); await fs.rm(temp, { recursive: true, force: true }); }
 });

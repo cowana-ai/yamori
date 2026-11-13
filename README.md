@@ -55,6 +55,7 @@ available definitions. A function's name alone does not establish its behavior.
 | **Logic** | Short steps, meaningful decisions and useful mathematics. |
 | **Detailed** | Closer explanations of operations, boundaries and side effects. |
 
+- **Work across files.** Click the book icon in a source editor to open **filename.py · Yamori** beside your code. Each file gets its own tab in the same reader column. Reopening a file reuses its tab and running request. The **▤ Files** button switches between open/prepared explanations or opens another project file. Each tab keeps its detail level and unsaved block drafts; switching back restores the source file without moving the caret.
 - **Stay connected to the source.** Hover over a mapped step to highlight its code. Click to jump to the corresponding lines.
 - **Understand custom calls.** Yamori uses available project definitions to explain a call's role, inputs and output.
 - **See the reasoning that matters.** Important source comments are preserved. Brief notes explain non-obvious consequences, assumptions and guards.
@@ -90,7 +91,7 @@ After updating an installed version, run **Developer: Reload Window**.
 
 Try the included [demo.py](demo.py), a small logistic-regression example.
 Right-click a folder and choose **Yamori: Read a Folder or Project** to select
-multiple files. Files are processed sequentially; completed results remain cached
+multiple files. Files are prepared sequentially without opening a stack of tabs. Use **Yamori: Switch Files** or **▤ Files** to open a prepared explanation. Completed results remain cached
 if you stop.
 
 ### Connect a provider
@@ -258,7 +259,7 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 28 offline tests passed. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
+**Validation:** 29 offline tests passed, including independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
 Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
 response handling are tested with a mock executable; live Claude generation has
 not yet been verified.

@@ -83,13 +83,113 @@ async function migratePreferences(context) {
 async function activate(context) {
   await migratePreferences(context);
   await context.secrets.delete?.('geminiKey');
+  const readers = new Map();
+  let activeReader, readingColumn, lastEditor = vscode.window.activeTextEditor;
+  const sourceColumn = () => (vscode.window.activeTextEditor || lastEditor)?.viewColumn || vscode.ViewColumn.One;
+  function readerFor(uri) {
+    const key = uri.toString();
+    if (!readers.has(key)) {
+      const local = { subscriptions: [], globalState: context.globalState, globalStorageUri: context.globalStorageUri, extensionUri: context.extensionUri };
+      const reader = createReader(local, {
+        uri: key, column: () => readingColumn || vscode.ViewColumn.Beside,
+        open, browse, switchFile,
+        active(value, panel) { activeReader = value; if (panel.viewColumn) readingColumn = panel.viewColumn; void value.showSource().catch(() => {}); },
+        closed(value) { if (readers.get(key) === value) readers.delete(key); if (activeReader === value) activeReader = undefined; if (!readers.size) readingColumn = undefined; }
+      });
+      readers.set(key, reader);
+    }
+    return readers.get(key);
+  }
+  async function open(uri) {
+    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before using Yamori.');
+    if (!uri && !vscode.window.activeTextEditor && activeReader?.snapshot()) { activeReader.focus(); return activeReader; }
+    const editor = vscode.window.activeTextEditor || lastEditor;
+    const doc = uri instanceof vscode.Uri ? await vscode.workspace.openTextDocument(uri) : editor?.document;
+    if (!doc) return browse();
+    const reader = readerFor(doc.uri);
+    const selection = !uri && editor?.document === doc ? editor.selection : undefined;
+    activeReader = reader;
+    await reader.read(doc, selection, { sourceColumn: sourceColumn(), openSource: !!uri });
+    return reader;
+  }
+  function current() {
+    const editor = vscode.window.activeTextEditor;
+    return editor?.document ? readerFor(editor.document.uri) : activeReader || (lastEditor?.document && readerFor(lastEditor.document.uri));
+  }
+  async function files(root) {
+    return vscode.workspace.findFiles(root ? new vscode.RelativePattern(root, INCLUDE) : INCLUDE, EXCLUDE, 501);
+  }
+  async function browse() {
+    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before using Yamori.');
+    const found = await files();
+    const pick = await vscode.window.showQuickPick(found.map(uri => ({ label: path.basename(uri.fsPath), description: vscode.workspace.asRelativePath(uri), detail: readers.get(uri.toString())?.hasPanel() ? 'Open Yamori tab' : undefined, uri })), { title: 'Yamori · Open a file', placeHolder: 'Search files. Each file opens in its own Yamori tab.', matchOnDescription: true });
+    if (pick) await open(pick.uri);
+  }
+  async function switchFile() {
+    const opened = [...readers.values()].filter(reader => reader.snapshot());
+    if (!opened.length) return browse();
+    const pick = await vscode.window.showQuickPick([
+      { label: '$(add) Open another file…', add: true },
+      ...opened.map(reader => ({ label: path.basename(vscode.Uri.parse(reader.snapshot().uri).fsPath), description: reader.snapshot().name, detail: reader.isBusy() ? 'Generating…' : reader.hasPanel() ? 'Open Yamori tab' : 'Prepared explanation', reader }))
+    ], { title: 'Yamori · Switch files', placeHolder: 'Switch tabs without regenerating, or open another file.', matchOnDescription: true });
+    if (pick?.add) return browse();
+    if (pick?.reader) { activeReader = pick.reader; pick.reader.focus(); }
+  }
+  async function project(uri) {
+    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before using Yamori.');
+    const root = uri instanceof vscode.Uri ? uri : vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!root) throw new Error('Open a project folder first.');
+    const found = await files(root);
+    if (found.length > 500) throw new Error('More than 500 source files. Choose a smaller folder in the Explorer.');
+    if (!found.length) throw new Error('No supported source files found in this folder.');
+    const picked = await vscode.window.showQuickPick(found.map(uri => ({ label: vscode.workspace.asRelativePath(uri), uri, picked: true })), { title: 'Yamori · Prepare files', placeHolder: 'Generate and cache files, then use Switch files to open them.', canPickMany: true });
+    if (!picked?.length) return;
+    let completed = 0, skipped = 0, stopped = false, failure, job;
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Yamori', cancellable: true }, async (progress, token) => {
+      const subscription = token.onCancellationRequested(() => { stopped = true; job?.stop(); });
+      try {
+        for (const item of picked) {
+          if (stopped) break;
+          progress.report({ message: `${completed + skipped + 1}/${picked.length} · ${item.label}`, increment: 100 / picked.length });
+          const doc = await vscode.workspace.openTextDocument(item.uri);
+          if (!doc.getText().trim() || Buffer.byteLength(doc.getText()) > MAX_BYTES) { skipped++; continue; }
+          job = readerFor(item.uri);
+          await job.read(doc, undefined, { show: false, sourceColumn: sourceColumn() });
+          if (stopped) break;
+          if (job.failure()) { failure = job.failure(); break; }
+          completed++;
+        }
+      } catch (e) { failure = e.message; }
+      finally { subscription.dispose(); }
+    });
+    vscode.window.showInformationMessage(`Yamori: ${completed} ready${skipped ? `, ${skipped} empty or oversized files skipped` : ''}.${failure ? ' ' + failure : stopped ? ' Stopped; completed files are cached.' : ' Use Yamori: Switch Files to read them.'}`);
+    if (!stopped && completed) await switchFile();
+  }
+  const command = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, async (...args) => {
+    try { return await fn(...args); } catch (e) { vscode.window.showErrorMessage(e.message); }
+  }));
+  command('yamori.read', open); command('yamori.browse', browse); command('yamori.project', project); command('yamori.switchFile', switchFile);
+  for (const [id, method] of [['provider', 'chooseProvider'], ['model', 'chooseModel'], ['effort', 'chooseEffort'], ['colors', 'chooseReadingColors']]) {
+    command('yamori.' + id, async () => { const reader = current(); if (!reader) return browse(); reader.focus(); await reader[method](); });
+  }
+  command('yamori.clear', async () => {
+    for (const reader of readers.values()) reader.clear();
+    await fs.rm(path.join(context.globalStorageUri.fsPath, 'cache'), { recursive: true, force: true });
+    vscode.window.setStatusBarMessage('Yamori cache cleared', 2000);
+  });
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => { if (editor) lastEditor = editor; }));
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => { for (const reader of readers.values()) reader.changed(event); }));
+  context.subscriptions.push({ dispose() { for (const reader of [...readers.values()]) reader.dispose(); readers.clear(); } });
+}
+
+function createReader(context, navigation) {
   let panel, source, result, error = '', stale = false, busy = false, controller, serial = 0, progress, preview, startedAt;
   let selectedModel, modelNotice = '', activity = [];
   let level = context.globalState.get('detail', 'logic');
   let provider = context.globalState.get('provider', 'codex');
   if (!LEVELS[level]) level = 'logic';
   if (!PROVIDERS[provider]) provider = 'codex';
-  let lastEditor = vscode.window.activeTextEditor;
+  let sourceColumn = vscode.ViewColumn.One, disposed = false, inFlight;
   const cacheDir = path.join(context.globalStorageUri.fsPath, 'cache');
   const memory = new Map(), revisions = new Map(), revisionLoaded = new Set();
   const revisionKey = (s, owner) => cacheKey(s, 'revision', owner);
@@ -128,18 +228,21 @@ async function activate(context) {
   function post() { panel?.webview.postMessage({ type: 'state', state: view() }); }
   function cancel() { serial++; controller?.abort(); controller = undefined; busy = false; preview = undefined; progress = undefined; startedAt = undefined; clearHighlight(); }
   function ensurePanel() {
-    if (panel) { panel.reveal(vscode.ViewColumn.Beside, true); return; }
-    panel = vscode.window.createWebviewPanel('yamori', 'Yamori', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
+    if (panel) { panel.reveal(panel.viewColumn || navigation.column(), false); return; }
+    panel = vscode.window.createWebviewPanel('yamori', path.basename(vscode.Uri.parse(navigation.uri).fsPath) + ' · Yamori', { viewColumn: navigation.column(), preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
+    if (context.extensionUri && vscode.Uri.joinPath) panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'yamori.png');
     panel.webview.html = panelHTML(context.globalState.get('readingPalette', 'auto'));
-    panel.onDidDispose(() => { cancel(); panel = undefined; }, null, context.subscriptions);
-    panel.onDidChangeViewState?.(event => { if (!event.webviewPanel.visible) clearHighlight(); }, null, context.subscriptions);
+    panel.onDidDispose(() => { panel = undefined; reader.dispose(); }, null, context.subscriptions);
+    panel.onDidChangeViewState?.(event => { if (!event.webviewPanel.visible) clearHighlight(); if (event.webviewPanel.active) { navigation.active(reader, event.webviewPanel); post(); } }, null, context.subscriptions);
+    navigation.active(reader, panel);
     panel.webview.onDidReceiveMessage(async message => {
       try {
         if (!message || typeof message.type !== 'string') return;
         switch (message.type) {
           case 'ready': post(); break;
-          case 'read': await read(); break;
-          case 'browse': await browse(); break;
+          case 'read': await navigation.open(); break;
+          case 'browse': await navigation.browse(); break;
+          case 'switchFile': await navigation.switchFile(); break;
           case 'provider': await chooseProvider(); break;
           case 'model': await chooseModel(); break;
           case 'effort': await chooseEffort(); break;
@@ -227,7 +330,12 @@ async function activate(context) {
       }
     } catch { /* Cache is optional; an explanation should still be shown. */ }
   }
-  async function explain(force) {
+  function explain(force) {
+    const request = runExplanation(force);
+    inFlight = request;
+    return request.finally(() => { if (inFlight === request) inFlight = undefined; });
+  }
+  async function runExplanation(force) {
     assertTrusted(); if (!source) return;
     modelNotice = '';
     cancel(); const id = serial; let snapshot = source;
@@ -309,31 +417,30 @@ async function activate(context) {
     } catch (e) { if (id === serial && !task.signal.aborted) error = e.message; }
     finally { if (id === serial) { busy = false; controller = undefined; preview = undefined; post(); } }
   }
-  async function read(uri) {
+  async function read(doc, selection, settings = {}) {
     assertTrusted();
-    const editor = vscode.window.activeTextEditor || lastEditor;
-    const doc = uri instanceof vscode.Uri ? await vscode.workspace.openTextDocument(uri) : editor?.document;
-    if (!doc) { ensurePanel(); post(); return; }
-    const selection = (!uri && editor?.document === doc) ? editor.selection : undefined;
+    sourceColumn = settings.sourceColumn || sourceColumn;
     const next = capture(doc, selection);
+    if (source && !stale && source.uri === next.uri && source.text === next.text && source.startLine === next.startLine && source.endLine === next.endLine && source.fullHash === next.fullHash && (busy || (result && matchesModel(result, options())))) {
+      if (settings.show !== false) { ensurePanel(); post(); }
+      return inFlight;
+    }
     cancel(); source = next; result = undefined; stale = false; error = '';
-    if (uri) lastEditor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: true });
-    ensurePanel(); await explain(false);
+    if (settings.openSource) await showSource();
+    if (settings.show !== false) ensurePanel();
+    await explain(false);
+  }
+  async function showSource() {
+    if (!source || disposed) return;
+    if (vscode.window.visibleTextEditors.some(editor => editor.document.uri.toString() === source.uri)) return;
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(source.uri));
+    if (!disposed) await vscode.window.showTextDocument(doc, { viewColumn: sourceColumn, preserveFocus: true });
   }
   async function refresh() {
-    if (!source) return read();
+    if (!source) return navigation.open();
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(source.uri));
     const selection = source.selected ? new vscode.Selection(source.startLine - 1, 0, Math.min(source.endLine - 1, doc.lineCount - 1), doc.lineAt(Math.min(source.endLine - 1, doc.lineCount - 1)).text.length) : undefined;
     source = capture(doc, selection); stale = false; await explain(true);
-  }
-  async function files(root) {
-    return vscode.workspace.findFiles(root ? new vscode.RelativePattern(root, INCLUDE) : INCLUDE, EXCLUDE, 501);
-  }
-  async function browse() {
-    assertTrusted();
-    const found = await files();
-    const pick = await vscode.window.showQuickPick(found.map(uri => ({ label: path.basename(uri.fsPath), description: vscode.workspace.asRelativePath(uri), uri })), { title: 'Read a file', placeHolder: 'Search your project files…', matchOnDescription: true });
-    if (pick) await read(pick.uri);
   }
   async function chooseProvider() {
     const picked = await vscode.window.showQuickPick([
@@ -404,7 +511,7 @@ async function activate(context) {
     }
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(source.uri));
     if (hash(doc.getText()) !== source.fullHash) { stale = true; post(); return; }
-    const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: true });
+    const editor = await vscode.window.showTextDocument(doc, { viewColumn: sourceColumn, preserveFocus: true });
     const range = new vscode.Range(location.startLine - 1, 0, location.endLine - 1, doc.lineAt(location.endLine - 1).text.length);
     editor.selection = new vscode.Selection(range.start, range.end);
     editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
@@ -424,57 +531,24 @@ async function activate(context) {
       editor.setDecorations(decoration, [range]); highlighted.add(editor);
     }
   }
-  async function project(uri) {
-    assertTrusted();
-    const root = uri instanceof vscode.Uri ? uri : vscode.workspace.workspaceFolders?.[0]?.uri;
-    if (!root) throw new Error('Open a project folder first.');
-    const found = await files(root);
-    if (found.length > 500) throw new Error('More than 500 source files. Choose a smaller folder in the Explorer.');
-    if (!found.length) throw new Error('No supported source files found in this folder.');
-    const picked = await vscode.window.showQuickPick(found.map(u => ({ label: vscode.workspace.asRelativePath(u), uri: u, picked: true })), { title: `Read ${LEVELS[level].label.toLowerCase()} with ${PROVIDERS[provider]}`, placeHolder: 'Choose files to generate. Completed files are cached; provider usage limits apply.', canPickMany: true });
-    if (!picked?.length) return;
-    cancel(); const id = serial, task = new AbortController(); controller = task; busy = true;
-    const opts = options(); let completed = 0, skipped = 0, failure;
-    try {
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Yamori', cancellable: true }, async (progress, token) => {
-        const disposable = token.onCancellationRequested(() => task.abort());
-        try {
-          for (const item of picked) {
-            if (task.signal.aborted || id !== serial) break;
-            progress.report({ message: `${completed + skipped + 1}/${picked.length} · ${item.label}`, increment: 100 / picked.length });
-            const doc = await vscode.workspace.openTextDocument(item.uri);
-            let next;
-            try { next = capture(doc); } catch { skipped++; continue; }
-            next = await collectCallContext(next);
-            if (task.signal.aborted || id !== serial) break;
-            await loadRevision(next, opts.provider);
-            const fileOpts = { ...opts, revision: revisions.get(revisionKey(next, opts.provider)) };
-            let value = await cached(next, fileOpts);
-            if (!value) { value = await generate({ source: next, ...fileOpts, signal: task.signal, onProgress: () => {} }); await save(next, fileOpts, value); }
-            completed++;
-            if (id !== serial || task.signal.aborted) break;
-            source = next; result = value; error = ''; stale = hash(doc.getText()) !== next.fullHash; ensurePanel(); post();
-          }
-        } finally { disposable.dispose(); }
-      });
-    } catch (e) { if (!task.signal.aborted) failure = e.message; }
-    finally { if (id === serial) { busy = false; controller = undefined; if (failure) error = failure; post(); } }
-    vscode.window.showInformationMessage(`Yamori: ${completed} ready${skipped ? `, ${skipped} empty or oversized files skipped` : ''}.${failure ? ' Stopped; completed explanations are saved.' : task.signal.aborted || id !== serial ? ' Stopped.' : ' Choose a file to read it.'}`);
-  }
-  const command = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, async (...args) => {
-    try { await fn(...args); } catch (e) { vscode.window.showErrorMessage(e.message); }
-  }));
-  command('yamori.read', read); command('yamori.browse', browse); command('yamori.project', project);
-  command('yamori.provider', chooseProvider);
-  command('yamori.model', () => { ensurePanel(); return chooseModel(); });
-  command('yamori.effort', () => { ensurePanel(); return chooseEffort(); });
-  command('yamori.colors', () => { ensurePanel(); return chooseReadingColors(); });
-  command('yamori.clear', async () => { cancel(); memory.clear(); revisions.clear(); revisionLoaded.clear(); await fs.rm(cacheDir, { recursive: true, force: true }); result = undefined; error = ''; post(); vscode.window.setStatusBarMessage('Yamori cache cleared', 2000); });
-  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => { if (editor) lastEditor = editor; }));
-  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
-    if (source && event.document.uri.toString() === source.uri) { clearHighlight(); stale = hash(event.document.getText()) !== source.fullHash; post(); }
-    else if (source?.callContext?.definitions.some(def => def.uri === event.document.uri.toString() && def.fullHash !== hash(event.document.getText()))) { clearHighlight(); stale = true; post(); }
-  }));
-  context.subscriptions.push({ dispose: cancel });
+  const reader = {
+    read, showSource, chooseProvider, chooseModel, chooseEffort, chooseReadingColors,
+    snapshot: () => source, isBusy: () => busy, hasPanel: () => !!panel, failure: () => error,
+    stop: cancel,
+    focus() { ensurePanel(); post(); },
+    clear() { cancel(); memory.clear(); revisions.clear(); revisionLoaded.clear(); result = undefined; error = ''; post(); },
+    changed(event) {
+      if (source && event.document.uri.toString() === source.uri) { clearHighlight(); stale = hash(event.document.getText()) !== source.fullHash; post(); }
+      else if (source?.callContext?.definitions.some(def => def.uri === event.document.uri.toString() && def.fullHash !== hash(event.document.getText()))) { clearHighlight(); stale = true; post(); }
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true; cancel(); clearHighlight();
+      panel?.dispose?.(); panel = undefined;
+      for (const subscription of context.subscriptions.splice(0)) subscription?.dispose?.();
+      navigation.closed(reader);
+    }
+  };
+  return reader;
 }
 module.exports = { activate, migratePreferences, collectCallContext };

@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -53,6 +53,11 @@
       {
         "command": "yamori.colors",
         "title": "Yamori: Choose Reading Colors"
+      },
+      {
+        "command": "yamori.switchFile",
+        "title": "Yamori: Switch Files",
+        "icon": "$(files)"
       }
     ],
     "menus": {
