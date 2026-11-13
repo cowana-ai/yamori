@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "publisher": "chingis-local",
   "license": "MIT",
   "engines": {
@@ -48,6 +48,10 @@
       {
         "command": "yamori.effort",
         "title": "Yamori: Choose Effort"
+      },
+      {
+        "command": "yamori.colors",
+        "title": "Yamori: Choose Reading Colors"
       }
     ],
     "menus": {

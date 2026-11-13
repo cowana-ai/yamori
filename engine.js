@@ -347,7 +347,7 @@ function streamCodex(binary, prompt, schema, { cwd, signal, onText, onPhase, mod
     child.stdout.setEncoding('utf8');
     if (signal?.aborted) { abort(); return; }
     onPhase?.('Connecting to Codex');
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'yamori', title: 'Yamori', version: '0.11.0' }, capabilities: { experimentalApi: true } } });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'yamori', title: 'Yamori', version: '0.12.0' }, capabilities: { experimentalApi: true } } });
   });
 }
 

@@ -124,13 +124,13 @@ async function activate(context) {
     for (const editor of highlighted) { try { editor.setDecorations(decoration, []); } catch {} }
     highlighted.clear();
   }
-  const view = () => ({ name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, modelNotice, level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, documentKey: source ? keyFor(source, options()) : undefined });
+  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, modelNotice, level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, documentKey: source ? keyFor(source, options()) : undefined });
   function post() { panel?.webview.postMessage({ type: 'state', state: view() }); }
   function cancel() { serial++; controller?.abort(); controller = undefined; busy = false; preview = undefined; progress = undefined; startedAt = undefined; clearHighlight(); }
   function ensurePanel() {
     if (panel) { panel.reveal(vscode.ViewColumn.Beside, true); return; }
     panel = vscode.window.createWebviewPanel('yamori', 'Yamori', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
-    panel.webview.html = panelHTML();
+    panel.webview.html = panelHTML(context.globalState.get('readingPalette', 'auto'));
     panel.onDidDispose(() => { cancel(); panel = undefined; }, null, context.subscriptions);
     panel.onDidChangeViewState?.(event => { if (!event.webviewPanel.visible) clearHighlight(); }, null, context.subscriptions);
     panel.webview.onDidReceiveMessage(async message => {
@@ -143,6 +143,7 @@ async function activate(context) {
           case 'provider': await chooseProvider(); break;
           case 'model': await chooseModel(); break;
           case 'effort': await chooseEffort(); break;
+          case 'palette': await chooseReadingColors(); break;
           case 'stop': cancel(); activity.push('Stopped'); error = ''; post(); break;
           case 'refresh': await refresh(); break;
           case 'level':
@@ -382,6 +383,16 @@ async function activate(context) {
     modelNotice = 'New requests use ' + (picked.id === 'auto' ? 'the CLI default effort' : picked.id + ' effort') + (result ? '. Press Refresh to regenerate this explanation.' : '.');
     error = ''; post();
   }
+  async function chooseReadingColors() {
+    const choices = [
+      { label: 'Follow editor', id: 'auto', description: 'Paper in light themes; Slate in dark themes' },
+      { label: 'Paper', id: 'paper', description: 'Dark navy text, warm paper, teal and amber accents' },
+      { label: 'Slate', id: 'slate', description: 'Warm light text on dark slate, soft teal accents' }
+    ];
+    const picked = await vscode.window.showQuickPick(choices, { title: 'Yamori · Reading colors', placeHolder: 'Applies immediately. No generation needed.' });
+    if (!picked || !choices.some(choice => choice.id === picked.id)) return;
+    await context.globalState.update('readingPalette', picked.id); post();
+  }
   async function reveal(index, pseudocodeLine) {
     if (!source || !result || !Number.isInteger(index) || stale) return;
     const section = result.sections[index]; if (!section) return;
@@ -457,6 +468,7 @@ async function activate(context) {
   command('yamori.provider', chooseProvider);
   command('yamori.model', () => { ensurePanel(); return chooseModel(); });
   command('yamori.effort', () => { ensurePanel(); return chooseEffort(); });
+  command('yamori.colors', () => { ensurePanel(); return chooseReadingColors(); });
   command('yamori.clear', async () => { cancel(); memory.clear(); revisions.clear(); revisionLoaded.clear(); await fs.rm(cacheDir, { recursive: true, force: true }); result = undefined; error = ''; post(); vscode.window.setStatusBarMessage('Yamori cache cleared', 2000); });
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => { if (editor) lastEditor = editor; }));
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {

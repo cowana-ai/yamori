@@ -144,16 +144,18 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     constructor(tag) { this.tag = tag; this.children = []; this.style = {}; }
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
-    setAttribute() {} addEventListener(type, callback) { (this.events ||= {})[type] = callback; }
+    setAttribute(name, value) { (this.attributes ||= {})[name] = value; } addEventListener(type, callback) { (this.events ||= {})[type] = callback; }
   }
-  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'source'].map(id => [id, new Element('div')]));
+  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'colors', 'source'].map(id => [id, new Element('div')]));
   let receive;
-  const document = { getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
+  const document = { body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
   const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
   const sent = [];
   vm.runInNewContext(script, { document, DOMParser: class { parseFromString(markup) { return { querySelector: () => { const el = new Element('math'); el.markup = markup; return el; } }; } }, acquireVsCodeApi: () => ({ postMessage(m) { sent.push(m); } }), window: { addEventListener: (name, fn) => { if (name === 'message') receive = fn; } } });
-  const renderedState = { requestedEffort: 'medium', documentKey: 'test-document', providerLabel: 'Codex', level: 'logic', name: 'test.py', result: { ...valid, sections: [{ ...valid.sections[0], lineMap: [{ pseudocodeLine: 5, startLine: 11, endLine: 11 }], pseudocode: 'WHEN training starts\n    # Context: Preserve restored updates.\n\n    IF reduction is due\n        Halve the **learning rate** $\\eta \\leftarrow \\frac{\\eta}{2}$.' }] } };
+  const renderedState = { readingPalette: 'paper', requestedEffort: 'medium', documentKey: 'test-document', providerLabel: 'Codex', level: 'logic', name: 'test.py', result: { ...valid, sections: [{ ...valid.sections[0], lineMap: [{ pseudocodeLine: 5, startLine: 11, endLine: 11 }], pseudocode: 'WHEN training starts\n    # Context: Preserve restored updates.\n\n    IF reduction is due\n        Halve the **learning rate** $\\eta \\leftarrow \\frac{\\eta}{2}$.' }] } };
   receive({ data: { type: 'state', state: renderedState } });
+  assert.equal(document.body.attributes['data-palette'], 'paper');
+  elements.colors.events.click(); assert.equal(sent.at(-1).type, 'palette');
   assert.equal(elements.effort.textContent, 'Effort: medium ▾');
   elements.effort.events.click(); assert.equal(sent.at(-1).type, 'effort');
   const all = []; const visit = el => { all.push(el); (el.children || []).forEach(visit); }; visit(elements.content);
@@ -190,6 +192,11 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   assert.equal(fields.length, 2);
   fields[0].value = 'Count completed examples'; fields[0].events.input();
   fields[1].value = 'Explain the accumulator'; fields[1].events.input();
+  receive({ data: { type: 'state', state: { ...renderedState, readingPalette: 'slate' } } });
+  editorNodes.length = 0; findEditor(elements.content);
+  assert.equal(editorNodes.filter(el => el.tag === 'textarea')[0].value, 'Count completed examples', 'changing colors preserves the unsaved block draft');
+  assert.equal(document.body.attributes['data-palette'], 'slate');
+
   editorNodes.find(el => el.textContent === 'Update with Codex').events.click();
   assert.equal(sent.at(-1).type, 'updateBlock');
   assert.equal(sent.at(-1).draft, 'Count completed examples');
@@ -353,6 +360,15 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     context.subscriptions.splice(0).forEach(d => d?.dispose?.());
     await moduleStub.exports.activate(context); await commands.get('yamori.read')();
     assert.equal(messages.at(-1).requestedEffort, null, 'effort choices survive restart');
+    const beforeColors = calls, beforeKey = messages.at(-1).documentKey;
+    nextPick = 'paper'; await commands.get('yamori.colors')();
+    assert.equal(messages.at(-1).readingPalette, 'paper');
+    assert.equal(calls, beforeColors, 'reading colors do not start inference');
+    assert.equal(messages.at(-1).documentKey, beforeKey, 'color changes do not invalidate cache or drafts');
+    context.subscriptions.splice(0).forEach(d => d?.dispose?.());
+    await moduleStub.exports.activate(context); await commands.get('yamori.read')();
+    assert.equal(messages.at(-1).readingPalette, 'paper', 'reading palette survives restart');
+
 
   } finally { context.subscriptions.forEach(d => d?.dispose?.()); await fs.rm(temp, { recursive: true, force: true }); }
 });

@@ -70,7 +70,7 @@ and reduced-motion preferences are supported.
 
 Yamori is an early personal extension, currently distributed as a VSIX.
 
-1. Download **yamori-0.11.0.vsix** from the [latest prerelease](https://github.com/cowana-ai/yamori/releases/tag/v0.11.0).
+1. Download **yamori-0.12.0.vsix** from the [latest prerelease](https://github.com/cowana-ai/yamori/releases/tag/v0.12.0).
 2. In Cursor or VS Code, open **Extensions → … → Install from VSIX** and select it.
 3. Open a code file, then run **Yamori: Read as Pseudocode** from the Command Palette.
 4. Choose **Overview**, **Logic** or **Detailed** in the reading panel.
@@ -98,6 +98,14 @@ Choose the provider at the top of the panel. Existing eligible subscription acce
 uses the provider's allowance; API-key authentication can use API billing.
 Account limits still apply. Optional executable paths are available under
 **Settings → Yamori** if automatic detection cannot find your CLI.
+
+## Reading colors
+
+Click **Aa** beside Refresh, or run **Yamori: Choose Reading Colors**. Choose **Paper** (dark navy text on warm paper), **Slate** (warm light text on dark slate), or **Follow editor**. The choice is remembered and applies immediately to existing explanations, without regeneration or provider usage.
+
+Body text uses a consistent high-contrast ink color. Teal identifies controls and flow; restrained amber backgrounds mark selected key phrases. Notes use readable, low-saturation surfaces instead of bright blue text. Pseudocode is 15 px, with larger conceptual notes. Colors do not carry meaning alone: words, weight, grouping and note labels remain.
+
+The design follows [W3C's enhanced text-contrast target of 7:1](https://www.w3.org/WAI/WCAG21/Understanding/contrast-enhanced) and [NN/g's guidance on restrained color hierarchy](https://www.nngroup.com/articles/visual-hierarchy-ux-definition/). These sources support contrast and hierarchy; the specific warm-paper and slate palettes are Yamori design choices, rather than a claim that one color universally improves concentration. Editor high-contrast modes retain native colors. Browser measurements cover 15 foreground/background pairs in both palettes, including manual overrides. Main text measures about 14.5:1 on Paper and 13.3:1 on Slate; all checked text pairs exceed 7:1. The 360 px preview has no horizontal overflow.
 
 ## Models and reasoning effort
 
