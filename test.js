@@ -152,7 +152,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
   const sent = [];
   vm.runInNewContext(script, { document, DOMParser: class { parseFromString(markup) { return { querySelector: () => { const el = new Element('math'); el.markup = markup; return el; } }; } }, acquireVsCodeApi: () => ({ postMessage(m) { sent.push(m); } }), window: { addEventListener: (name, fn) => { if (name === 'message') receive = fn; } } });
-  const renderedState = { requestedEffort: 'medium', documentKey: 'test-document', providerLabel: 'Codex', level: 'logic', name: 'test.py', result: { ...valid, sections: [{ ...valid.sections[0], lineMap: [{ pseudocodeLine: 5, startLine: 11, endLine: 11 }], pseudocode: 'WHEN training starts\n    # Preserve restored updates.\n\n    IF reduction is due\n        Halve the **learning rate** $\\eta \\leftarrow \\frac{\\eta}{2}$.' }] } };
+  const renderedState = { requestedEffort: 'medium', documentKey: 'test-document', providerLabel: 'Codex', level: 'logic', name: 'test.py', result: { ...valid, sections: [{ ...valid.sections[0], lineMap: [{ pseudocodeLine: 5, startLine: 11, endLine: 11 }], pseudocode: 'WHEN training starts\n    # Context: Preserve restored updates.\n\n    IF reduction is due\n        Halve the **learning rate** $\\eta \\leftarrow \\frac{\\eta}{2}$.' }] } };
   receive({ data: { type: 'state', state: renderedState } });
   assert.equal(elements.effort.textContent, 'Effort: medium ▾');
   elements.effort.events.click(); assert.equal(sent.at(-1).type, 'effort');
@@ -160,6 +160,8 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   const rows = all.filter(el => el.className?.startsWith('code-line'));
   assert.equal(rows.length, 5, 'actual newlines must not collapse into one text row');
   assert.ok(rows[1].className.includes('note'));
+  assert.ok(rows[1].className.includes('context-note'));
+  assert.ok(all.some(el => el.tag === 'details' && el.className === 'reading-block'));
   assert.ok(rows[2].className.includes('blank'));
   assert.ok(rows[3].className.includes('decision'));
   assert.ok(rows[4].className.includes('linked'));
@@ -545,5 +547,17 @@ test('all generation and edit paths contain the explicit communication objective
     assert.ok(prompt.includes('min_X [ H(B | X, K) + λ · ReadCost(X) ]'));
     assert.match(prompt, /subject to semantic fidelity/);
     assert.match(prompt, /not a request to invent numerical entropy estimates/);
+  }
+});
+
+
+test('generation and editing permit grounded internal algorithm knowledge for what, how and why', () => {
+  const prompts = [...Object.keys(LEVELS).map(level => promptFor(source, level)), editPrompt(source, 'logic', {section:valid.sections[0],draft:'Print x'}), revisionPrompt(source, 'overview', {level:'logic',value:valid})];
+  for (const prompt of prompts) {
+    assert.match(prompt, /Actively use your established internal mathematical/);
+    assert.match(prompt, /WHAT:.*HOW:.*WHY:/s);
+    assert.match(prompt, /Heun \/ explicit trapezoidal predictor-corrector pattern/);
+    assert.match(prompt, /Do not turn a standard rationale into an unconditional guarantee/);
+    assert.ok(prompt.includes('min_X [ H(B | X, K) + λ · ReadCost(X) ]'));
   }
 });

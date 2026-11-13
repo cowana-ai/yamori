@@ -62,7 +62,7 @@ available definitions. A function's name alone does not establish its behavior.
 - **Make an explanation your own.** Copy a block, edit it in place, then ask Codex or Claude to update that block. Approved edits are cached; other views are rebuilt when requested.
 - **Move between views quickly.** Generation prepares the lower-detail views too. Returning to them uses memory or disk cache.
 
-Blocks use short, casual action lines, phase breaks and sparse emphasis on behavior-defining phrases. Terms such as state and level get a short definition note on first use. Ordinary connective words stay plain; definition notes are visually subordinate and are not numbered as actions. Wrapped lines align beneath their own text. Useful equations render as math.
+Each pseudocode block sits in a bordered, softly tinted reading box with a distinct heading. Short conceptual notes get their own visual treatment inside the block. Blocks use short, casual action lines, phase breaks and sparse emphasis on behavior-defining phrases. Terms such as state and level get a short definition note on first use. Ordinary connective words stay plain; definition notes are visually subordinate and are not numbered as actions. Wrapped lines align beneath their own text. Useful equations render as math.
 Simple actions stay in words. Light and dark editor themes, keyboard navigation
 and reduced-motion preferences are supported.
 
@@ -70,7 +70,7 @@ and reduced-motion preferences are supported.
 
 Yamori is an early personal extension, currently distributed as a VSIX.
 
-1. Download **yamori-0.10.0.vsix** from the [latest prerelease](https://github.com/cowana-ai/yamori/releases/tag/v0.10.0).
+1. Download **yamori-0.11.0.vsix** from the [latest prerelease](https://github.com/cowana-ai/yamori/releases/tag/v0.11.0).
 2. In Cursor or VS Code, open **Extensions → … → Install from VSIX** and select it.
 3. Open a code file, then run **Yamori: Read as Pseudocode** from the Command Palette.
 4. Choose **Overview**, **Logic** or **Detailed** in the reading panel.
@@ -139,6 +139,10 @@ $$
 $$
 
 Here **B** is relevant code behavior, **X** is the explanation and **K** is the reader's existing knowledge. Reading cost includes length, jargon, nested clauses and visual clutter. Semantic fidelity is a hard constraint. The agent uses this as a qualitative criterion: keep details that distinguish behavior, add short definitions when they remove confusion, and cut low-value wording. It does not estimate entropy numerically.
+
+The central objective also governs how background knowledge is used. For technical algorithms, the LLM actively uses its established internal mathematical and programming knowledge to explain **what the method accomplishes, how its steps fit together, and why its mechanism helps**. It identifies standard methods only when the visible operations support the identification. A compact `# Context:` or `# Why:` note can explain a predictor–corrector update, for example, without turning the block into a textbook essay.
+
+Source code remains the evidence for this implementation's behavior. Standard algorithm rationale is distinguished from author intent, unseen custom-function bodies and implementation-specific guarantees. Accuracy or stability claims retain necessary assumptions. The extension does not enable browsing or file tools to add this background; it uses the selected model's internal knowledge and the provided code context.
 
 Blocks group coherent ideas at a consistent level of abstraction. Necessary
 concepts such as callbacks, mutable state, smoothed model copies and detached
@@ -235,7 +239,7 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 27 offline tests passed. Live Codex checks cover model selection,
+**Validation:** 28 offline tests passed. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
 Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
 response handling are tested with a mock executable; live Claude generation has
 not yet been verified.

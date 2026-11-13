@@ -98,8 +98,10 @@ header { position: sticky; top: 0; z-index: 1; padding: 14px 22px 12px; backgrou
 main { max-width: 74ch; margin: 0 auto; padding: 28px 26px 48px; }
 h1 { font-size: 22px; line-height: 1.3; font-weight: 600; margin: 0 0 12px; letter-spacing: -.025em; }
 .summary { color: var(--vscode-descriptionForeground); margin: 0 0 28px; }
-details { margin: 0 0 18px; border: 1px solid var(--vscode-widget-border, color-mix(in oklch, var(--flow) 22%, transparent)); border-radius: 9px; overflow: hidden; background: color-mix(in oklch, var(--vscode-editor-background) 96%, var(--flow)); }
-.section-heading { display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; list-style: none; background: color-mix(in oklch, var(--vscode-editor-background) 92%, var(--flow)); }
+details { margin: 0 0 24px; border: 1px solid color-mix(in oklch, var(--value) 28%, var(--vscode-widget-border, var(--vscode-editor-foreground))); border-radius: 10px; overflow: hidden; background: color-mix(in oklch, var(--vscode-editor-background) 94%, var(--value)); }
+.reading-block { box-shadow: 0 2px 10px color-mix(in oklch, var(--vscode-editor-foreground) 4%, transparent); }
+.section-heading { display: flex; align-items: center; gap: 10px; padding: 13px 14px; cursor: pointer; list-style: none; background: color-mix(in oklch, var(--vscode-editor-background) 90%, var(--value)); border-bottom: 1px solid color-mix(in oklch, var(--value) 20%, transparent); }
+details:not([open]) .section-heading { border-bottom-color: transparent; }
 .section-heading::-webkit-details-marker { display: none; }
 .section-heading::after { content: '⌄'; color: var(--vscode-descriptionForeground); }
 details:not([open]) .section-heading::after { content: '›'; }
@@ -117,8 +119,6 @@ pre { font: 13px/1.8 var(--vscode-editor-font-family, monospace); white-space: p
 .code-line.linked:hover { background: var(--vscode-editor-hoverHighlightBackground, var(--vscode-toolbar-hoverBackground)); }
 .code-line.linked:hover .step-number { color: var(--vscode-textLink-foreground); }
 .code-line.linked:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
-.paper details:not(.activity) { border-radius: 0; border-width: 1px 0; background: transparent; margin-bottom: 26px; }
-.paper .section-heading { background: transparent; border-bottom: 1px solid var(--vscode-panel-border); padding: 9px 0; }
 .paper .block-index { min-width: 24px; border-radius: 0; background: transparent; justify-content: start; font: 600 11px var(--vscode-font-family); }
 .paper pre { font-family: var(--vscode-font-family, system-ui); font-size: 14px; line-height: 1.8; }
 .paper .code-line { min-height: 1.7em; }
@@ -132,6 +132,8 @@ pre { font: 13px/1.8 var(--vscode-editor-font-family, monospace); white-space: p
 .function { color: var(--call); }
 .comment { color: var(--note); }
 .code-line.note { margin-block: 3px 6px; padding-block: 3px; font-size: 12px; line-height: 1.65; color: var(--note); border-radius: 4px; background: color-mix(in oklch, var(--note) 5%, transparent); }
+.code-line.context-note { margin-block: 7px; padding-block: 6px; color: var(--call); background: color-mix(in oklch, var(--call) 9%, transparent); }
+.code-line.context-note .comment { color: inherit; }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; margin: -12px 0 20px; color: var(--vscode-descriptionForeground); }
 .legend span::before { content: '●'; margin-right: 5px; }
 .legend .flow-key::before { color: var(--flow); } .legend .note-key::before { color: var(--note); } .legend .output-key::before { color: var(--output); }
@@ -231,7 +233,7 @@ function render(s) {
     const legend = node('div', undefined, 'legend');
     legend.append(node('span', 'Control flow', 'flow-key'), node('span', 'Notes', 'note-key'), node('span', 'Output', 'output-key')); content.append(legend);
     s.result.sections.forEach((section, index) => {
-      const el = node('details'); const heading = node('summary', undefined, 'section-heading');
+      const el = node('details'); el.className = 'reading-block'; const heading = node('summary', undefined, 'section-heading');
       const blockKey = [s.name, s.level, s.providerLabel, index].join('|');
       el.open = !collapsed.has(blockKey);
       el.addEventListener('toggle', () => { if (el.open) collapsed.delete(blockKey); else collapsed.add(blockKey); });
@@ -254,6 +256,7 @@ function render(s) {
       let stepNumber = 0;
       pseudocodeLines(section.pseudocode).forEach(({ text, kind }, lineIndex) => {
         const row = node('span', undefined, 'code-line' + (kind ? ' ' + kind : ''));
+        if (kind === 'note' && /^\\s*#\\s*(Context|Why|How|What):/i.test(text)) row.className += ' context-note';
         const mapping = section.lineMap?.find(m => m.pseudocodeLine === lineIndex + 1);
         row.append(node('span', text.trim() && kind !== 'note' ? String(++stepNumber) : '', 'step-number'));
         if (mapping && !s.stale && !s.partial) {
