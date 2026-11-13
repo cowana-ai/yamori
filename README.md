@@ -78,7 +78,7 @@ Yamori is an early preview. Its public extension ID is **`cowana-ai.yamori`**.
 
 Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori),
 or search for **Yamori** by **Yamori** (`cowana-ai`) in VS Code’s Extensions panel.
-The Open VSX upload for Cursor is awaiting namespace ownership verification.
+For Cursor, Yamori is published on [Open VSX](https://open-vsx.org/extension/cowana-ai/yamori). New versions may take time to appear through Cursor’s extension search.
 For manual installation, download a VSIX from [GitHub Releases](https://github.com/cowana-ai/yamori/releases),
 then choose **Extensions → … → Install from VSIX**. If you previously installed
 the local `chingis-local.yamori` preview, disable that extension before using
