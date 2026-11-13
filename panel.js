@@ -81,6 +81,11 @@ button:focus-visible { outline: 1px solid var(--read-accent); outline-offset: 2p
 button:disabled { opacity: .5; cursor: default; }
 .block-actions { display: inline-flex; gap: 2px; }
 .block-actions button { font-size: 11px; padding: 3px 6px; }
+.block-reactions { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 13px; border-top: 1px solid var(--read-border); }
+.block-reactions button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--read-border); border-radius: 20px; padding: 4px 9px; min-height: 30px; font-size: 11px; line-height: 1.4; background: var(--read-surface); }
+.block-reactions button:hover:not(:disabled) { color: var(--read-accent); border-color: var(--read-accent); background: var(--read-hover); }
+.block-reactions button[aria-busy="true"] { color: var(--read-accent); border-color: var(--read-accent); }
+.reaction-icon { font-size: 13px; line-height: 1; }
 .block-editor { padding: 14px; }
 .block-editor label { display: block; font-size: 12px; margin-bottom: 7px; color: var(--read-muted); }
 textarea { display: block; width: 100%; resize: vertical; min-height: 160px; padding: 10px; color: var(--read-ink); background: var(--read-surface); border: 1px solid var(--read-border); border-radius: 4px; font: 12px/1.7 var(--vscode-editor-font-family, monospace); tab-size: 4; }
@@ -203,6 +208,12 @@ let state = {};
 const collapsed = new Set();
 const drafts = new Map();
 let editing;
+let reacting;
+const reactions = [
+  { id: 'clarify', icon: '💡', label: 'Explain better', pending: 'Explaining…', instruction: 'Explain this block better for a mathematically capable reader with less programming experience. Identify the missing conceptual bridge: define what the data represents, unpack a non-obvious operation, or derive the key relationship in a few short lines. Explain why it works and the assumptions it needs. Preserve the block meaning, existing edits and important caveats; add understanding, not filler. Keep phase breaks and source links. Change only this explanation.' },
+  { id: 'shorten', icon: '✂', label: 'Make shorter', pending: 'Shortening…', instruction: 'Make this block shorter and easier to scan. Cut repetition, filler and incidental detail; use short casual actions. Preserve its meaning, existing edits, meaningful branches, key mathematical bridge, important assumptions and numerical caveats. Keep useful phase breaks and source links. Change only this explanation.' },
+  { id: 'example', icon: '🧩', label: 'Show example', pending: 'Adding example…', instruction: 'Add one tiny worked example that makes this block click. Put it in a clearly labeled # Example: note with illustrative inputs, necessary assumptions and the resulting output or state change. Use simple values consistent with the visible computation, and show the key intermediate step if useful. Do not imply these were actual runtime values or infer missing function internals. Preserve existing steps, edits, meaning and caveats. Keep it short and source-linked; change only this explanation.' }
+];
 const tokenize = ${tokenize.toString()};
 const pseudocodeLines = ${pseudocodeLines.toString()};
 const mathParts = ${mathParts.toString()};
@@ -231,6 +242,7 @@ function render(s) {
   state = s;
   document.body.setAttribute('data-palette', ['paper', 'slate'].includes(s.readingPalette) ? s.readingPalette : 'auto');
   if (editing && editing.documentKey !== s.documentKey) editing = undefined;
+  if (!s.busy || reacting?.documentKey !== s.documentKey) reacting = undefined;
   content.className = s.level === 'logic' ? 'paper' : '';
   document.getElementById('provider').textContent = s.providerLabel + ' ▾';
   document.getElementById('model').textContent = (s.requestedModel || 'Default') + ' ▾';
@@ -324,7 +336,32 @@ function render(s) {
         update.addEventListener('click', () => send('updateBlock', { index, documentKey: s.documentKey, ...record }));
         const close = node('button', 'Cancel'); close.disabled = !!s.busy; close.addEventListener('click', () => { editing = undefined; render(state); });
         toolbar.append(update, close); editor.append(label, draft, instruction, toolbar); el.append(editor);
-      } else el.append(code);
+      } else {
+        el.append(code);
+        const row = node('div', undefined, 'block-reactions');
+        row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Improve ' + section.title + ' with ' + s.providerLabel);
+        const buttons = [];
+        reactions.forEach(action => {
+          const pending = s.busy && reacting?.index === index && reacting.action === action.id;
+          const button = node('button');
+          const icon = node('span', action.icon, 'reaction-icon'); icon.setAttribute('aria-hidden', 'true');
+          const label = node('span', pending ? action.pending : action.label);
+          button.append(icon, label);
+          button.disabled = !!s.busy || !!s.stale || !!s.partial;
+          button.title = action.label + ' with ' + s.providerLabel + ' · Uses your selected model and effort';
+          button.setAttribute('aria-label', action.label + ': ' + section.title + ', with ' + s.providerLabel);
+          if (pending) button.setAttribute('aria-busy', 'true');
+          button.addEventListener('click', () => {
+            if (button.disabled) return;
+            reacting = { documentKey: s.documentKey, index, action: action.id };
+            buttons.forEach(b => { b.disabled = true; });
+            label.textContent = action.pending; button.setAttribute('aria-busy', 'true');
+            send('updateBlock', { index, documentKey: s.documentKey, baseText: section.pseudocode, draft: section.pseudocode, instruction: action.instruction });
+          });
+          buttons.push(button); row.append(button);
+        });
+        el.append(row);
+      }
       content.append(el);
     });
     const footer = node('footer');

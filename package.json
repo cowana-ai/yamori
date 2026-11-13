@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {

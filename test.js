@@ -186,10 +186,36 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   copy.events.click({ preventDefault() {} });
   assert.equal(sent.at(-1).type, 'copyBlock');
   assert.equal(sent.at(-1).documentKey, 'test-document');
+  for (const [index, expected] of ['missing conceptual bridge', 'key mathematical bridge', '# Example:'].entries()) {
+    receive({ data: { type: 'state', state: renderedState } });
+    all.length = 0; visit(elements.content);
+    const reactions = all.find(el => el.className === 'block-reactions');
+    assert.equal(reactions.attributes.role, 'group');
+    assert.equal(reactions.children.length, 3);
+    const button = reactions.children[index];
+    assert.equal(button.disabled, false);
+    button.events.click();
+    const request = sent.at(-1), count = sent.length;
+    assert.equal(request.type, 'updateBlock');
+    assert.equal(request.index, 0);
+    assert.equal(request.documentKey, renderedState.documentKey);
+    assert.equal(request.baseText, renderedState.result.sections[0].pseudocode);
+    assert.equal(request.draft, request.baseText, 'reactions start from the approved block');
+    assert.ok(request.instruction.includes(expected));
+    button.events.click();
+    assert.equal(sent.length, count, 'a repeated click cannot submit twice');
+    assert.ok(reactions.children.every(b => b.disabled));
+    receive({ data: { type: 'state', state: { ...renderedState, busy: true } } });
+    all.length = 0; visit(elements.content);
+    assert.ok(all.some(el => el.attributes?.['aria-busy'] === 'true' && el.tag === 'button'), 'the active reaction explains what is running');
+  }
+  receive({ data: { type: 'state', state: renderedState } });
+  all.length = 0; visit(elements.content);
   all.find(el => el.textContent === 'Edit').events.click({ preventDefault() {} });
   const editorNodes = []; const findEditor = el => { editorNodes.push(el); (el.children || []).forEach(findEditor); }; findEditor(elements.content);
   const fields = editorNodes.filter(el => el.tag === 'textarea');
   assert.equal(fields.length, 2);
+  assert.ok(!editorNodes.some(el => el.className === 'block-reactions'), 'reactions cannot overwrite an open draft');
   fields[0].value = 'Count completed examples'; fields[0].events.input();
   fields[1].value = 'Explain the accumulator'; fields[1].events.input();
   receive({ data: { type: 'state', state: { ...renderedState, readingPalette: 'slate' } } });
@@ -206,11 +232,13 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   receive({ data: { type: 'state', state: { ...renderedState, stale: true } } });
   const staleNodes = []; const scan = el => { staleNodes.push(el); (el.children || []).forEach(scan); }; scan(elements.content);
   assert.ok(!staleNodes.some(el => el.className?.includes('linked')));
+  assert.ok(staleNodes.find(el => el.className === 'block-reactions').children.every(b => b.disabled), 'stale code cannot be revised through reactions');
   receive({ data: { type: 'state', state: { ...renderedState, busy: true, partial: true, progress: 'Writing pseudocode', model: 'test-model', activity: ['Connecting', 'Writing pseudocode'] } } });
   const draftNodes = []; const draftScan = el => { draftNodes.push(el); (el.children || []).forEach(draftScan); }; draftScan(elements.content);
   assert.ok(draftNodes.some(el => el.tag === 'img'), 'loading view includes the gecko');
   assert.ok(draftNodes.some(el => el.textContent === 'Writing pseudocode'));
   assert.ok(!draftNodes.some(el => el.className?.includes('linked')), 'partial drafts have no actionable source links');
+  assert.ok(draftNodes.find(el => el.className === 'block-reactions').children.every(b => b.disabled), 'partial output cannot start a block reaction');
 });
 
 test('extension workflow switches levels, reuses cache, marks edits stale and ignores cancelled results', async () => {

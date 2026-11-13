@@ -59,6 +59,7 @@ available definitions. A function's name alone does not establish its behavior.
 - **Understand custom calls.** Yamori uses available project definitions to explain a call's role, inputs and output.
 - **See the reasoning that matters.** Important source comments are preserved. Brief notes explain non-obvious consequences, assumptions and guards.
 - **Follow generation live.** Pseudocode streams into the panel, with activity updates and a Stop button.
+- **Improve a block in one click.** Use **Explain better**, **Make shorter** or **Show example** beneath a block. Each asks your selected provider, model and effort to revise only that explanation. Results are cached; other detail levels update when opened. Buttons are disabled during generation or when the source is stale.
 - **Make an explanation your own.** Copy a block, edit it in place, then ask Codex or Claude to update that block. Approved edits are cached; other views are rebuilt when requested.
 - **Move between views quickly.** Generation prepares the lower-detail views too. Returning to them uses memory or disk cache.
 
@@ -155,6 +156,8 @@ $$
 $$
 
 Here **B** is relevant code behavior, **X** is the explanation and **K** is the reader's existing knowledge. Reading cost includes length, jargon, nested clauses and visual clutter. Semantic fidelity is a hard constraint. The agent uses this as a qualitative criterion: keep details that distinguish behavior, add short definitions when they remove confusion, and cut low-value wording. It does not estimate entropy numerically.
+
+Short numerical code can hide the whole idea. Yamori’s shared generation and editing prompts include an `agreements` example that connects an all-pairs sign dot product to a count: each matching sign contributes +1 and each opposite sign contributes −1, so $d=m-(n-m)=2m-n$ and $m=(n+d)/2$. The example explains zeros, ties-to-even rounding and the 0–255 output range, and distinguishes the intended count from unchecked assumptions such as `n` matching the row width. The prompt asks models to transfer this explanation pattern to relevant code, without copying unrelated details. Brief derivations are allowed at Logic level when they unlock the computation.
 
 The central objective also governs how background knowledge is used. For technical algorithms, the LLM actively uses its established internal mathematical and programming knowledge to explain **what the method accomplishes, how its steps fit together, and why its mechanism helps**. It identifies standard methods only when the visible operations support the identification. A compact `# Context:` or `# Why:` note can explain a predictor–corrector update, for example, without turning the block into a textbook essay.
 
