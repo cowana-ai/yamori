@@ -472,7 +472,7 @@ function render(s) {
     const navKey = [s.name, s.level, s.providerLabel].join('|');
     let selected = focusedBlocks.get(navKey);
     if (selected >= s.result.sections.length) selected = undefined;
-    if (selected === undefined && (s.result.sections.length === 1 || s.partial)) selected = 0;
+    if (selected === undefined && (s.result.sections.length === 1 || s.partial && !s.result.draftComplete)) selected = 0;
     const openBlock = index => {
       focusedBlocks.set(navKey, index);
       const key = draftKey(s, index), draft = drafts.get(key);
@@ -621,7 +621,7 @@ function render(s) {
     if (earlier.length) { const list = node('details', undefined, 'earlier-drafts'); list.append(node('summary', earlier.length + ' earlier draft' + (earlier.length === 1 ? '' : 's') + ' cached locally')); for (const row of earlier) { const entry = node('div'); entry.append(node('span', row.title)); const copy = node('button', 'Copy draft'); copy.addEventListener('click', () => send('copyDraft', { scope: s.draftScope, key: row.key })); entry.append(copy); list.append(entry); } content.append(list); }
     const footer = node('footer');
     if (s.result?.refinement) footer.append(node('span', s.result.refinement.status === 'skipped' ? 'Straightforward code · refinement skipped' : 'Refined ' + s.result.refinement.selectedBlocks?.length + (s.result.refinement.selectedBlocks?.length === 1 ? ' block · ' : ' blocks · ') + s.result.refinement.stepsCompleted + '/' + s.result.refinement.stepsRequested + ' steps'));
-    footer.append(node('span', s.partial ? 'Live draft · source links activate when complete' : s.stale ? 'Cached locally · source needs review' : s.cacheSavedAt ? 'Cached on this device · ' + dateLabel(s.cacheSavedAt) : 'AI-generated · Verify against source'));
+    footer.append(node('span', s.partial ? s.result.draftComplete ? 'Draft · reviews running · final result will be cached' : 'Writing draft · source links activate when complete' : s.stale ? 'Cached locally · source needs review' : s.cacheSavedAt ? 'Cached on this device · ' + dateLabel(s.cacheSavedAt) : 'AI-generated · Verify against source'));
     const copy = node('button', 'Copy'); copy.disabled = !!s.partial; copy.addEventListener('click', () => send('copy')); footer.append(copy); content.append(footer);
   } else if (s.busy) {
     for (let i = 0; i < 8; i++) { const line = node('div', undefined, 'skeleton'); line.style.width = i % 3 === 0 ? '55%' : '90%'; content.append(line); }

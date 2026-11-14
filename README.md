@@ -205,8 +205,13 @@ uses two model requests when nothing needs refinement, or up to **3N + 4** when
 blocks are selected. More steps use more time and subscription capacity. All
 sessions use your chosen provider, model and effort, with tools disabled.
 
-Only the final best explanation is displayed; the activity trail shows selection,
-review and refinement progress. Stop cancels the writer and both evaluators.
+The first draft streams immediately so you can start reading while selection
+and reviews run. It stays labeled as a draft, with source/edit actions disabled
+until final validation. The activity trail shows selection, review and refinement
+progress. Review prompts use compact source context instead of repeating the
+full writing guide. The loop stops early when both reviewers report no actionable
+changes with low rubric scores, or a revision fails to improve an already faithful
+candidate. N remains an upper bound, not a requirement to spend every pass. Stop cancels the writer and both evaluators.
 If a later pass fails, an already reviewed candidate can be kept with a visible
 notice. If fidelity problems remain unresolved, no new explanation is promoted.
 An evaluator pass is a useful second opinion, not a correctness guarantee.
@@ -369,7 +374,7 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 52 automated tests cover Restricted Mode TypeScript opening,
+**Validation:** 55 automated tests cover streaming before review, compact context, early completion/plateau stops, Restricted Mode TypeScript opening,
 user-only CLI settings, blocked definition lookups, first-use provider selection,
 parallel reviewers, fidelity gating, scoped refinement, local caching/drafts,
 source changes and cancellation. An isolated native VS Code profile opened and

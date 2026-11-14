@@ -337,6 +337,10 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   all.length = 0; visit(elements.content);
   assert.equal(all.filter(el => el.className === 'map-item').length, 2, 'multi-block files begin with a compact logic map');
   assert.equal(all.filter(el => el.className?.startsWith('reading-block')).length, 0, 'the map does not show a wall of blocks');
+  receive({data:{type:'state',state:{...mapState,busy:true,partial:true,result:{...mapState.result,draftComplete:true}}}});
+  all.length=0;visit(elements.content);assert.equal(all.filter(el=>el.className==='map-item').length,2,'the complete streaming draft has a usable logic map while reviewers run');
+  assert.ok(all.some(el=>el.textContent==='Draft · reviews running · final result will be cached'));
+  receive({data:{type:'state',state:mapState}});all.length=0;visit(elements.content);
   const beforeMap = sent.filter(message => message.type === 'updateBlock').length;
   all.filter(el => el.className === 'map-item')[1].events.click();
   all.length = 0; visit(elements.content);
@@ -1040,7 +1044,7 @@ test('two independent reviewers run concurrently and refinement keeps the lowest
   const { refineExplanation, parseResult } = require('./engine');
   let active=0, peak=0; const revised=[];
   const result=await refineExplanation({initial:{...valid,round:0},steps:2,
-    evaluate:async(candidate,role)=>{active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,3));active--;return {score:candidate.round===0?6:candidate.round===1?2:0,faithful:candidate.round!==2,issues:[]};},
+    evaluate:async(candidate,role)=>{active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,3));active--;return {score:candidate.round===0?6:candidate.round===1?2:0,faithful:candidate.round!==2,issues:candidate.round===1?[{problem:'Still worth checking.'}]:[]};},
     revise:async(candidate,reports,step)=>{revised.push(candidate.round);return {...candidate,round:step};}
   });
   assert.equal(peak,2,'both evaluator requests are in flight together');
@@ -1057,7 +1061,7 @@ test('fidelity repairs take priority over cheap scores and unresolved errors are
 });
 test('review failures retain only an already reviewed draft; cancellation stops both reviewers',async()=>{
   const { refineExplanation }=require('./engine');
-  const retained=await refineExplanation({initial:valid,steps:2,evaluate:async()=>({score:2,faithful:true,issues:[]}),revise:async()=>{throw new Error('quota reached');}});
+  const retained=await refineExplanation({initial:valid,steps:2,evaluate:async()=>({score:3,faithful:true,issues:[]}),revise:async()=>{throw new Error('quota reached');}});
   assert.equal(retained.sections,valid.sections);assert.match(retained.refinement.warning,/quota reached/);assert.equal(retained.refinement.stepsCompleted,0);
   const controller=new AbortController();let started=0,stopped=0;
   const work=refineExplanation({initial:valid,steps:2,signal:controller.signal,evaluate:async(value,role,step,signal)=>{started++;return new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>{stopped++;reject(new Error('Cancelled.'));},{once:true});});},revise:async()=>{throw new Error('Must not revise');}});
@@ -1094,7 +1098,7 @@ function respond(prompt,schema){
   value={...original,sections:[{...original.sections[1],pseudocode:'Let m count matching nonzero signs.\nTheir signed sum is d = 2m − n.\nRecover m = (n + d) / 2.'}]};
   if(mode==='boundary')value.sections[0].startLine=1;
  }else{type='initial';value={...original,views:{overview:original}};}
- fs.appendFileSync(log,JSON.stringify({type,model:mode})+'\n');return value;
+ fs.appendFileSync(log,JSON.stringify({type,model:mode,promptLength:prompt.length})+'\n');return value;
 }
 if(args.includes('--help')){process.stdout.write('--safe-mode');process.exit(0);}
 if(args[0]==='app-server'){
@@ -1106,12 +1110,14 @@ if(args[0]==='app-server'){
     await fs.writeFile(cli,program);const phases=[];
     const value=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'hard',refinementSteps:2,onProgress:update=>{phases.push(update);}});
     assert.deepEqual(value.sections[0],base.sections[0]);assert.match(value.sections[1].pseudocode,/Let m/);
-    assert.deepEqual(value.refinement.selectedBlocks,[1]);assert.equal(value.refinement.stepsCompleted,2);assert.equal(value.refinement.acceptedStep,1);
+    assert.deepEqual(value.refinement.selectedBlocks,[1]);assert.equal(value.refinement.stepsCompleted,1);assert.equal(value.refinement.acceptedStep,1);
     assert.equal(value.views,undefined,'old companion summaries are not silently reused after refinement');
-    assert.ok(phases.every(update=>!update.preview),'the user sees only the final reviewed result');
+    assert.ok(phases.some(update=>update.preview?.draftComplete),'a complete first draft is readable before review finishes');
+    assert.ok(phases.findIndex(update=>update.preview?.draftComplete)<phases.findIndex(update=>update.phase==='Selecting the most difficult blocks'));
     assert.deepEqual(parseResult(JSON.stringify(value),input).refinement,value.refinement);
     let calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);
-    assert.equal(calls.length,10);assert.deepEqual(calls.slice(0,2).map(row=>row.type),['initial','selector']);
+    assert.equal(calls.length,7,'a clear revised draft stops before spending another refinement pass');
+    assert.ok(calls.filter(row=>row.type!=='initial').every(row=>row.promptLength<calls[0].promptLength),'selection, review and revision prompts omit the repeated full writing guide');assert.deepEqual(calls.slice(0,2).map(row=>row.type),['initial','selector']);
     await fs.writeFile(log,'');
     const skipped=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'skip',refinementSteps:2});
     assert.equal(skipped.refinement.status,'skipped');assert.deepEqual(skipped.refinement.selectedBlocks,[]);assert.ok(skipped.views.overview);
@@ -1171,4 +1177,21 @@ test('first use chooses an installed provider without overwriting an explicit pr
   const calls=[];await chooseInstalledProvider(context,api,async(owner,configured)=>{calls.push(owner);assert.equal(configured,'');if(owner==='codex')throw new Error('not installed');return '/user/claude';});
   assert.equal(values.get('provider'),'claude');assert.deepEqual(calls,['codex','claude']);
   await chooseInstalledProvider(context,api,async()=>{throw new Error('An explicit choice must skip detection');});assert.equal(values.get('provider'),'claude');
+});
+
+test('satisfied reviewers skip redundant writer and re-review calls',async()=>{
+  const {refineExplanation}=require('./engine');let reviews=0,revisions=0;
+  const result=await refineExplanation({initial:valid,steps:5,evaluate:async()=>{reviews++;return {score:1,faithful:true,issues:[]};},revise:async()=>{revisions++;throw new Error('Must not revise an already clear candidate');}});
+  assert.equal(reviews,2);assert.equal(revisions,0);assert.equal(result.refinement.stepsCompleted,0);assert.equal(result.refinement.stepsRequested,5);
+});
+test('refinement stops after a plateau instead of spending every remaining pass',async()=>{
+  const {refineExplanation}=require('./engine');let reviews=0,revisions=0;
+  const result=await refineExplanation({initial:valid,steps:5,evaluate:async()=>{reviews++;return {score:5,faithful:true,issues:[]};},revise:async candidate=>{revisions++;return candidate;}});
+  assert.equal(reviews,4);assert.equal(revisions,1);assert.equal(result.refinement.stepsCompleted,1);assert.equal(result.refinement.acceptedStep,0);
+});
+test('compact refinement context retains source numbering, user intent and definition uncertainty',()=>{
+  const {refinementContext}=require('./engine');
+  const context=refinementContext(source,'logic',{edit:{instruction:'Propose doubling it',draft:'Return twice the value.',section:valid.sections[0]}});
+  assert.match(context,/10: x = 1\n11: print\(x\)/);assert.match(context,/Propose doubling it/);assert.match(context,/source is unchanged/);assert.match(context,/untrusted data/);assert.match(context,/unknown custom behavior/);
+  assert.ok(context.length<promptFor(source,'logic').length/2,'the evaluator context excludes the long writing guide and illustrative examples');
 });
