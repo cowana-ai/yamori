@@ -55,6 +55,7 @@ available definitions. A function's name alone does not establish its behavior.
 | **Logic** | Short steps, meaningful decisions and useful mathematics. |
 | **Detailed** | Closer explanations of operations, boundaries and side effects. |
 
+- **Start with the logic map.** See the script’s named ideas first. Open one block at a time, use Previous/Next, or return to the map. Moving around starts no AI request. Unsaved drafts are marked on the map and reopen in the same editor.
 - **Work across files.** Click the book icon in a source editor to open **filename.py · Yamori** beside your code. Each file gets its own tab in the same reader column. Reopening a file reuses its tab and running request. The **▤ Files** button switches between open/prepared explanations or opens another project file. Each tab keeps its detail level and unsaved block drafts; switching back restores the source file without moving the caret.
 - **Stay connected to the source.** Hover over a mapped step to highlight its code. Click to jump to the corresponding lines.
 - **Understand custom calls.** Yamori uses available project definitions to explain a call's role, inputs and output.
@@ -64,9 +65,11 @@ available definitions. A function's name alone does not establish its behavior.
 - **Make an explanation your own.** Copy a block, edit it in place, then ask Codex or Claude to update that block. Approved edits are cached; other views are rebuilt when requested.
 - **Move between views quickly.** Generation prepares the lower-detail views too. Returning to them uses memory or disk cache.
 
-Each pseudocode block sits in a bordered, softly tinted reading box with a distinct heading. Short conceptual notes get their own visual treatment inside the block. Blocks use short, casual action lines, phase breaks and sparse emphasis on behavior-defining phrases. Terms such as state and level get a short definition note on first use. Ordinary connective words stay plain; definition notes are visually subordinate and are not numbered as actions. Wrapped lines align beneath their own text. Useful equations render as math.
-Simple actions stay in words. Light and dark editor themes, keyboard navigation
-and reduced-motion preferences are supported.
+The reading panel uses a minimal black-and-white pixel style: crisp edges, a tiny
+pixel gecko samurai and subtle feedback on navigation and loading. One idea stays
+in focus. Steps, notes and equations remain clearly spaced and easy to read.
+Model, provider and effort choices sit behind one compact settings control.
+Keyboard navigation, high-contrast themes and reduced-motion preferences are supported.
 
 ## Get started
 
@@ -133,17 +136,21 @@ authentication and network settings while excluding customizations; older versio
 retain the isolated fallback. Update Claude Code if your older installation needs
 user settings to authenticate.
 
-## Reading colors
+## Pixel interface
 
-Click **Aa** beside Refresh, or run **Yamori: Choose Reading Colors**. Choose **Paper** (dark navy text on warm paper), **Slate** (warm light text on dark slate), or **Follow editor**. The choice is remembered and applies immediately to existing explanations, without regeneration or provider usage.
+Click **Theme** beside Refresh, or run **Yamori: Choose Reading Colors**.
+Choose **Pixel Light**, **Pixel Dark**, or **Follow editor**. Your existing palette
+preference is kept, using the new monochrome look. Switching themes changes no
+explanation and uses no provider quota.
 
-Body text uses a consistent high-contrast ink color. Teal identifies controls and flow; restrained amber backgrounds mark selected key phrases. Notes use readable, low-saturation surfaces instead of bright blue text. Pseudocode is 15 px, with larger conceptual notes. Colors do not carry meaning alone: words, weight, grouping and note labels remain.
-
-The design follows [W3C's enhanced text-contrast target of 7:1](https://www.w3.org/WAI/WCAG21/Understanding/contrast-enhanced) and [NN/g's guidance on restrained color hierarchy](https://www.nngroup.com/articles/visual-hierarchy-ux-definition/). These sources support contrast and hierarchy; the specific warm-paper and slate palettes are Yamori design choices, rather than a claim that one color universally improves concentration. Editor high-contrast modes retain native colors. Browser measurements cover 15 foreground/background pairs in both palettes, including manual overrides. Main text measures about 14.5:1 on Paper and 13.3:1 on Slate; all checked text pairs exceed 7:1. The 360 px preview has no horizontal overflow.
+The interface uses contrast, typography, spacing and labels to distinguish
+control flow, notes and outputs. Motion is limited to a tiny loading step,
+button feedback and a short block transition. Reduced motion disables it.
+The gecko toolbar logo and status-bar shortcut remain available in the editor.
 
 ## Models and reasoning effort
 
-Use the **model ▾** and **Effort: … ▾** controls, or the commands **Yamori:
+Open the **provider · model ▾** menu for model and effort controls, or use **Yamori:
 Choose Model** and **Yamori: Choose Effort**.
 
 - **Codex:** model choices and supported effort levels come from its live catalog.
@@ -162,14 +169,20 @@ policies can cap or override it.
 
 ## Edit the explanation
 
-Click **Edit** on a block, change its pseudocode and optionally add an instruction. Use `**key phrases**` for emphasis and `$...$` for LaTeX equations.
-Press **Update with Codex/Claude Code** to revise and cache that block. Neighboring
-blocks retain their text. Failed or cancelled updates keep the approved result
-and leave the draft editable.
+Click **Edit** to work in a CodeMirror editor with line numbers, normal selection,
+Tab/Shift+Tab indentation, continued indentation on Enter, find, undo and redo.
+Emphasized text appears emphasized, without the Markdown markers. Equations stay
+typeset until you click one to edit its formula. Blank lines and indentation are
+preserved. The underlying text still supports `**emphasis**` and `$LaTeX$`.
 
-Edits change the pseudocode. The underlying source file stays unchanged. Other
-detail levels derive from your approved explanation when selected, preserving
-your intended changes across views and editor restarts.
+Add an optional instruction, then click **Update with Codex/Claude Code** or press
+**⌘/Ctrl+Enter**. Only that explanation is revised and cached. The editor keeps
+its draft, cursor and undo history through theme changes, map navigation and
+provider status updates. Failed or cancelled requests keep the approved result
+and your editable draft. Your text is locked while a request is running.
+
+Edits change the pseudocode; the source file stays unchanged. Other detail levels
+rebuild from your approved explanation when requested, preserving your intent.
 
 <details>
 <summary><strong>How Yamori explains code</strong></summary>
@@ -255,7 +268,7 @@ workspace and VS Code 1.90+ or a compatible Cursor version are required.
 
 ## Development
 
-The extension has no dependency-install or build step for its application code.
+The extension has no dependency-install or build step for its application code. CodeMirror and KaTeX are vendored as local bundles; no CDN is used.
 Use Node.js 20+ to run the checks:
 
 ```sh
@@ -283,7 +296,7 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 34 offline tests passed, including startup launcher visibility, file-targeted one-click opening without automatic inference, simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
+**Validation:** 35 offline tests passed, including real CodeMirror formatting transactions, map-to-block navigation, correct block indexes, draft retention, startup launcher visibility, file-targeted one-click opening without automatic inference, simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Browser checks cover 360 px and 480 px panels, normal typing, Tab and continued indentation, undo/redo, deletion around emphasized text, equation editing, map navigation with retained undo history, theme changes and a failed update retaining the draft. No provider inference was used for these UI checks. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
 Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
 response handling are tested with a mock executable; live Claude generation has
 not yet been verified.
@@ -294,7 +307,7 @@ Application code is [MIT licensed](LICENSE). Bundled [KaTeX](https://katex.org/)
 0.19.1 is MIT licensed, with its full notice retained in `katex.min.js`. It runs
 locally to produce MathML without font downloads or network requests.
 
-The gecko samurai mascot was adapted from a user-supplied illustration using
+Bundled CodeMirror 6 and its dependencies are MIT licensed, with their notices retained in `editor.min.js`. The editor adapter is in `panel.js`. The gecko samurai mascot was adapted from a user-supplied illustration using
 image generation. The mascot is separate artwork and is not included in the
 application-code MIT license.
 

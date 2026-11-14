@@ -544,9 +544,9 @@ function createReader(context, navigation) {
   }
   async function chooseReadingColors() {
     const choices = [
-      { label: 'Follow editor', id: 'auto', description: 'Paper in light themes; Slate in dark themes' },
-      { label: 'Paper', id: 'paper', description: 'Dark navy text, warm paper, teal and amber accents' },
-      { label: 'Slate', id: 'slate', description: 'Warm light text on dark slate, soft teal accents' }
+      { label: 'Follow editor', id: 'auto', description: 'Monochrome light or dark to match your editor' },
+      { label: 'Pixel Light', id: 'paper', description: 'Black ink on white, crisp pixel details' },
+      { label: 'Pixel Dark', id: 'slate', description: 'White ink on black, crisp pixel details' }
     ];
     const picked = await vscode.window.showQuickPick(choices, { title: 'Yamori · Reading colors', placeHolder: 'Applies immediately. No generation needed.' });
     if (!picked || !choices.some(choice => choice.id === picked.id)) return;

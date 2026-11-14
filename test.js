@@ -3,10 +3,24 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, schemaFor, lowerView, partialView, streamCodex, editPrompt, revisionPrompt, listModels, listEfforts, findCLI, cliLaunch } = require('./engine');
-const { panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts } = require('./panel');
+const { cleanEmphasis, panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts } = require('./panel');
 const source = { uri: 'file:///example.py', name: 'example.py', language: 'python', startLine: 10, text: 'x = 1\nprint(x)' };
 const valid = { title: 'Print a number', summary: 'Sets and prints a number.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Set x to 1\nPrint x' }] };
 const statusItem = () => ({ show() { this.visible = true; }, hide() { this.visible = false; }, dispose() { this.disposed = true; } });
+
+test('real CodeMirror transactions keep ordinary edits free of orphan formatting markers', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const sandbox = { document: { documentElement: { style: {} } }, window: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'editor.min.js'), 'utf8'), sandbox);
+  const { EditorState } = sandbox.YamoriCodeMirror;
+  const edit = (doc, changes) => EditorState.create({ doc, extensions: [EditorState.transactionFilter.of(cleanEmphasis)] }).update({ changes }).state.doc.toString();
+  assert.equal(edit('**pool**.', { from: 5, to: 6 }), '**poo**.', 'deleting a letter preserves emphasis');
+  assert.equal(edit('**pool**.', { from: 6, to: 7 }), 'pool.', 'a selection crossing one marker removes its matching formatting');
+  assert.equal(edit('**pool**.', { from: 6, to: 8 }), 'pool.');
+  assert.equal(edit('**pool**.', { from: 4, insert: '\n' }), 'po\nol.', 'splitting a phrase creates clean normal lines');
+  assert.equal(edit('**pool**.', { from: 0, to: 9, insert: 'A new idea.' }), 'A new idea.', 'replacing the whole block does not delete new text');
+  assert.equal(edit('**pool**.', { from: 2, to: 6 }), '****.', 'empty paired formatting can remain invisible and editable');
+});
 
 test('all levels use original selection line numbers and distinct instructions', () => {
   for (const level of Object.keys(LEVELS)) {
@@ -225,7 +239,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   }
   const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'colors', 'source', 'files'].map(id => [id, new Element('div')]));
   let receive;
-  const document = { body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
+  const document = { documentElement: { style: {} }, body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
   const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
   const sent = [];
   vm.runInNewContext(script, { document, DOMParser: class { parseFromString(markup) { return { querySelector: () => { const el = new Element('math'); el.markup = markup; return el; } }; } }, acquireVsCodeApi: () => ({ postMessage(m) { sent.push(m); } }), window: { addEventListener: (name, fn) => { if (name === 'message') receive = fn; } } });
@@ -317,6 +331,29 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   assert.ok(draftNodes.some(el => el.textContent === 'Writing pseudocode'));
   assert.ok(!draftNodes.some(el => el.className?.includes('linked')), 'partial drafts have no actionable source links');
   assert.ok(draftNodes.find(el => el.className === 'block-reactions').children.every(b => b.disabled), 'partial output cannot start a block reaction');
+  const mapState = { ...renderedState, result: { ...valid, sections: [renderedState.result.sections[0], { ...valid.sections[0], title: 'Count the matches', pseudocode: 'Return the number of matches.' }] } };
+  receive({ data: { type: 'state', state: mapState } });
+  all.length = 0; visit(elements.content);
+  assert.equal(all.filter(el => el.className === 'map-item').length, 2, 'multi-block files begin with a compact logic map');
+  assert.equal(all.filter(el => el.className?.startsWith('reading-block')).length, 0, 'the map does not show a wall of blocks');
+  const beforeMap = sent.filter(message => message.type === 'updateBlock').length;
+  all.filter(el => el.className === 'map-item')[1].events.click();
+  all.length = 0; visit(elements.content);
+  assert.equal(all.filter(el => el.className?.startsWith('reading-block')).length, 1);
+  assert.ok(all.some(el => el.tag === 'h2' && el.textContent === 'Count the matches'));
+  all.find(el => el.textContent === 'Copy' && el.tag === 'button').events.click({ preventDefault() {} });
+  assert.equal(sent.at(-1).index, 1, 'focused blocks keep original source and edit indexes');
+  all.find(el => el.textContent === 'Edit').events.click({ preventDefault() {} });
+  all.length = 0; visit(elements.content);
+  const secondDraft = all.filter(el => el.tag === 'textarea')[0]; secondDraft.value = 'Count the equal signs.'; secondDraft.events.input();
+  all.find(el => el.textContent === '← Logic map').events.click();
+  all.length = 0; visit(elements.content);
+  assert.equal(all.filter(el => el.className === 'map-item')[1].children[2].textContent, 'Draft');
+  all.filter(el => el.className === 'map-item')[1].events.click();
+  all.length = 0; visit(elements.content);
+  assert.equal(all.filter(el => el.tag === 'textarea')[0], secondDraft, 'navigation reuses the editor instead of losing its history and selection');
+  assert.equal(secondDraft.value, 'Count the equal signs.');
+  assert.equal(sent.filter(message => message.type === 'updateBlock').length, beforeMap, 'navigating and editing start no inference');
   const beforeConnect = sent.length;
   receive({ data: { type: 'state', state: { ...renderedState, providerLabel: 'Claude Code', error: 'Sign in required' } } });
   all.length = 0; visit(elements.content);
