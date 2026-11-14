@@ -206,7 +206,25 @@ async function activate(context) {
     await fs.rm(path.join(context.globalStorageUri.fsPath, 'cache'), { recursive: true, force: true });
     vscode.window.setStatusBarMessage('Yamori cache cleared', 2000);
   });
-  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => { if (editor) lastEditor = editor; }));
+  const launcher = vscode.window.createStatusBarItem('yamori.open', vscode.StatusBarAlignment.Right, 110);
+  launcher.name = 'Open in Yamori';
+  launcher.text = '$(book) Yamori';
+  function updateLauncher(editor) {
+    if (editor) lastEditor = editor;
+    const doc = editor?.document;
+    if (!vscode.workspace.isTrusted || !doc || !['file', 'untitled'].includes(doc.uri.scheme)) {
+      launcher.command = undefined; launcher.hide(); return;
+    }
+    const name = path.basename(doc.uri.fsPath);
+    launcher.tooltip = `Open ${name} in Yamori`;
+    launcher.accessibilityInformation = { label: `Open ${name} in Yamori` };
+    // Pin the URI so clicking always opens the displayed file, even if focus
+    // moves before the command runs. Opening is explicit; navigation is free.
+    launcher.command = { command: 'yamori.read', title: 'Open in Yamori', arguments: [doc.uri] };
+    launcher.show();
+  }
+  context.subscriptions.push(launcher, vscode.window.onDidChangeActiveTextEditor(updateLauncher));
+  updateLauncher(vscode.window.activeTextEditor);
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => { for (const reader of readers.values()) reader.changed(event); }));
   context.subscriptions.push({ dispose() { for (const reader of [...readers.values()]) reader.dispose(); readers.clear(); } });
 }

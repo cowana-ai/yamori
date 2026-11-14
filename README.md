@@ -73,7 +73,7 @@ and reduced-motion preferences are supported.
 Yamori is an early preview. Its public extension ID is **`cowana-ai.yamori`**.
 
 1. Open a code file in Cursor or VS Code.
-2. Run **Yamori: Read as Pseudocode** from the Command Palette.
+2. Click the **book icon** at the top right of the script, or **📖 Yamori** in the bottom status bar.
 3. Choose **Overview**, **Logic** or **Detailed** in the reading panel.
 
 Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori),
@@ -85,7 +85,12 @@ the local `chingis-local.yamori` preview, disable that extension before using
 `cowana-ai.yamori` to avoid duplicate commands. The public publisher ID has its
 own extension storage; the old preview’s stored explanations remain in its old folder.
 
-The editor toolbar's book button opens Yamori too. Use **⌘⌥P** on macOS or
+Both buttons follow the active script automatically, starting no AI request until
+you click. Each file opens its own explanation tab; clicking again reuses it.
+The bottom button names its target file on hover and appears after startup,
+without first running a command. It hides when no local source editor is active.
+The Command Palette action **Yamori: Read as Pseudocode** is still available.
+Use **⌘⌥P** on macOS or
 **Ctrl+Alt+P** elsewhere. Select a range first to explain only those lines.
 After updating an installed version, run **Developer: Reload Window**.
 
@@ -277,7 +282,7 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 34 offline tests passed, including simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
+**Validation:** 34 offline tests passed, including startup launcher visibility, file-targeted one-click opening without automatic inference, simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
 Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
 response handling are tested with a mock executable; live Claude generation has
 not yet been verified.

@@ -6,6 +6,7 @@ const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, 
 const { panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts } = require('./panel');
 const source = { uri: 'file:///example.py', name: 'example.py', language: 'python', startLine: 10, text: 'x = 1\nprint(x)' };
 const valid = { title: 'Print a number', summary: 'Sets and prints a number.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Set x to 1\nPrint x' }] };
+const statusItem = () => ({ show() { this.visible = true; }, hide() { this.visible = false; }, dispose() { this.disposed = true; } });
 
 test('all levels use original selection line numbers and distinct instructions', () => {
   for (const level of Object.keys(LEVELS)) {
@@ -344,10 +345,10 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
   const editor = { document: doc, selection: new Selection(0, 0, 0, 0), setDecorations(_, ranges) { highlights = ranges; }, revealRange() { scrolls++; } };
   const noop = () => ({ dispose() {} });
   const vscode = {
-    Uri, Range, Selection, ThemeColor: class {}, ViewColumn: { One: 1, Beside: 2 }, TextEditorRevealType: { InCenterIfOutsideViewport: 1 },
+    Uri, Range, Selection, ThemeColor: class {}, StatusBarAlignment: { Right: 2 }, ViewColumn: { One: 1, Beside: 2 }, TextEditorRevealType: { InCenterIfOutsideViewport: 1 },
     commands: { registerCommand(id, fn) { commands.set(id, fn); return noop(); } },
     workspace: { isTrusted: true, textDocuments: [doc], asRelativePath: () => 'sample.py', openTextDocument: async () => doc, getConfiguration: () => ({ get: (_, fallback) => fallback }), onDidChangeTextDocument(fn) { change = fn; return noop(); } },
-    window: { showQuickPick: async items => { const rows = await items; return rows.find(row => row.id === nextPick || row.value === nextPick); }, activeTextEditor: editor, visibleTextEditors: [editor], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showTextDocument: async () => { sourceOpens++; return editor; },
+    window: { createStatusBarItem: statusItem, showQuickPick: async items => { const rows = await items; return rows.find(row => row.id === nextPick || row.value === nextPick); }, activeTextEditor: editor, visibleTextEditors: [editor], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showTextDocument: async () => { sourceOpens++; return editor; },
       showErrorMessage(message) { throw new Error(message); }, setStatusBarMessage() {},
       createWebviewPanel: () => ({ reveal() {}, onDidDispose: noop, webview: { postMessage: m => messages.push(structuredClone(m.state)), onDidReceiveMessage(fn) { receive = fn; return noop(); } } }) },
     env: { clipboard: { writeText: async text => { copied = text; } } }
@@ -696,8 +697,8 @@ test('generation and editing permit grounded internal algorithm knowledge for wh
 test('file tabs reuse one reader column and isolate generation, detail, edits, closure and prepared files', async () => {
   const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-tabs-test-'));
-  const commands = new Map(), settings = new Map(), panels = [], shown = [];
-  let change, nextPick, calls = 0, holdA = true, holdB = false, pendingA, pendingB, startA, startB;
+  const commands = new Map(), settings = new Map(), panels = [], shown = [], launchers = [];
+  let change, editorChanged, nextPick, calls = 0, holdA = true, holdB = false, pendingA, pendingB, startA, startB;
   const aStarted = new Promise(resolve => { startA = resolve; });
   let bStarted;
   class Uri { constructor(value) { this.value = value; this.scheme = 'file'; this.fsPath = value.replace('file://', ''); } toString() { return this.value; } static parse(value) { return new Uri(value); } }
@@ -707,11 +708,12 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
   const editors = docs.map(document => ({ document, viewColumn: 1, selection: new Selection(0, 0, 0, 0), setDecorations() {}, revealRange() {} }));
   const noop = () => ({ dispose() {} });
   const vscode = {
-    Uri, Range, Selection, RelativePattern: class {}, ThemeColor: class {}, ViewColumn: { One: 1, Beside: -2 }, ProgressLocation: { Notification: 1 }, TextEditorRevealType: { InCenterIfOutsideViewport: 1 },
+    Uri, Range, Selection, RelativePattern: class {}, ThemeColor: class {}, StatusBarAlignment: { Right: 2 }, ViewColumn: { One: 1, Beside: -2 }, ProgressLocation: { Notification: 1 }, TextEditorRevealType: { InCenterIfOutsideViewport: 1 },
     commands: { registerCommand(id, fn) { assert.ok(!commands.has(id), 'commands are registered only once'); commands.set(id, fn); return noop(); } },
     workspace: { isTrusted: true, workspaceFolders: [{ uri: new Uri('file:///project') }], textDocuments: docs, asRelativePath: uri => path.basename(uri.fsPath), openTextDocument: async uri => docs.find(doc => doc.uri.toString() === uri.toString()), getConfiguration: () => ({ get: (_, fallback) => fallback }), findFiles: async () => docs.map(doc => doc.uri), onDidChangeTextDocument(fn) { change = fn; return noop(); } },
     window: {
-      activeTextEditor: editors[0], visibleTextEditors: [editors[0]], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop,
+      createStatusBarItem() { const item = statusItem(); launchers.push(item); return item; },
+      activeTextEditor: editors[0], visibleTextEditors: [editors[0]], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor(fn) { editorChanged = fn; return noop(); },
       showErrorMessage(message) { throw new Error(message); }, setStatusBarMessage() {}, showInformationMessage() {},
       showTextDocument: async (doc, options) => { const editor = editors.find(editor => editor.document === doc); shown.push({ doc, options }); vscode.window.visibleTextEditors = [editor]; return editor; },
       showQuickPick: async (items, options) => { const rows = await items; return options?.canPickMany ? rows.filter(row => row.label === 'third.py') : rows.find(row => row.label === nextPick); },
@@ -741,11 +743,16 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
   try {
     vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), Buffer, AbortController, setTimeout, clearTimeout });
     await stub.exports.activate(context);
-    const first = commands.get('yamori.read')(); await aStarted;
+    assert.equal(calls, 0, 'startup creates the launcher without inference');
+    assert.equal(launchers[0].visible, true); assert.equal(launchers[0].text, '$(book) Yamori');
+    assert.match(launchers[0].tooltip, /first.py/);
+    const first = commands.get(launchers[0].command.command)(...launchers[0].command.arguments); await aStarted;
     const repeat = commands.get('yamori.read')();
     assert.equal(panels.length, 1, 'repeated opening reuses the existing tab and request');
     vscode.window.activeTextEditor = editors[1]; vscode.window.visibleTextEditors = [editors[1]];
-    await commands.get('yamori.read')();
+    editorChanged(editors[1]); assert.match(launchers[0].tooltip, /second.py/);
+    assert.equal(calls, 1, 'switching scripts updates the icon without inference');
+    await commands.get(launchers[0].command.command)(...launchers[0].command.arguments);
     assert.equal(panels.length, 2);
     assert.deepEqual(panels.map(panel => panel.title), ['first.py · Yamori', 'second.py · Yamori']);
     assert.deepEqual(panels.map(panel => panel.viewColumn), [2, 2]);
@@ -788,5 +795,9 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
     docs[2].getText = () => 'x = 2\nprint(x)'; change({ document: docs[2] });
     assert.equal(panels[3].messages.at(-1).stale, true);
     assert.equal(panels[1].messages.at(-1).stale, false, 'source changes affect only related tabs');
+    editorChanged(undefined); assert.equal(launchers[0].visible, false); assert.equal(launchers[0].command, undefined);
+    editorChanged({ document: { uri: { scheme: 'output' } } }); assert.equal(launchers[0].visible, false);
+    editorChanged(editors[1]); assert.equal(launchers[0].visible, true);
+    vscode.workspace.isTrusted = false; editorChanged(editors[1]); assert.equal(launchers[0].visible, false);
   } finally { context.subscriptions.forEach(item => item.dispose?.()); await fs.rm(temp, { recursive: true, force: true }); }
 });
