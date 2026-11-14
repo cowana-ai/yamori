@@ -744,7 +744,7 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
     vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), Buffer, AbortController, setTimeout, clearTimeout });
     await stub.exports.activate(context);
     assert.equal(calls, 0, 'startup creates the launcher without inference');
-    assert.equal(launchers[0].visible, true); assert.equal(launchers[0].text, '$(book) Yamori');
+    assert.equal(launchers[0].visible, true); assert.equal(launchers[0].text, '$(yamori-gecko) Yamori');
     assert.match(launchers[0].tooltip, /first.py/);
     const first = commands.get(launchers[0].command.command)(...launchers[0].command.arguments); await aStarted;
     const repeat = commands.get('yamori.read')();

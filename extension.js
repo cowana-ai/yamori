@@ -208,7 +208,7 @@ async function activate(context) {
   });
   const launcher = vscode.window.createStatusBarItem('yamori.open', vscode.StatusBarAlignment.Right, 110);
   launcher.name = 'Open in Yamori';
-  launcher.text = '$(book) Yamori';
+  launcher.text = '$(yamori-gecko) Yamori';
   function updateLauncher(editor) {
     if (editor) lastEditor = editor;
     const doc = editor?.document;

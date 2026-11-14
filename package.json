@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -13,7 +13,9 @@
     "Visualization"
   ],
   "main": "./extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
@@ -25,7 +27,7 @@
       {
         "command": "yamori.read",
         "title": "Yamori: Read as Pseudocode",
-        "icon": "$(book)"
+        "icon": "yamori.png"
       },
       {
         "command": "yamori.browse",
@@ -117,6 +119,15 @@
           "description": "Optional absolute path to Claude Code CLI."
         }
       }
+    },
+    "icons": {
+      "yamori-gecko": {
+        "description": "Yamori gecko",
+        "default": {
+          "fontPath": "./yamori-icons.woff",
+          "fontCharacter": "\\e001"
+        }
+      }
     }
   },
   "scripts": {
@@ -131,7 +142,8 @@
     "demo.py",
     "yamori.png",
     "katex.min.js",
-    "LICENSE"
+    "LICENSE",
+    "yamori-icons.woff"
   ],
   "icon": "yamori.png",
   "repository": {

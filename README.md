@@ -73,7 +73,7 @@ and reduced-motion preferences are supported.
 Yamori is an early preview. Its public extension ID is **`cowana-ai.yamori`**.
 
 1. Open a code file in Cursor or VS Code.
-2. Click the **book icon** at the top right of the script, or **📖 Yamori** in the bottom status bar.
+2. Click the **Yamori gecko icon** at the top right of the script, or **Yamori** in the bottom status bar.
 3. Choose **Overview**, **Logic** or **Detailed** in the reading panel.
 
 Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori),
@@ -85,7 +85,8 @@ the local `chingis-local.yamori` preview, disable that extension before using
 `cowana-ai.yamori` to avoid duplicate commands. The public publisher ID has its
 own extension storage; the old preview’s stored explanations remain in its old folder.
 
-Both buttons follow the active script automatically, starting no AI request until
+The toolbar uses the Yamori samurai logo; the bottom button uses a compact gecko
+mark that follows the editor’s text color. Both buttons follow the active script automatically, starting no AI request until
 you click. Each file opens its own explanation tab; clicking again reuses it.
 The bottom button names its target file on hover and appears after startup,
 without first running a command. It hides when no local source editor is active.
