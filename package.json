@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -18,8 +18,13 @@
   ],
   "capabilities": {
     "untrustedWorkspaces": {
-      "supported": false,
-      "description": "Yamori runs your local AI CLI to explain code."
+      "supported": "limited",
+      "description": "Read and explain source in Restricted Mode through isolated, tool-disabled AI sessions. Project settings and language-service definition lookups are not used.",
+      "restrictedConfigurations": [
+        "yamori.codexPath",
+        "yamori.claudePath",
+        "yamori.refinementSteps"
+      ]
     }
   },
   "contributes": {
@@ -27,7 +32,7 @@
       {
         "command": "yamori.read",
         "title": "Yamori: Read as Pseudocode",
-        "icon": "yamori.png"
+        "icon": "$(yamori-gecko)"
       },
       {
         "command": "yamori.browse",

@@ -273,7 +273,7 @@ async function findCLI(provider, configured, system = {}) {
     ...String(env.PATH || env.Path || env.path || '').split(paths.delimiter).map(dir => dir.replace(/^"(.*)"$/, '$1')).filter(Boolean),
     paths.join(home, '.local', 'bin'),
     ...(windows ? [paths.join(env.APPDATA || paths.join(home, 'AppData', 'Roaming'), 'npm')] : ['/opt/homebrew/bin', '/usr/local/bin'])
-  ];
+  ].filter(dir => paths.isAbsolute(dir));
   const candidates = configured ? [configured.trim().replace(/^"(.*)"$/, '$1')] : [
     ...directories.flatMap(dir => names.map(name => paths.join(dir, name))),
     ...(!windows && name === 'codex' ? [
@@ -281,6 +281,7 @@ async function findCLI(provider, configured, system = {}) {
       '/Applications/Codex.app/Contents/Resources/codex'
     ] : [])
   ];
+  if (configured && !paths.isAbsolute(candidates[0])) throw new Error('Choose an absolute path to your installed ' + PROVIDERS[provider] + ' CLI in Yamori settings.');
   let launcherFound = false;
   for (const candidate of [...new Set(candidates)]) {
     try {
@@ -457,7 +458,7 @@ function streamCodex(binary, prompt, schema, { cwd, signal, onText, onPhase, mod
     child.stdout.setEncoding('utf8');
     if (signal?.aborted) { abort(); return; }
     onPhase?.('Connecting to Codex');
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'yamori', title: 'Yamori', version: '0.19.0' }, capabilities: { experimentalApi: true } } });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'yamori', title: 'Yamori', version: '0.19.1' }, capabilities: { experimentalApi: true } } });
   });
 }
 

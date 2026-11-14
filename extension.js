@@ -11,9 +11,18 @@ const INCLUDE = '**/*.{py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,
 const EXCLUDE = '**/{node_modules,.git,.venv,venv,env,dist,build,out,vendor,.next,coverage,__pycache__}/**';
 const MAX_BYTES = 120000;
 
+// Restricted Mode never accepts an executable path or usage policy from a project.
+function setting(api, name, fallback = '') {
+  const config = api.workspace.getConfiguration('yamori');
+  if (api.workspace.isTrusted !== false) return config.get(name, fallback);
+  const inspected = config.inspect?.(name);
+  return inspected?.globalValue ?? inspected?.defaultValue ?? fallback;
+}
+
 // Ask the editor's language service for actual definitions. Never infer a model
 // architecture from a variable name or crawl a repository to find a name match.
 async function collectCallContext(snapshot, api = vscode, timeout = 1600) {
+  if (api.workspace.isTrusted === false) return { ...snapshot, callContext: { definitions: [], unresolved: [], note: 'Restricted Mode: only supplied source is read. Project language services and definition lookups are not invoked; unknown custom behavior must stay explicit.' } };
   if (!api.commands.executeCommand || !api.workspace.getWorkspaceFolder) return snapshot;
   const calls = [], seen = new Set();
   const ordinary = /^(if|for|while|switch|catch|return|print|len|range|int|float|str|list|dict|set|tuple|sum|max|min|zip|enumerate|super|isinstance|hasattr|getattr|setattr|abs|round|bool)$/;
@@ -83,9 +92,8 @@ async function migratePreferences(context) {
 }
 
 async function connectClaude(context, api = vscode, system = {}) {
-  const config = api.workspace.getConfiguration('yamori');
   let binary;
-  try { binary = await findCLI('claude', config.get('claudePath'), system); }
+  try { binary = await findCLI('claude', setting(api, 'claudePath'), system); }
   catch (error) {
     const choice = await api.window.showInformationMessage(error.message + ' Yamori can open Anthropic’s official installer in a visible terminal, then start its browser sign-in.', 'Install and sign in', 'Choose executable', 'Setup guide');
     if (choice === 'Choose executable') { await api.commands.executeCommand('workbench.action.openSettings', 'yamori.claudePath'); return ''; }
@@ -93,11 +101,11 @@ async function connectClaude(context, api = vscode, system = {}) {
     if (choice !== 'Install and sign in') return '';
     const windows = (system.platform || process.platform) === 'win32';
     const terminal = api.window.createTerminal(windows ? {
-      name: 'Yamori · Install Claude Code',
+      name: 'Yamori · Install Claude Code', cwd: system.home || os.homedir(),
       shellPath: path.win32.join((system.env || process.env).SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
       shellArgs: ['-NoProfile', '-NoExit', '-Command', '$ErrorActionPreference = "Stop"; irm https://claude.ai/install.ps1 | iex; $claudeExe = Join-Path $env:USERPROFILE ".local\\bin\\claude.exe"; if (Test-Path -LiteralPath $claudeExe) { & $claudeExe auth login } else { Write-Error "Claude Code installation did not finish. See the installer output above." }']
     } : {
-      name: 'Yamori · Install Claude Code', shellPath: '/bin/bash',
+      name: 'Yamori · Install Claude Code', cwd: system.home || os.homedir(), shellPath: '/bin/bash',
       shellArgs: ['-lc', 'set -euo pipefail; curl -fsSL https://claude.ai/install.sh | /bin/bash; "$HOME/.local/bin/claude" auth login']
     });
     context.subscriptions.push(terminal); terminal.show();
@@ -107,6 +115,14 @@ async function connectClaude(context, api = vscode, system = {}) {
   const terminal = api.window.createTerminal({ name: 'Yamori · Claude sign-in', shellPath: launch.command, shellArgs: launch.args, env: launch.env, cwd: system.home || os.homedir() });
   context.subscriptions.push(terminal); terminal.show();
   return 'Complete Claude’s browser sign-in from the Yamori terminal, then press Refresh. Your credentials stay with Claude Code.';
+}
+
+async function chooseInstalledProvider(context, api = vscode, discover = findCLI) {
+  if (context.globalState.get('provider') !== undefined) return;
+  const owners = ['codex', 'claude'];
+  const installed = await Promise.allSettled(owners.map(owner => discover(owner, setting(api, owner === 'claude' ? 'claudePath' : 'codexPath'))));
+  const index = installed.findIndex(result => result.status === 'fulfilled');
+  if (index >= 0 && context.globalState.get('provider') === undefined) await context.globalState.update('provider', owners[index]);
 }
 
 async function activate(context) {
@@ -130,7 +146,7 @@ async function activate(context) {
     return readers.get(key);
   }
   async function open(uri) {
-    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before using Yamori.');
+    await chooseInstalledProvider(context);
     if (!uri && !vscode.window.activeTextEditor && activeReader?.snapshot()) { activeReader.focus(); return activeReader; }
     const editor = vscode.window.activeTextEditor || lastEditor;
     const doc = uri instanceof vscode.Uri ? await vscode.workspace.openTextDocument(uri) : editor?.document;
@@ -149,7 +165,6 @@ async function activate(context) {
     return vscode.workspace.findFiles(root ? new vscode.RelativePattern(root, INCLUDE) : INCLUDE, EXCLUDE, 501);
   }
   async function browse() {
-    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before using Yamori.');
     const found = await files();
     const pick = await vscode.window.showQuickPick(found.map(uri => ({ label: path.basename(uri.fsPath), description: vscode.workspace.asRelativePath(uri), detail: readers.get(uri.toString())?.hasPanel() ? 'Open Yamori tab' : undefined, uri })), { title: 'Yamori · Open a file', placeHolder: 'Search files. Each file opens in its own Yamori tab.', matchOnDescription: true });
     if (pick) await open(pick.uri);
@@ -165,7 +180,6 @@ async function activate(context) {
     if (pick?.reader) { activeReader = pick.reader; pick.reader.focus(); }
   }
   async function project(uri) {
-    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before using Yamori.');
     const root = uri instanceof vscode.Uri ? uri : vscode.workspace.workspaceFolders?.[0]?.uri;
     if (!root) throw new Error('Open a project folder first.');
     const found = await files(root);
@@ -213,7 +227,7 @@ async function activate(context) {
   function updateLauncher(editor) {
     if (editor) lastEditor = editor;
     const doc = editor?.document;
-    if (!vscode.workspace.isTrusted || !doc || !['file', 'untitled'].includes(doc.uri.scheme)) {
+    if (!doc || !['file', 'untitled'].includes(doc.uri.scheme)) {
       launcher.command = undefined; launcher.hide(); return;
     }
     const name = path.basename(doc.uri.fsPath);
@@ -229,6 +243,13 @@ async function activate(context) {
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => { for (const reader of readers.values()) reader.changed(event); }));
   if (vscode.workspace.onDidSaveTextDocument) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => { for (const reader of readers.values()) void reader.check(doc.uri, 'save').catch(() => {}); }));
   if (vscode.window.onDidChangeWindowState) context.subscriptions.push(vscode.window.onDidChangeWindowState(state => { if (state.focused) for (const reader of readers.values()) void reader.check(undefined, 'focus').catch(() => {}); }));
+  if (!context.globalState.get('launcherHintShown') && vscode.window.showInformationMessage) {
+    await context.globalState.update('launcherHintShown', true);
+    const action = vscode.window.activeTextEditor ? 'Open current file' : 'Choose a file';
+    void Promise.resolve(vscode.window.showInformationMessage('Yamori is ready. Click the gecko beside any script, or Yamori in the status bar.', action)).then(choice => {
+      if (choice === action) return vscode.commands.executeCommand(action === 'Open current file' ? 'yamori.read' : 'yamori.browse');
+    }).catch(error => vscode.window.showErrorMessage(error.message));
+  }
   context.subscriptions.push({ dispose() { const closing = [...readers.values()].map(reader => reader.dispose()); readers.clear(); return Promise.all(closing); } });
 }
 
@@ -485,9 +506,6 @@ function createReader(context, navigation) {
       } catch (e) { error = e.message; post(); }
     }, null, context.subscriptions);
   }
-  function assertTrusted() {
-    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before using Yamori.');
-  }
   function capture(doc, selection) {
     if (!['file', 'untitled'].includes(doc.uri.scheme)) throw new Error('Choose a local code file.');
     let start = 0, end = doc.lineCount - 1;
@@ -507,12 +525,11 @@ function createReader(context, navigation) {
     };
   }
   function options(snapshot = source) {
-    const config = vscode.workspace.getConfiguration('yamori');
     const choice = context.globalState.get(provider + 'Model');
     const model = typeof choice?.id === 'string' ? choice.id : '';
     const override = context.globalState.get('effortChoices', {})[provider + ':' + model];
     const effort = override === 'auto' ? null : typeof override === 'string' ? override : model ? choice.effort ?? null : provider === 'claude' ? null : 'low';
-    return { provider, level, model, effort, refinementSteps: refinementSteps(config.get('refinementSteps', 2)), cliPath: config.get(provider === 'claude' ? 'claudePath' : 'codexPath'), revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
+    return { provider, level, model, effort, refinementSteps: refinementSteps(setting(vscode, 'refinementSteps', 2)), cliPath: setting(vscode, provider === 'claude' ? 'claudePath' : 'codexPath'), revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
   }
   async function cached(s, opts) {
     if (opts.revision?.level === opts.level && matchesModel(opts.revision.value, opts) && (opts.revision.value.refinement?.stepsRequested || 0) === opts.refinementSteps) return opts.revision.value;
@@ -547,7 +564,7 @@ function createReader(context, navigation) {
     return request.finally(() => { if (inFlight === request) inFlight = undefined; });
   }
   async function runExplanation(force) {
-    assertTrusted(); if (!source) return;
+    if (!source) return;
     modelNotice = '';
     cancel(); const id = serial; let snapshot = stale ? { ...source, callContext: undefined } : source;
     if (!snapshot.callContext) {
@@ -595,7 +612,6 @@ function createReader(context, navigation) {
     finally { if (id === serial) { busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
   }
   async function updateBlock(message) {
-    assertTrusted();
     if (busy || sourceMissing || staleBlocks.has(message.index) || !source || !result || !Number.isInteger(message.index)) return;
     const original = result.sections[message.index];
     if (!original || message.documentKey !== view().documentKey || message.baseText !== original.pseudocode) throw new Error('This block changed. Reopen its editor before updating.');
@@ -630,7 +646,7 @@ function createReader(context, navigation) {
     finally { if (id === serial) { busy = false; controller = undefined; preview = undefined; post(); } }
   }
   async function read(doc, selection, settings = {}) {
-    assertTrusted(); sourceColumn = settings.sourceColumn || sourceColumn;
+    sourceColumn = settings.sourceColumn || sourceColumn;
     const next = await stamp(capture(doc, selection));
     if (source && result && source.uri === next.uri && source.selected === next.selected && (!next.selected || (source.startLine === next.startLine && source.endLine === next.endLine)) && matchesModel(result, options())) {
       applySource(next, 'Source file changed');
@@ -663,7 +679,6 @@ function createReader(context, navigation) {
   }
   async function refresh(index) {
     if (!source) return navigation.open();
-    assertTrusted();
     if (busy) return;
     await inspect(undefined, 'refresh');
     if (sourceMissing) throw new Error('The source is unavailable. Restore the file or choose another script before refreshing.');
@@ -754,7 +769,7 @@ function createReader(context, navigation) {
   }
   async function chooseRefinement() {
     const config = vscode.workspace.getConfiguration('yamori');
-    const selected = refinementSteps(config.get('refinementSteps', 2));
+    const selected = refinementSteps(setting(vscode, 'refinementSteps', 2));
     const picked = await vscode.window.showQuickPick(Array.from({ length: 6 }, (_, value) => ({
       label: value ? `${value} refinement step${value === 1 ? '' : 's'}${value === 2 ? ' · Default' : ''}` : 'Off · Fast draft', value, picked: value === selected,
       description: value ? `Up to ${3 * value + 4} model requests per new explanation` : 'One generation request',
@@ -825,4 +840,4 @@ function createReader(context, navigation) {
   };
   return reader;
 }
-module.exports = { activate, migratePreferences, collectCallContext, connectClaude };
+module.exports = { chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext, connectClaude };

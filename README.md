@@ -103,6 +103,19 @@ Right-click a folder and choose **Yamori: Read a Folder or Project** to select
 multiple files. Files are prepared sequentially without opening a stack of tabs. Use **Yamori: Switch Files** or **▤ Files** to open a prepared explanation. Completed results remain cached
 if you stop.
 
+On the first install, Yamori shows a one-time **Open current file** action. The
+gecko in the editor toolbar adapts to light/dark themes, and **Yamori** stays
+available in the status bar. On your first open, it automatically selects an
+installed Codex or Claude CLI if you have not already chosen a provider.
+
+Yamori also works in **Restricted Mode** and with standalone local files; you
+do not need to trust a project to see the gecko icon or explain its source.
+In Restricted Mode, Yamori ignores workspace-controlled CLI paths and refinement
+settings, skips project language-service definition lookups, and uses your user-level
+CLI installation through isolated, tool-disabled sessions outside the project.
+Custom behavior whose definition is unavailable stays explicitly unknown. VS Code's
+workspace trust setting stays unchanged; Yamori does not run project code.
+
 ### Connect a provider
 
 Yamori uses a local CLI's existing sign-in. It does not request or copy your
@@ -321,8 +334,7 @@ writing and validation phases rather than private reasoning.
 
 Files or selections are limited to 120 KB. Folder discovery is limited to 500
 source files. Each model request allows up to three minutes at Low, five at Medium/default,
-and ten at higher effort, with Stop available throughout. A trusted local
-workspace and VS Code 1.90+ or a compatible Cursor version are required.
+and ten at higher effort, with Stop available throughout. Local files and VS Code 1.90+ or a compatible Cursor version are required.
 
 </details>
 
@@ -357,10 +369,21 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 49 offline tests passed, including difficulty selection/skipping, parallel evaluators, faithful best-candidate selection, scoped refinements preserving easy blocks exactly, cancellation of both reviewers, invalid-feedback rejection and structured Codex/Claude refinement pipelines. Existing checks cover including durable cache/draft reloads, preserved undo history, offline and same-timestamp edits, selective and batched refreshes, exact preservation of untouched blocks, delete/recreate handling, failed disk saves and late-result cancellation. An isolated native VS Code host also verified filesystem detection, persisted freshness metadata, two file tabs and reopening without inference. Existing coverage includes including real CodeMirror formatting transactions, map-to-block navigation, correct block indexes, draft retention, startup launcher visibility, file-targeted one-click opening without automatic inference, simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Browser checks cover 360 px and 480 px panels, normal typing, Tab and continued indentation, undo/redo, deletion around emphasized text, equation editing, map navigation with retained undo history, theme changes and a failed update retaining the draft. No provider inference was used for these UI checks. A live 0.19.0 Codex check selected the non-obvious agreement-count identity while skipping a seed getter, completed both parallel reviews and one revision, and retained the improved candidate. Live Codex checks also include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
-Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
-response handling are tested with a mock executable; live Claude generation has
-not yet been verified.
+**Validation:** 52 automated tests cover Restricted Mode TypeScript opening,
+user-only CLI settings, blocked definition lookups, first-use provider selection,
+parallel reviewers, fidelity gating, scoped refinement, local caching/drafts,
+source changes and cancellation. An isolated native VS Code profile opened and
+explained a TypeScript file while remaining untrusted, ignored project-controlled
+CLI/usage settings, and activated Yamori automatically. Earlier native checks
+covered file watching, independent tabs and cache reuse.
+
+Browser fixture checks cover narrow panels, math, editing/undo, navigation,
+cache warnings and retained drafts. A live Codex check selected an agreement-count
+identity, skipped a seed getter and retained the improved result after one
+refinement step. Live Codex also verified DKDM explanations, model/effort selection
+and block edits. Claude launch/stream/refinement behavior and Windows discovery
+are tested with fixtures; live Claude generation and live Windows sign-in remain
+unverified.
 
 ## Credits and license
 

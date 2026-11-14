@@ -836,7 +836,10 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
     editorChanged(undefined); assert.equal(launchers[0].visible, false); assert.equal(launchers[0].command, undefined);
     editorChanged({ document: { uri: { scheme: 'output' } } }); assert.equal(launchers[0].visible, false);
     editorChanged(editors[1]); assert.equal(launchers[0].visible, true);
-    vscode.workspace.isTrusted = false; editorChanged(editors[1]); assert.equal(launchers[0].visible, false);
+    vscode.workspace.isTrusted = false; editorChanged(editors[1]); assert.equal(launchers[0].visible, true, 'Restricted Mode keeps the launcher available');
+    const tsDoc={...docs[1],uri:new Uri('file:///project/current.ts'),languageId:'typescript',getText:()=> 'const x = 1;\nconsole.log(x);'};docs.push(tsDoc);vscode.window.activeTextEditor={...editors[1],document:tsDoc};vscode.window.visibleTextEditors=[vscode.window.activeTextEditor];
+    editorChanged(vscode.window.activeTextEditor);assert.match(launchers[0].tooltip,/current.ts/);
+    await commands.get('yamori.read')();assert.equal(panels.at(-1).title,'current.ts · Yamori');assert.ok(panels.at(-1).messages.at(-1).result,'TypeScript explanation works in Restricted Mode');
   } finally { await Promise.all(context.subscriptions.map(item => item.dispose?.())); await fs.rm(temp, { recursive: true, force: true }); }
 });
 
@@ -1140,4 +1143,32 @@ test('refinement policies have separate caches while old cached files remain rea
     assert.equal((await cache.latest(source,{...opts,refinementSteps:2},true)).value.refinement.status,'skipped');
   }finally{await fs.rm(temp,{recursive:true,force:true});}
   function hashForTest(value){return require('./engine').hash(value);}
+});
+
+test('Restricted Mode ignores workspace executable paths and cost settings',()=>{
+  const {setting}=extensionForTest();let gets=0;
+  const config={get(){gets++;return '/project/evil-cli';},inspect(name){return name==='codexPath'?{globalValue:'/user/installed/codex',workspaceValue:'/project/evil-cli'}:{globalValue:0,workspaceValue:5,defaultValue:2};}};
+  const api={workspace:{isTrusted:false,getConfiguration:()=>config}};
+  assert.equal(setting(api,'codexPath'),'/user/installed/codex');assert.equal(setting(api,'refinementSteps',2),0);assert.equal(gets,0);
+  api.workspace.getConfiguration=()=>({get:config.get,inspect:()=>({workspaceValue:'/project/evil-cli'})});
+  assert.equal(setting(api,'codexPath'),'','workspace-only CLI settings are ignored');
+  api.workspace.isTrusted=true;assert.equal(setting(api,'codexPath'),'/project/evil-cli','normal VS Code settings remain available in trusted folders');
+  function extensionForTest(){const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:require(id),Buffer,AbortController,setTimeout,clearTimeout});return module.exports;}
+});
+test('Restricted Mode does not invoke project definition providers or reuse their cached definitions',async()=>{
+  const api={workspace:{isTrusted:false},commands:{executeCommand(){throw new Error('Must not invoke project tooling');}}};
+  const snapshot={...source,callContext:{definitions:[{uri:'file:///project/helper.ts',text:'unsafe external context'}]}};
+  const result=await requireExtension().collectCallContext(snapshot,api);
+  assert.equal(result.text,snapshot.text);assert.deepEqual(Array.from(result.callContext.definitions),[]);assert.match(result.callContext.note,/Restricted Mode/);
+  await assert.rejects(findCLI('codex','./project/cli',{platform:'darwin',env:{PATH:'.:node_modules/.bin'},home:'/user',fs:{stat:async()=>({isFile:()=>true}),access:async()=>{}}}),/absolute path/);
+  function requireExtension(){const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:require(id),Buffer,AbortController,setTimeout,clearTimeout});return module.exports;}
+});
+
+test('first use chooses an installed provider without overwriting an explicit preference',async()=>{
+  const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:require(id),Buffer,AbortController,setTimeout,clearTimeout});
+  const {chooseInstalledProvider}=module.exports;const values=new Map(),context={globalState:{get:key=>values.get(key),update:async(key,value)=>values.set(key,value)}};
+  const api={workspace:{isTrusted:false,getConfiguration:()=>({get:()=>'/project/evil',inspect:()=>undefined})}};
+  const calls=[];await chooseInstalledProvider(context,api,async(owner,configured)=>{calls.push(owner);assert.equal(configured,'');if(owner==='codex')throw new Error('not installed');return '/user/claude';});
+  assert.equal(values.get('provider'),'claude');assert.deepEqual(calls,['codex','claude']);
+  await chooseInstalledProvider(context,api,async()=>{throw new Error('An explicit choice must skip detection');});assert.equal(values.get('provider'),'claude');
 });
