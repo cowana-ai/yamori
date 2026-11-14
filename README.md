@@ -56,12 +56,12 @@ available definitions. A function's name alone does not establish its behavior.
 | **Detailed** | Closer explanations of operations, boundaries and side effects. |
 
 - **Start with the logic map.** See the script’s named ideas first. Open one block at a time, use Previous/Next, or return to the map. Moving around starts no AI request. Unsaved drafts are marked on the map and reopen in the same editor.
-- **Work across files.** Click the book icon in a source editor to open **filename.py · Yamori** beside your code. Each file gets its own tab in the same reader column. Reopening a file reuses its tab and running request. The **▤ Files** button switches between open/prepared explanations or opens another project file. Each tab keeps its detail level and unsaved block drafts; switching back restores the source file without moving the caret.
+- **Work across files.** Click the Yamori gecko icon in a source editor to open **filename.py · Yamori** beside your code. Each file gets its own tab in the same reader column. Reopening a file reuses its tab and running request. The **▤ Files** button switches between open/prepared explanations or opens another project file. Each tab keeps its detail level and unsaved block drafts; switching back restores the source file without moving the caret.
 - **Stay connected to the source.** Hover over a mapped step to highlight its code. Click to jump to the corresponding lines.
 - **Understand custom calls.** Yamori uses available project definitions to explain a call's role, inputs and output.
 - **See the reasoning that matters.** Important source comments are preserved. Brief notes explain non-obvious consequences, assumptions and guards.
 - **Follow generation live.** Pseudocode streams into the panel, with activity updates and a Stop button.
-- **Improve a block in one click.** Use **Explain better**, **Make shorter** or **Show example** beneath a block. Each asks your selected provider, model and effort to revise only that explanation. Results are cached; other detail levels update when opened. Buttons are disabled during generation or when the source is stale.
+- **Improve a block in one click.** Use **Explain better**, **Make shorter** or **Show example** beneath a block. Each asks your selected provider, model and effort to revise only that explanation. Results are cached; other detail levels update when opened. Buttons are disabled during generation or when that block needs a source refresh.
 - **Make an explanation your own.** Copy a block, edit it in place, then ask Codex or Claude to update that block. Approved edits are cached; other views are rebuilt when requested.
 - **Move between views quickly.** Generation prepares the lower-detail views too. Returning to them uses memory or disk cache.
 
@@ -244,15 +244,38 @@ The selected file or range, bounded supporting definitions and your explanation
 edits/instructions are sent through the selected provider. Nothing is sent
 until you request generation, refresh, folder processing or a block update.
 
-Explanations are saved in Cursor/VS Code extension storage, outside your project,
-under `globalStorage/cowana-ai.yamori/cache/`. Generated views are separated
-by source, location, provider, model, effort and approved revision. Up to 100
-generated responses are retained. Approved user edits are stored separately in
-`cache/revisions/` until cleared.
+Explanations stay in local VS Code/Cursor extension storage, outside your
+project, under `globalStorage/cowana-ai.yamori/cache/`. Completed views, approved
+revisions, source snapshots, supporting definitions, modification dates and
+content fingerprints are saved on this device. Block drafts, instructions,
+cursor position and undo history are autosaved too. There is no automatic
+100-response eviction; entries remain until you run **Yamori: Clear Cached
+Explanations**, which also removes revisions and drafts. Local cache write
+failures are shown instead of silently claiming a save succeeded.
 
-Run **Yamori: Clear Cached Explanations** to remove both generated views and
-approved revisions. Changes to source or collected definitions invalidate
-explanations; source links are disabled when the displayed version is stale.
+**When code changes:** Yamori watches editor changes and filesystem events,
+including Git checkouts and files outside the current workspace. It uses dates
+and file sizes for cheap checks, then content hashes and a bounded line diff to
+identify affected blocks and rebase source links. A timestamp-only change needs
+no AI. Opening a previously cached file after an offline change shows the old
+explanation with a dated warning; it does not silently start generation.
+
+Choose **Refresh block** to update one block from its current code, supporting
+definitions and cached explanation. **Refresh all** updates the cached document
+in context. When only some blocks changed, it requests patches and preserves
+untouched blocks exactly. New, removed or shared code calls for a whole-map
+refresh so the structure can change. Known helper changes flag their callers
+conservatively; this is not a complete dynamic call graph. Review whole-file
+refreshes when dependencies are ambiguous. Other detail levels are updated
+when opened or explicitly refreshed, not all regenerated in the background.
+
+Cached text stays visible while refreshing. Stale blocks lose source links and
+editing actions until refreshed; unaffected blocks remain usable. A later
+source change cancels the request, and a result based on older code cannot
+replace the current view. Large rewrites or deleted selections require a new
+selection instead of guessing where the code went. Legacy caches are indexed
+when opened against matching source; an old unindexed cache cannot recover an
+unknown earlier source version.
 
 Yamori has no telemetry or account service. Translation requests run in temporary
 directories with tools disabled. Partial output is never cached, and source
@@ -268,7 +291,7 @@ workspace and VS Code 1.90+ or a compatible Cursor version are required.
 
 ## Development
 
-The extension has no dependency-install or build step for its application code. CodeMirror and KaTeX are vendored as local bundles; no CDN is used.
+The extension has no dependency-install or build step for its application code. CodeMirror, KaTeX and jsdiff are vendored as local bundles; no CDN is used.
 Use Node.js 20+ to run the checks:
 
 ```sh
@@ -279,7 +302,7 @@ npm run check
 Launch an extension development host with:
 
 ```sh
-cursor --extensionDevelopmentPath=/absolute/path/to/yamori
+code --extensionDevelopmentPath=/absolute/path/to/yamori
 ```
 
 Build the installer with the VS Code packaging CLI:
@@ -291,12 +314,13 @@ npx @vscode/vsce package --no-dependencies
 | File | Purpose |
 | --- | --- |
 | [extension.js](extension.js) | Editor integration, model/effort pickers, source context and cache. |
+| [cache.js](cache.js) | Atomic local storage, source alignment and change analysis. |
 | [engine.js](engine.js) | Translation prompts, provider processes and response validation. |
 | [panel.js](panel.js) | Reading panel, block editing, source navigation and math rendering. |
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 35 offline tests passed, including real CodeMirror formatting transactions, map-to-block navigation, correct block indexes, draft retention, startup launcher visibility, file-targeted one-click opening without automatic inference, simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Browser checks cover 360 px and 480 px panels, normal typing, Tab and continued indentation, undo/redo, deletion around emphasized text, equation editing, map navigation with retained undo history, theme changes and a failed update retaining the draft. No provider inference was used for these UI checks. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
+**Validation:** 42 offline tests passed, including durable cache/draft reloads, preserved undo history, offline and same-timestamp edits, selective and batched refreshes, exact preservation of untouched blocks, delete/recreate handling, failed disk saves and late-result cancellation. An isolated native VS Code host also verified filesystem detection, persisted freshness metadata, two file tabs and reopening without inference. Existing coverage includes including real CodeMirror formatting transactions, map-to-block navigation, correct block indexes, draft retention, startup launcher visibility, file-targeted one-click opening without automatic inference, simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Browser checks cover 360 px and 480 px panels, normal typing, Tab and continued indentation, undo/redo, deletion around emphasized text, equation editing, map navigation with retained undo history, theme changes and a failed update retaining the draft. No provider inference was used for these UI checks. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
 Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
 response handling are tested with a mock executable; live Claude generation has
 not yet been verified.
@@ -306,6 +330,8 @@ not yet been verified.
 Application code is [MIT licensed](LICENSE). Bundled [KaTeX](https://katex.org/)
 0.19.1 is MIT licensed, with its full notice retained in `katex.min.js`. It runs
 locally to produce MathML without font downloads or network requests.
+
+Bundled [jsdiff](https://github.com/kpdecker/jsdiff) is BSD-3-Clause licensed, with its notice retained in `diff.min.js`; bounded line alignment runs locally.
 
 Bundled CodeMirror 6 and its dependencies are MIT licensed, with their notices retained in `editor.min.js`. The editor adapter is in `panel.js`. The gecko samurai mascot was adapted from a user-supplied illustration using
 image generation. The mascot is separate artwork and is not included in the

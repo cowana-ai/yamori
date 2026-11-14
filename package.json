@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -132,7 +132,7 @@
   },
   "scripts": {
     "test": "node --test test.js",
-    "check": "node --check extension.js && node --check engine.js && node --check panel.js"
+    "check": "node --check extension.js && node --check engine.js && node --check panel.js && node --check cache.js"
   },
   "files": [
     "extension.js",
@@ -144,7 +144,9 @@
     "katex.min.js",
     "LICENSE",
     "yamori-icons.woff",
-    "editor.min.js"
+    "editor.min.js",
+    "cache.js",
+    "diff.min.js"
   ],
   "icon": "yamori.png",
   "repository": {

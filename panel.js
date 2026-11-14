@@ -65,16 +65,16 @@ function cleanEmphasis(transaction) {
 }
 
 // CodeMirror is vendored as one local bundle. This adapter stays readable here.
-function createDraftEditor(parent, record, { nonce, disabled, onSubmit, renderMath }) {
+function createDraftEditor(parent, record, { nonce, disabled, onSubmit, onChange, renderMath }) {
   const cm = window.YamoriCodeMirror;
   if (!cm) {
     const input = document.createElement('textarea'); input.value = record.draft;
     input.setAttribute('aria-label', 'Pseudocode draft'); parent.append(input);
-    input.addEventListener('input', () => { record.draft = input.value; });
+    input.addEventListener('input', () => { record.draft = input.value; onChange?.(); });
     input.addEventListener('keydown', event => {
-      if (event.key === 'Tab') { event.preventDefault(); input.setRangeText('    ', input.selectionStart, input.selectionEnd, 'end'); record.draft = input.value; }
+      if (event.key === 'Tab') { event.preventDefault(); input.setRangeText('    ', input.selectionStart, input.selectionEnd, 'end'); record.draft = input.value; onChange?.(); }
     });
-    return { host: parent, setDisabled(value) { input.disabled = value; }, focus() { input.focus?.(); }, hasFocus() { return document.activeElement === input; }, destroy() {} };
+    return { host: parent, serialize: () => ({ doc: input.value }), setDisabled(value) { input.disabled = value; }, focus() { input.focus?.(); }, hasFocus() { return document.activeElement === input; }, destroy() {} };
   }
   const { EditorView, EditorState, Compartment, Decoration, ViewPlugin, WidgetType } = cm;
   const lock = new Compartment();
@@ -138,7 +138,7 @@ function createDraftEditor(parent, record, { nonce, disabled, onSubmit, renderMa
     constructor(view) { Object.assign(this, decorate(view)); }
     update(update) { if (update.docChanged || update.selectionSet) Object.assign(this, decorate(update.view)); }
   }, { decorations: value => value.decorations });
-  const view = new EditorView({ parent, state: EditorState.create({ doc: record.draft, extensions: [
+  const extensions = [
     EditorView.cspNonce.of(nonce), cm.lineNumbers(), cm.highlightActiveLineGutter(), cm.highlightActiveLine(), cm.drawSelection(), cm.highlightSpecialChars(), cm.history(), cm.indentUnit.of('    '), cm.indentOnInput(), cm.highlightSelectionMatches(), EditorView.lineWrapping,
     EditorView.contentAttributes.of({ 'aria-label': 'Pseudocode draft', spellcheck: 'false', autocapitalize: 'off' }),
     EditorState.tabSize.of(4), formatting, emphasisFilter,
@@ -149,10 +149,13 @@ function createDraftEditor(parent, record, { nonce, disabled, onSubmit, renderMa
       { key: 'Alt-Backspace', run: view => deleteVisible(view, -1, true) }, { key: 'Ctrl-Backspace', run: view => deleteVisible(view, -1, true) },
       cm.indentWithTab, ...cm.defaultKeymap, ...cm.historyKeymap, ...cm.searchKeymap]),
     lock.of([EditorState.readOnly.of(!!disabled), EditorView.editable.of(!disabled)]),
-    EditorView.updateListener.of(update => { if (update.docChanged) record.draft = update.state.doc.toString(); })
-  ] }) });
+    EditorView.updateListener.of(update => { if (update.docChanged) record.draft = update.state.doc.toString(); if (update.docChanged || update.selectionSet) onChange?.(); })
+  ];
+  let editorState;
+  try { if (record.editorState?.doc === record.draft) editorState = EditorState.fromJSON(record.editorState, { extensions }, { history: cm.historyField }); } catch { /* Keep the text if old editor history cannot be restored. */ }
+  const view = new EditorView({ parent, state: editorState || EditorState.create({ doc: record.draft, extensions }) });
   let locked = !!disabled;
-  return { host: parent, view, setSubmit(handler) { onSubmit = handler; }, focus: () => view.focus(), hasFocus: () => view.hasFocus, setDisabled(value) {
+  return { host: parent, view, serialize: () => view.state.toJSON({ history: cm.historyField }), setSubmit(handler) { onSubmit = handler; }, focus: () => view.focus(), hasFocus: () => view.hasFocus, setDisabled(value) {
     if (locked !== value) { locked = value; view.dispatch({ effects: lock.reconfigure([EditorState.readOnly.of(value), EditorView.editable.of(!value)]) }); }
     view.requestMeasure();
   }, destroy: () => view.destroy() };
@@ -291,6 +294,13 @@ textarea:focus { outline: 1px solid var(--read-ink); }
 .primary { background: var(--read-accent); color: var(--read-on-accent); border: 1px solid var(--read-accent); padding: 7px 11px; font-size: 12px; }
 .primary:hover:not(:disabled) { background: var(--read-accent); transform: translate(-1px, -1px); box-shadow: 2px 2px 0 var(--read-muted); }
 .notice { color: var(--read-muted); margin: 0 0 20px; font-size: 12px; }
+.sync-warning { border: 1px solid var(--read-ink); padding: 12px; margin-bottom: 20px; }
+.sync-warning p { margin: 0 0 8px; font-size: 12px; }
+.sync-hint, .draft-cache-status { color: var(--read-muted); font-size: 11px; margin: 9px 0 0; }
+.block-stale { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px dashed var(--read-border); font-size: 11px; }
+.block-stale button { border: 1px solid var(--read-border); }
+.earlier-drafts { margin-bottom: 20px; font-size: 11px; color: var(--read-muted); }
+.earlier-drafts > div { display: flex; justify-content: space-between; gap: 12px; padding-block: 8px; }
 .notice.error { border: 1px solid var(--read-ink); padding: 12px; color: var(--read-ink); }
 .waiting { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
 .waiting img { width: 32px; height: 32px; image-rendering: pixelated; filter: brightness(0) invert(1); animation: pixel-step 1.2s steps(2, end) infinite; }
@@ -336,7 +346,7 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
 <button data-level="overview" aria-pressed="false" title="The purpose and main stages">Overview</button>
 <button data-level="logic" aria-pressed="true" title="Readable steps and important decisions">Logic</button>
 <button data-level="detailed" aria-pressed="false" title="Formulas, edge cases and error handling">Detailed</button>
-</div><button id="refresh" title="Generate a fresh explanation">Refresh</button><button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
+</div><button id="refresh" title="Update the cached explanation from current code">Refresh</button><button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
 <div class="file-nav"><button id="source" title="Open another project file in Yamori">Choose a file…</button><button id="files" title="Switch open Yamori tabs or open another file" aria-label="Switch Yamori files">▤ Files</button></div></header>
 <main id="content" aria-busy="false"></main>
 <script nonce="${nonce}">
@@ -353,6 +363,8 @@ const collapsed = new Set();
 const drafts = new Map();
 const draftEditors = new Map();
 const focusedBlocks = new Map();
+const draftTimers = new Map();
+let draftVersion = 0;
 let animateNext = false;
 let editing;
 let reacting;
@@ -367,6 +379,21 @@ const mathParts = ${mathParts.toString()};
 const emphasisParts = ${emphasisParts.toString()};
 const send = (type, extra = {}) => vscode.postMessage({ type, ...extra });
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el; };
+const draftKey = (s, index) => (s.draftScope || s.documentKey) + ':' + (s.draftKeys?.[index] || index);
+const blockIsStale = (s, index) => !!s.stale && (!Array.isArray(s.staleBlocks) || s.staleBlocks.includes(index));
+const dateLabel = value => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'recently';
+function persistDraft(key, flush = false) {
+  const record = drafts.get(key); if (!record || !record.scope) return;
+  if (draftTimers.has(key) && typeof clearTimeout === 'function') clearTimeout(draftTimers.get(key));
+  const write = () => {
+    draftTimers.delete(key); record.editorState = draftEditors.get(key)?.serialize();
+    record.version = Date.now() + ':' + (++draftVersion); record.saving = true;
+    const label = document.getElementById('draft-cache-status'); if (label) label.textContent = 'Saving locally…';
+    send('saveDraft', { scope: record.scope, key, index: record.index, title: record.title, draft: record.draft, instruction: record.instruction, baseText: record.baseText, editorState: record.editorState, version: record.version });
+  };
+  if (!flush && typeof setTimeout === 'function') draftTimers.set(key, setTimeout(write, 300)); else write();
+}
+function flushDrafts() { for (const key of [...draftTimers.keys()]) persistDraft(key, true); }
 function appendText(parent, text) { for (const token of tokenize(text)) parent.append(node('span', token.text, token.kind)); }
 function appendMath(parent, text) {
   for (const part of mathParts(text)) {
@@ -388,6 +415,7 @@ function render(s) {
   send('clearHover');
   const restoreEditorFocus = editing && draftEditors.get(editing.key)?.hasFocus();
   state = s;
+  for (const row of s.drafts || []) if (!drafts.has(row.key)) drafts.set(row.key, { ...row, scope: s.draftScope });
   document.body.setAttribute('data-palette', ['paper', 'slate'].includes(s.readingPalette) ? s.readingPalette : 'auto');
   if (editing && editing.documentKey !== s.documentKey) editing = undefined;
   if (!s.busy || reacting?.documentKey !== s.documentKey) reacting = undefined;
@@ -400,7 +428,7 @@ function render(s) {
   document.getElementById('source').textContent = s.name || 'Choose a file…';
   document.getElementById('source').title = s.name ? s.name + ' · Open another file in its own Yamori tab' : 'Choose a file';
   document.querySelectorAll('[data-level]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.level === s.level)); });
-  refresh.textContent = s.busy ? 'Stop' : 'Refresh'; refresh.disabled = !s.name;
+  refresh.textContent = s.busy ? 'Stop' : 'Refresh all'; refresh.disabled = !s.name || (!!s.sourceMissing && !s.busy);
   content.setAttribute('aria-busy', String(!!s.busy)); content.replaceChildren();
   if (s.modelNotice) content.append(node('p', s.modelNotice, 'notice'));
   if (s.error) {
@@ -418,7 +446,17 @@ function render(s) {
     waiting.append(mascot);
     const label = node('div', s.progress || 'Connecting…', 'notice'); label.setAttribute('role', 'status'); waiting.append(label); content.append(waiting);
   }
-  else if (s.stale) content.append(node('p', 'Source changed. Refresh to update this explanation.', 'notice'));
+  if (s.stale) {
+    const warning = node('div', undefined, 'sync-warning'); warning.setAttribute('role', 'status');
+    const count = s.staleBlocks?.length;
+    const message = s.sourceMissing ? s.changeReason || 'Source file unavailable. The cached explanation is kept.' : (s.changeReason || 'Source changed') + ' · ' + dateLabel(s.changedAt) + (count ? ' · ' + count + ' block' + (count === 1 ? '' : 's') + (count === 1 ? ' needs review.' : ' need review.') : '.');
+    warning.append(node('p', message));
+    if (!s.sourceMissing) { const update = node('button', 'Refresh all', 'primary'); update.disabled = !!s.busy; update.addEventListener('click', () => { flushDrafts(); send('refresh'); }); warning.append(update); }
+    warning.append(node('p', s.sourceMissing ? 'Restore or reselect the source to refresh. Your local cache is still available.' : s.sharedChange ? 'Shared or new code changed. Refresh all also updates the logic map.' : 'Refresh one block below, or update the cached explanation together.', 'sync-hint'));
+    content.append(warning);
+  }
+  if (s.cacheWarning) { const warning = node('p', s.cacheWarning, 'notice error'); warning.setAttribute('role', 'alert'); content.append(warning); }
+
   if (s.activity?.length) {
     const activity = node('details', undefined, 'activity');
     const caption = node('summary'); caption.id = 'activity-caption';
@@ -435,7 +473,7 @@ function render(s) {
     if (selected === undefined && (s.result.sections.length === 1 || s.partial)) selected = 0;
     const openBlock = index => {
       focusedBlocks.set(navKey, index);
-      const key = s.documentKey + ':' + index, draft = drafts.get(key);
+      const key = draftKey(s, index), draft = drafts.get(key);
       editing = draft && (draft.draft !== draft.baseText || draft.instruction) ? { key, index, documentKey: s.documentKey } : undefined;
       animateNext = true; render(state);
       content.querySelector?.('.section-heading')?.focus?.();
@@ -450,8 +488,8 @@ function render(s) {
       s.result.sections.forEach((section, index) => {
         const item = node('li'), button = node('button', undefined, 'map-item');
         button.append(node('span', String(index + 1).padStart(2, '0'), 'map-number'), node('span', section.title, 'map-title'));
-        const draft = drafts.get(s.documentKey + ':' + index);
-        const detail = draft && (draft.draft !== draft.baseText || draft.instruction) ? 'Draft' : section.startLine ? 'L' + section.startLine + '–' + section.endLine : 'Writing…';
+        const draft = drafts.get(draftKey(s, index));
+        const detail = blockIsStale(s, index) ? (s.removedBlocks?.includes(index) ? 'Removed' : 'Changed') : draft && (draft.draft !== draft.baseText || draft.instruction) ? 'Draft' : section.startLine ? 'L' + section.startLine + '–' + section.endLine : 'Writing…';
         button.append(node('span', detail, 'map-range'), node('span', '→', 'map-arrow'));
         button.addEventListener('click', () => openBlock(index)); item.append(button); list.append(item);
       });
@@ -467,25 +505,31 @@ function render(s) {
     }
     s.result.sections.forEach((section, index) => {
       if (index !== selected) return;
+      const blockStale = blockIsStale(s, index);
       const el = node('details'); el.className = 'reading-block' + (animateNext ? ' jump-in' : ''); animateNext = false; const heading = node('summary', undefined, 'section-heading');
       const blockKey = [s.name, s.level, s.providerLabel, index].join('|');
       el.open = !collapsed.has(blockKey);
       el.addEventListener('toggle', () => { if (el.open) collapsed.delete(blockKey); else collapsed.add(blockKey); });
       const link = node('button', section.startLine ? 'L' + section.startLine + (section.endLine !== section.startLine ? '–' + section.endLine : '') : 'Writing…', 'line');
-      link.title = 'Highlight corresponding source lines'; link.disabled = !!s.stale || !!s.partial;
+      link.title = 'Highlight corresponding source lines'; link.disabled = blockStale || !!s.partial;
       link.addEventListener('click', event => { event.preventDefault(); send('reveal', { index }); });
       heading.append(node('span', String(index + 1).padStart(2, '0'), 'block-index'), node('h2', section.title), link);
       const actions = node('span', undefined, 'block-actions');
       const copyBlock = node('button', 'Copy'); copyBlock.disabled = !!s.partial;
       copyBlock.addEventListener('click', event => { event.preventDefault(); send('copyBlock', { index, documentKey: s.documentKey }); });
-      const edit = node('button', 'Edit'); edit.disabled = !!s.busy || !!s.stale;
+      const edit = node('button', 'Edit'); edit.disabled = !!s.busy || blockStale || !!s.sourceMissing;
       edit.addEventListener('click', event => {
         event.preventDefault();
-        const key = s.documentKey + ':' + index;
-        if (!drafts.has(key)) drafts.set(key, { draft: section.pseudocode, instruction: '', baseText: section.pseudocode });
+        const key = draftKey(s, index);
+        if (!drafts.has(key)) drafts.set(key, { draft: section.pseudocode, instruction: '', baseText: section.pseudocode, scope: s.draftScope, index, title: section.title });
+        const saved = drafts.get(key);
+        if (saved.baseText !== section.pseudocode) { saved.reviewNote = true; saved.baseText = section.pseudocode; }
         editing = { key, index, documentKey: s.documentKey }; render(state); draftEditors.get(key)?.focus();
       });
-      actions.append(copyBlock, edit); heading.append(actions);
+      const refreshBlock = node('button', '↻'); refreshBlock.title = 'Refresh this cached block'; refreshBlock.setAttribute('aria-label', 'Refresh block: ' + section.title);
+      refreshBlock.disabled = !!s.busy || !!s.sourceMissing || !!s.partial || !!s.removedBlocks?.includes(index);
+      refreshBlock.addEventListener('click', event => { event.preventDefault(); flushDrafts(); send('refreshBlock', { index, documentKey: s.documentKey }); });
+      actions.append(copyBlock, edit, refreshBlock); heading.append(actions);
       const code = node('pre');
       let stepNumber = 0;
       pseudocodeLines(section.pseudocode).forEach(({ text, kind }, lineIndex) => {
@@ -493,7 +537,7 @@ function render(s) {
         if (kind === 'note' && /^\\s*#\\s*(Context|Why|How|What):/i.test(text)) row.className += ' context-note';
         const mapping = section.lineMap?.find(m => m.pseudocodeLine === lineIndex + 1);
         row.append(node('span', text.trim() && kind !== 'note' ? String(++stepNumber) : '', 'step-number'));
-        if (mapping && !s.stale && !s.partial) {
+        if (mapping && !blockStale && !s.partial) {
           row.className += ' linked'; row.setAttribute('role', 'button'); row.setAttribute('tabindex', '0');
           row.title = 'Hover to highlight source L' + mapping.startLine + '–' + mapping.endLine + ' · Click to jump';
           row.setAttribute('aria-label', text.trim() + '. ' + row.title);
@@ -513,6 +557,8 @@ function render(s) {
         code.append(row);
       });
       el.append(heading);
+      if (blockStale) { const warning = node('div', undefined, 'block-stale'); warning.append(node('span', s.removedBlocks?.includes(index) ? 'This code was removed. Refresh all to reorganize the map.' : 'This cached block needs review.')); if (!s.removedBlocks?.includes(index)) { const refresh = node('button', 'Refresh block'); refresh.disabled = !!s.busy || !!s.sourceMissing; refresh.addEventListener('click', () => { flushDrafts(); send('refreshBlock', { index, documentKey: s.documentKey }); }); warning.append(refresh); } el.append(warning); }
+
       if (editing?.index === index && editing.documentKey === s.documentKey) {
         el.open = true;
         const record = drafts.get(editing.key);
@@ -520,24 +566,26 @@ function render(s) {
         const label = node('div', 'Edit the idea', 'editor-caption');
         const hint = node('p', 'Tab to indent · ⌘/Ctrl+Z to undo · click an equation to edit it', 'edit-hint');
         let draftEditor = draftEditors.get(editing.key);
-        const submit = () => { if (!state.busy && !state.stale && !update.disabled) { update.disabled = true; draftEditor.setDisabled(true); send('updateBlock', { index, documentKey: s.documentKey, ...record }); } };
+        const submit = () => { if (!state.busy && !blockIsStale(state, index) && !state.sourceMissing && !update.disabled) { flushDrafts(); update.disabled = true; draftEditor.setDisabled(true); send('updateBlock', { index, documentKey: s.documentKey, ...record }); } };
         if (!draftEditor) {
           const host = node('div', undefined, 'draft-editor');
-          draftEditor = createDraftEditor(host, record, { nonce: editorNonce, disabled: !!s.busy || !!s.stale, onSubmit: submit, renderMath: appendMath });
+          draftEditor = createDraftEditor(host, record, { nonce: editorNonce, disabled: !!s.busy || blockStale || !!s.sourceMissing, onSubmit: submit, onChange: () => persistDraft(draftKey(s, index)), renderMath: appendMath });
           draftEditors.set(editing.key, draftEditor);
         }
         draftEditor.setSubmit?.(submit);
-        draftEditor.setDisabled(!!s.busy || !!s.stale);
-        const instruction = node('textarea', undefined, 'instruction'); instruction.value = record.instruction; instruction.disabled = !!s.busy || !!s.stale;
+        draftEditor.setDisabled(!!s.busy || blockStale || !!s.sourceMissing);
+        const instruction = node('textarea', undefined, 'instruction'); instruction.value = record.instruction; instruction.disabled = !!s.busy || blockStale || !!s.sourceMissing;
         instruction.placeholder = 'Optional: what should the AI change?'; instruction.setAttribute('aria-label', 'Instruction for ' + s.providerLabel);
-        instruction.addEventListener('input', () => { record.instruction = instruction.value; });
+        instruction.addEventListener('input', () => { record.instruction = instruction.value; persistDraft(draftKey(s, index)); });
         const toolbar = node('div', undefined, 'edit-toolbar');
-        const update = node('button', 'Update with ' + s.providerLabel, 'primary'); update.disabled = !!s.busy || !!s.stale;
+        const update = node('button', 'Update with ' + s.providerLabel, 'primary'); update.disabled = !!s.busy || blockStale || !!s.sourceMissing;
         update.title = 'Update this explanation · ⌘/Ctrl+Enter'; update.addEventListener('click', submit);
-        const close = node('button', 'Cancel'); close.disabled = !!s.busy; close.addEventListener('click', () => { editing = undefined; render(state); });
+        const close = node('button', 'Cancel'); close.disabled = !!s.busy; close.addEventListener('click', () => { flushDrafts(); editing = undefined; render(state); });
         toolbar.append(update, close);
         const editHeader = node('div', undefined, 'edit-header'); editHeader.append(label, toolbar);
-        editor.append(editHeader, hint, draftEditor.host, instruction); el.append(editor);
+        const cacheStatus = node('p', record.saving ? 'Saving locally…' : record.savedAt ? 'Draft saved on this device · ' + dateLabel(record.savedAt) : 'Draft autosaves on this device', 'draft-cache-status'); cacheStatus.id = 'draft-cache-status';
+        editor.append(editHeader, hint); if (record.reviewNote) editor.append(node('p', 'Saved draft from an earlier explanation. Review it before applying.', 'sync-hint'));
+        editor.append(draftEditor.host, instruction, cacheStatus); el.append(editor);
       } else {
         el.append(code);
         const row = node('div', undefined, 'block-reactions');
@@ -549,7 +597,7 @@ function render(s) {
           const icon = node('span', action.icon, 'reaction-icon'); icon.setAttribute('aria-hidden', 'true');
           const label = node('span', pending ? action.pending : action.label);
           button.append(icon, label);
-          button.disabled = !!s.busy || !!s.stale || !!s.partial;
+          button.disabled = !!s.busy || blockStale || !!s.sourceMissing || !!s.partial;
           button.title = action.label + ' with ' + s.providerLabel + ' · Uses your selected model and effort';
           button.setAttribute('aria-label', action.label + ': ' + section.title + ', with ' + s.providerLabel);
           if (pending) button.setAttribute('aria-busy', 'true');
@@ -566,8 +614,11 @@ function render(s) {
       }
       content.append(el);
     });
+    const currentKeys = new Set(s.result.sections.map((_, index) => draftKey(s, index)));
+    const earlier = (s.drafts || []).filter(row => !currentKeys.has(row.key));
+    if (earlier.length) { const list = node('details', undefined, 'earlier-drafts'); list.append(node('summary', earlier.length + ' earlier draft' + (earlier.length === 1 ? '' : 's') + ' cached locally')); for (const row of earlier) { const entry = node('div'); entry.append(node('span', row.title)); const copy = node('button', 'Copy draft'); copy.addEventListener('click', () => send('copyDraft', { scope: s.draftScope, key: row.key })); entry.append(copy); list.append(entry); } content.append(list); }
     const footer = node('footer');
-    footer.append(node('span', s.partial ? 'Live draft · source links activate when complete' : s.stale ? 'Earlier version' : s.result.edited ? 'Edited explanation · source code unchanged' : 'AI-generated · Verify against source'));
+    footer.append(node('span', s.partial ? 'Live draft · source links activate when complete' : s.stale ? 'Cached locally · source needs review' : s.cacheSavedAt ? 'Cached on this device · ' + dateLabel(s.cacheSavedAt) : 'AI-generated · Verify against source'));
     const copy = node('button', 'Copy'); copy.disabled = !!s.partial; copy.addEventListener('click', () => send('copy')); footer.append(copy); content.append(footer);
   } else if (s.busy) {
     for (let i = 0; i < 8; i++) { const line = node('div', undefined, 'skeleton'); line.style.width = i % 3 === 0 ? '55%' : '90%'; content.append(line); }
@@ -596,10 +647,16 @@ document.addEventListener?.('keydown', event => { if (event.key === 'Escape') do
 document.getElementById('colors').addEventListener('click', () => send('palette'));
 document.getElementById('source').addEventListener('click', () => send('browse'));
 document.getElementById('files').addEventListener('click', () => send('switchFile'));
-refresh.addEventListener('click', () => send(state.busy ? 'stop' : 'refresh'));
+refresh.addEventListener('click', () => { flushDrafts(); send(state.busy ? 'stop' : 'refresh'); });
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => send('level', { level: b.dataset.level })));
-window.addEventListener('message', e => { if (e.data.type === 'state') render(e.data.state); });
-window.addEventListener('blur', () => send('clearHover'));
+window.addEventListener('message', e => {
+  if (e.data.type === 'state') render(e.data.state);
+  if (e.data.type === 'draftSaved') { const record = drafts.get(e.data.key); if (record && record.version === e.data.version) { record.savedAt = e.data.savedAt; record.saving = false; const label = document.getElementById('draft-cache-status'); if (editing?.key === e.data.key && label) label.textContent = 'Draft saved on this device · ' + dateLabel(record.savedAt); } }
+  if (e.data.type === 'draftApplied') { for (const key of e.data.keys || []) { if (draftTimers.has(key) && typeof clearTimeout === 'function') clearTimeout(draftTimers.get(key)); draftTimers.delete(key); draftEditors.get(key)?.destroy(); draftEditors.delete(key); drafts.delete(key); } }
+  if (e.data.type === 'cacheCleared') { for (const timer of draftTimers.values()) if (typeof clearTimeout === 'function') clearTimeout(timer); draftTimers.clear(); for (const editor of draftEditors.values()) editor.destroy(); draftEditors.clear(); drafts.clear(); editing = undefined; }
+});
+window.addEventListener('blur', () => { flushDrafts(); send('clearHover'); });
+window.addEventListener('beforeunload', flushDrafts);
 send('ready');
 </script></body></html>`;
 }

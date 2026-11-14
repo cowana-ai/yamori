@@ -428,7 +428,7 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     editor.selection = new Selection(0, 0, 0, 0);
     // A fresh extension activation has no memory cache; it must recover the
     // companion Overview from the stored Logic/Detailed response without inference.
-    context.subscriptions.splice(0).forEach(d => d?.dispose?.());
+    await Promise.all(context.subscriptions.splice(0).map(d => d?.dispose?.()));
     assert.equal(highlights.length, 0, 'deactivation clears existing highlights');
     await moduleStub.exports.activate(context);
     await commands.get('yamori.read')();
@@ -460,7 +460,7 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     await receive({ type: 'level', level: 'detailed' });
     await receive({ type: 'level', level: 'logic' });
     assert.equal(messages.at(-1).result.sections[0].pseudocode, edited, 'derived companion views cannot replace the approved edit');
-    context.subscriptions.splice(0).forEach(d => d?.dispose?.());
+    await Promise.all(context.subscriptions.splice(0).map(d => d?.dispose?.()));
     await moduleStub.exports.activate(context);
     await commands.get('yamori.read')();
     assert.equal(messages.at(-1).result.sections[0].pseudocode, edited, 'approved edits survive extension restart');
@@ -468,7 +468,7 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     const request = receive({ type: 'refresh' });
     while (!deferred.resolve) await new Promise(resolve => setTimeout(resolve, 1));
     deferred.progress({ phase: 'Writing pseudocode', preview: { ...valid, title: 'live draft' }, model: 'test-stream-model' });
-    assert.equal(messages.at(-1).partial, true);
+    assert.equal(messages.at(-1).partial, false, 'refresh keeps the cached explanation visible until validation');
     assert.equal(messages.at(-1).model, 'test-stream-model');
     await receive({ type: 'stop' });
     deferred.progress({ phase: 'Writing pseudocode', preview: { ...valid, title: 'obsolete progress' } });
@@ -510,7 +510,7 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     assert.equal(lastEffort, 'high', 'effort-only changes invalidate default-model cache keys');
     nextPick = 'test-choice'; await commands.get('yamori.model')();
     assert.equal(messages.at(-1).requestedEffort, null, 'each model restores its saved effort');
-    context.subscriptions.splice(0).forEach(d => d?.dispose?.());
+    await Promise.all(context.subscriptions.splice(0).map(d => d?.dispose?.()));
     await moduleStub.exports.activate(context); await commands.get('yamori.read')();
     assert.equal(messages.at(-1).requestedEffort, null, 'effort choices survive restart');
     const beforeColors = calls, beforeKey = messages.at(-1).documentKey;
@@ -518,12 +518,12 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     assert.equal(messages.at(-1).readingPalette, 'paper');
     assert.equal(calls, beforeColors, 'reading colors do not start inference');
     assert.equal(messages.at(-1).documentKey, beforeKey, 'color changes do not invalidate cache or drafts');
-    context.subscriptions.splice(0).forEach(d => d?.dispose?.());
+    await Promise.all(context.subscriptions.splice(0).map(d => d?.dispose?.()));
     await moduleStub.exports.activate(context); await commands.get('yamori.read')();
     assert.equal(messages.at(-1).readingPalette, 'paper', 'reading palette survives restart');
 
 
-  } finally { context.subscriptions.forEach(d => d?.dispose?.()); await fs.rm(temp, { recursive: true, force: true }); }
+  } finally { await Promise.all(context.subscriptions.map(d => d?.dispose?.())); await fs.rm(temp, { recursive: true, force: true }); }
 });
 
 test('identity migration imports valid preferences once without overwriting newer choices', async () => {
@@ -836,5 +836,191 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
     editorChanged({ document: { uri: { scheme: 'output' } } }); assert.equal(launchers[0].visible, false);
     editorChanged(editors[1]); assert.equal(launchers[0].visible, true);
     vscode.workspace.isTrusted = false; editorChanged(editors[1]); assert.equal(launchers[0].visible, false);
-  } finally { context.subscriptions.forEach(item => item.dispose?.()); await fs.rm(temp, { recursive: true, force: true }); }
+  } finally { await Promise.all(context.subscriptions.map(item => item.dispose?.())); await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+test('source alignment rebases unchanged links and identifies helper callers conservatively', () => {
+  const { analyzeSource, currentSnapshot, linePlan, dependencyBlocks } = require('./cache');
+  const text = 'def a():\n    return 1\n\ndef b():\n    return 2\n';
+  const old = { uri: 'file:///a.py', text, fullText: text, fullHash: 'old', startLine: 1, endLine: 6, selected: false };
+  const value = { title: 'Two functions', summary: '', sections: [
+    { title: 'First', startLine: 1, endLine: 2, pseudocode: 'Return 1.', lineMap: [{ pseudocodeLine: 1, startLine: 2, endLine: 2 }] },
+    { title: 'Second', startLine: 4, endLine: 5, pseudocode: 'Return 2.', lineMap: [{ pseudocodeLine: 1, startLine: 5, endLine: 5 }] }
+  ] };
+  const shifted = analyzeSource(old, currentSnapshot(old, '\n' + text), value);
+  assert.deepEqual(shifted.staleBlocks, []);
+  assert.equal(shifted.value.sections[1].startLine, 5);
+  assert.equal(shifted.value.sections[1].lineMap[0].startLine, 6);
+  const changed = analyzeSource(old, currentSnapshot(old, text.replace('return 1', 'return 10')), value);
+  assert.deepEqual(changed.staleBlocks, [0]);
+  assert.equal(changed.value.sections[1].pseudocode, value.sections[1].pseudocode);
+  assert.equal(changed.value.sections[0].lineMap.length, 0);
+  const calling = { ...old, text: text.replace('return 2', 'return a()'), fullText: text.replace('return 2', 'return a()') };
+  const caller = analyzeSource(calling, currentSnapshot(calling, calling.text.replace('return 1', 'return 10')), value);
+  assert.deepEqual(caller.staleBlocks, [0, 1]);
+  const global = analyzeSource(old, currentSnapshot(old, 'import changed\n' + text), value);
+  assert.equal(global.shared, true); assert.deepEqual(global.staleBlocks, [0, 1]);
+  assert.deepEqual(dependencyBlocks(calling, value, 'a'), [0, 1]);
+  assert.equal(linePlan('a\r\nb\r\n', 'a\nb\n').changed.length, 0);
+  const selected = { ...old, selected: true, startLine: 4, endLine: 5, text: 'def b():\n    return 2' };
+  const moved = currentSnapshot(selected, '\n' + text);
+  assert.equal(moved.startLine, 5); assert.equal(moved.text, selected.text);
+});
+
+test('local cache retains every version, provenance and drafts with atomic latest pointers', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const { LocalCache } = require('./cache');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-durable-cache-'));
+  try {
+    const store = new LocalCache(root), opts = { provider: 'codex', level: 'logic', model: '', effort: 'low' };
+    const snapshots = Array.from({ length: 105 }, (_, index) => ({ ...source, text: 'x = ' + index + '\nprint(x)', fullHash: 'source-' + index, fullText: 'x = ' + index + '\nprint(x)', stamp: { modifiedAt: index, size: 20 } }));
+    await Promise.all(snapshots.map((snapshot, index) => store.save(snapshot, opts, valid, require('./engine').hash('version-' + index), { staleBlocks: index === 104 ? [0] : [] })));
+    const records = (await fs.readdir(root)).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+    assert.equal(records.length, 105, 'old explanations are not automatically pruned');
+    const latest = await new LocalCache(root).latest(snapshots.at(-1), opts);
+    assert.equal(latest.meta.source.fullHash, 'source-104'); assert.deepEqual(latest.meta.staleBlocks, [0]);
+    const scope = store.draftScope(source, opts), row = { key: 'draft', draft: 'A local draft', instruction: 'Keep my idea', editorState: { doc: 'A local draft', selection: { ranges: [{ anchor: 3, head: 3 }], main: 0 } } };
+    await store.saveDrafts(scope, [row]);
+    assert.deepEqual(await new LocalCache(root).drafts(scope), [row]);
+    assert.equal((await fs.readdir(root)).filter(name => name.endsWith('.tmp')).length, 0);
+    await assert.rejects(new LocalCache(path.join(root, records[0])).save(source, opts, valid, 'a'.repeat(64)), /ENOTDIR|EEXIST/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('CodeMirror text, selection and undo history survive a local JSON round trip', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const sandbox = { document: { documentElement: { style: {} } }, window: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'editor.min.js'), 'utf8'), sandbox);
+  const cm = sandbox.YamoriCodeMirror;
+  const extensions = [cm.history(), cm.EditorState.transactionFilter.of(cleanEmphasis)];
+  let current = cm.EditorState.create({ doc: 'Return the count.', extensions });
+  current = current.update({ changes: { from: 7, insert: 'all of ' }, selection: { anchor: 14 }, userEvent: 'input.type' }).state;
+  const saved = JSON.parse(JSON.stringify(current.toJSON({ history: cm.historyField })));
+  current = cm.EditorState.fromJSON(saved, { extensions }, { history: cm.historyField });
+  assert.equal(current.doc.toString(), 'Return all of the count.'); assert.equal(current.selection.main.head, 14);
+  const view = { get state() { return current; }, dispatch(transaction) { current = transaction.state; } };
+  assert.equal(cm.historyKeymap.find(binding => binding.key === 'Mod-z').run(view), true);
+  assert.equal(current.doc.toString(), 'Return the count.');
+});
+
+test('source refresh prompt updates the cached explanation and treats new source as authoritative', () => {
+  const { refreshPrompt } = require('./engine');
+  const prompt = refreshPrompt(source, 'logic', { previous: valid, index: 0, staleBlocks: [0], changedRanges: [{ oldStart: 10, newStart: 10 }] });
+  assert.match(prompt, /INCREMENTAL SOURCE REFRESH/); assert.match(prompt, /Current source is authoritative/);
+  assert.match(prompt, /Do not rewrite neighboring blocks/); assert.ok(prompt.includes(valid.sections[0].pseudocode.replace(/\n/g, '\\n')));
+  assert.match(prompt, /H\(B \| X, K\)/);
+});
+
+test('disk changes, selective refresh, durable drafts and offline restarts reuse cached explanations', async () => {
+  const fs = require('node:fs/promises'), fsSync = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-sync-workflow-')), file = path.join(temp, 'code.py');
+  await fs.writeFile(file, 'def a():\n    return 10\n\ndef b():\n    return 2\n');
+  const commands = new Map(), settings = new Map(), panels = [], watchers = [], requests = [];
+  let change, releaseGeneration, generationStarted, deferGeneration = false;
+  class Uri { constructor(value) { this.value = value; this.scheme = 'file'; this.fsPath = require('node:url').fileURLToPath(value); } toString() { return this.value; } static parse(value) { return new Uri(value); } }
+  class Range { constructor(a,b,c,d) { this.start={line:a,character:b};this.end={line:c,character:d}; } }
+  class Selection extends Range { get isEmpty() { return this.start.line===this.end.line&&this.start.character===this.end.character; } }
+  const uri = new Uri(require('node:url').pathToFileURL(file).href);
+  const doc = { uri, languageId: 'python', isDirty: false, get lineCount() { return this.getText().split('\n').length; }, getText() { return fsSync.readFileSync(file,'utf8'); }, lineAt(index) { return { text: this.getText().split('\n')[index] }; } };
+  const noop = () => ({ dispose() {} }), editor = { document: doc, viewColumn: 1, selection: new Selection(0,0,0,0), setDecorations() {}, revealRange() {} };
+  const api = { Uri, Range, Selection, RelativePattern: class { constructor(base, pattern) { this.base=base;this.pattern=pattern; } }, ThemeColor: class {}, StatusBarAlignment: { Right: 2 }, ViewColumn: { One:1,Beside:2 }, TextEditorRevealType: { InCenterIfOutsideViewport:1 },
+    commands: { registerCommand(id, fn) { commands.set(id,fn);return noop(); } },
+    workspace: { isTrusted:true,textDocuments:[doc],asRelativePath:()=> 'code.py',openTextDocument:async()=>doc,getConfiguration:()=>({get:(_,fallback)=>fallback}),onDidChangeTextDocument(fn){change=fn;return noop();},
+      createFileSystemWatcher(pattern) { const watcher={pattern,onDidChange(fn){watcher.change=fn;return noop();},onDidCreate(fn){watcher.create=fn;return noop();},onDidDelete(fn){watcher.delete=fn;return noop();},dispose(){watcher.disposed=true;}};watchers.push(watcher);return watcher; } },
+    window: { activeTextEditor:editor,visibleTextEditors:[editor],createStatusBarItem:statusItem,createTextEditorDecorationType:noop,onDidChangeActiveTextEditor:noop,showTextDocument:async()=>editor,showErrorMessage(message){throw new Error(message);},setStatusBarMessage(){},
+      createWebviewPanel(){const panel={messages:[],reveal(){},onDidDispose(fn){panel.closed=fn;return noop();},dispose(){if(!panel.disposed){panel.disposed=true;panel.closed?.();}},webview:{postMessage(message){panel.messages.push(structuredClone(message));},onDidReceiveMessage(fn){panel.receive=fn;return noop();}}};panels.push(panel);return panel;} },env:{clipboard:{writeText:async()=>{}}} };
+  const engine = { ...require('./engine'), generate: async opts => {
+    requests.push(opts);
+    if (deferGeneration) await new Promise(resolve => { releaseGeneration = resolve; generationStarted = true; });
+    const make = () => ({title:'Two ideas',summary:'Read two return values.',sections:[
+      {title:'First',startLine:1,endLine:2,pseudocode:'Return '+/return (\d+)/.exec(doc.getText())[1]+'.',lineMap:[{pseudocodeLine:1,startLine:2,endLine:2}]},
+      {title:'Second',startLine:4,endLine:5,pseudocode:'Return 2.',lineMap:[{pseudocodeLine:1,startLine:5,endLine:5}]}
+    ]});
+    const value=make();
+    if(Number.isInteger(opts.sourceRefresh?.index)){const index=opts.sourceRefresh.index;value.sections=[{...value.sections[index],startLine:opts.source.startLine,endLine:opts.source.endLine}];}
+    else value.views={overview:make()};
+    return {...value,requestedModel:opts.model,requestedEffort:opts.effort,model:'fixture'};
+  } };
+  const stub={exports:{}}, context={subscriptions:[],globalStorageUri:{fsPath:path.join(temp,'storage')},globalState:{get:(key,fallback)=>settings.get(key)??fallback,update:async(key,value)=>settings.set(key,value)},secrets:{}};
+  const wait = async condition => { for(let n=0;n<200;n++){if(condition())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out waiting for source check'); };
+  const state = () => panels.at(-1).messages.filter(message=>message.type==='state').at(-1).state;
+  const stop = async () => { await Promise.all(context.subscriptions.splice(0).map(item=>item.dispose?.())); };
+  try {
+    vm.runInNewContext(await fs.readFile(path.join(__dirname,'extension.js'),'utf8'),{module:stub,require:id=>id==='vscode'?api:id==='./engine'?engine:require(id),Buffer,AbortController,setTimeout,clearTimeout});
+    await stub.exports.activate(context); await commands.get('yamori.read')();
+    assert.equal(requests.length,1); assert.ok(state().cacheSavedAt); assert.ok(watchers.length);
+    assert.equal(typeof state().draftScope,'string');
+    const originalDate=await fs.stat(file);
+    await fs.writeFile(file,doc.getText().replace('return 10','return 11')); await fs.utimes(file,originalDate.atime,originalDate.mtime);
+    watchers.at(-1).change(uri); await wait(()=>state().stale);
+    assert.deepEqual(state().staleBlocks,[0],'same-size content changes are detected even with a restored timestamp');
+    assert.equal(requests.length,1,'file changes never start inference');
+    const neighbor=JSON.stringify(state().result.sections[1]);
+    await panels.at(-1).receive({type:'refreshBlock',index:0,documentKey:state().documentKey});
+    assert.equal(requests.length,2); assert.equal(requests.at(-1).sourceRefresh.previous.sections[0].pseudocode,'Return 10.');
+    assert.equal(requests.at(-1).source.text,'def a():\n    return 11','only the selected current block is sent as primary source');
+    assert.equal(state().result.sections[0].pseudocode,'Return 11.'); assert.equal(JSON.stringify(state().result.sections[1]),neighbor); assert.equal(state().stale,false);
+    const draft={type:'saveDraft',scope:state().draftScope,key:state().draftScope+':'+state().draftKeys[0],title:'First',index:0,draft:'My persistent draft.',instruction:'Keep this idea',baseText:'Return 11.',editorState:{doc:'My persistent draft.',selection:{ranges:[{anchor:3,head:3}],main:0}},version:'1'};
+    await panels.at(-1).receive(draft);
+    assert.ok(panels.at(-1).messages.some(message=>message.type==='draftSaved'));
+    await stop(); const count=requests.length;
+    await stub.exports.activate(context); await commands.get('yamori.read')();
+    assert.equal(requests.length,count,'restarting uses the complete local cache');
+    assert.equal(state().drafts[0].draft,draft.draft); assert.equal(state().drafts[0].editorState.selection.ranges[0].head,3);
+    await stop(); await fs.writeFile(file,doc.getText().replace('return 11','return 12'));
+    await stub.exports.activate(context); await commands.get('yamori.read')();
+    assert.equal(requests.length,count,'an offline Git-style edit opens the cached explanation with a warning');
+    assert.equal(state().result.sections[0].pseudocode,'Return 11.'); assert.deepEqual(state().staleBlocks,[0]);
+    await panels.at(-1).receive({type:'refresh'});
+    assert.equal(state().result.sections[0].pseudocode,'Return 12.'); assert.equal(state().stale,false);
+    assert.equal(requests.at(-1).sourceRefresh.previous.sections[0].pseudocode,'Return 11.','whole refresh is grounded in the cached version');
+    const beforeTouch=requests.length; await fs.utimes(file,new Date(),new Date(Date.now()+1000)); watchers.at(-1).change(uri);
+    await new Promise(resolve=>setTimeout(resolve,30)); assert.equal(state().stale,false);assert.equal(requests.length,beforeTouch,'timestamp-only changes need no model request');
+    await fs.unlink(file);watchers.at(-1).delete(uri);await wait(()=>state().sourceMissing);
+    assert.equal(state().result.sections[0].pseudocode,'Return 12.','deleting a file retains its cached explanation');
+    await fs.writeFile(file,'def a():\n    return 12\n\ndef b():\n    return 2\n');watchers.at(-1).create(uri);
+    await wait(()=>!state().sourceMissing);assert.equal(state().stale,false,'a temporary Git delete/recreate does not invalidate identical code');
+    await fs.writeFile(file,doc.getText().replace('return 12','return 13'));watchers.at(-1).change(uri);await wait(()=>state().stale);
+    deferGeneration=true;
+    const refresh=panels.at(-1).receive({type:'refresh'});await wait(()=>generationStarted);
+    await fs.writeFile(file,doc.getText().replace('return 13','return 14'));watchers.at(-1).change(uri);await wait(()=>!state().busy);
+    releaseGeneration();await refresh;
+    assert.equal(state().result.sections[0].pseudocode,'Return 12.','a late result cannot replace the cache after another source edit');
+    assert.equal(state().stale,true);deferGeneration=false;
+    await panels.at(-1).receive({type:'refresh'});assert.equal(state().result.sections[0].pseudocode,'Return 14.');
+    await fs.writeFile(file,doc.getText().replace('return 14','return 15'));watchers.at(-1).change(uri);await wait(()=>state().stale);
+    await fs.rename(path.join(temp,'storage/cache/revisions'),path.join(temp,'storage/cache/revisions-old'));
+    await fs.writeFile(path.join(temp,'storage/cache/revisions'),'blocked directory');
+    await panels.at(-1).receive({type:'refresh'});
+    assert.match(state().cacheWarning,/revision could not be saved/);
+    assert.equal(state().result.sections[0].pseudocode,'Return 14.','a failed revision save keeps the last cached result visible');
+    assert.equal(state().stale,true);
+  } finally { await stop();await fs.rm(temp,{recursive:true,force:true}); }
+});
+
+test('a batched source refresh returns only changed blocks and merges untouched cached text exactly', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(),'yamori-patch-provider-'));
+  const previous = { ...valid, sections: [
+    { title:'Set',startLine:10,endLine:10,pseudocode:'Set x to 1.',lineMap:[{pseudocodeLine:1,startLine:10,endLine:10}] },
+    { title:'Print',startLine:11,endLine:11,pseudocode:'Print the **current value**.\n\n# Why: Keep this useful cached note.',lineMap:[{pseudocodeLine:1,startLine:11,endLine:11},{pseudocodeLine:3,startLine:11,endLine:11}] }
+  ] };
+  const binary = path.join(temp,'provider.js');
+  try {
+    const reply = {title:previous.title,summary:previous.summary,sections:[{...previous.sections[0],index:0,pseudocode:'Set x to 2.'}]};
+    await fs.writeFile(binary, 'const fs=require("node:fs"),a=process.argv.slice(2),schema=JSON.parse(fs.readFileSync(a[a.indexOf("--output-schema")+1],"utf8"));'+
+      'if(schema.properties.views||schema.properties.sections.maxItems!==1||schema.properties.sections.items.properties.index.enum[0]!==0)process.exit(3);'+
+      'let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{if(!prompt.includes("CACHED DOCUMENT DATA")||!prompt.includes("Keep this useful cached note"))process.exit(4);const reply='+JSON.stringify(reply)+';if(a.includes("bad"))reply.sections[0].index=1;fs.writeFileSync(a[a.indexOf("--output-last-message")+1],JSON.stringify(reply))});');
+    const options={source:{...source,text:'x = 2\nprint(x)'},level:'logic',provider:'codex',cliPath:binary,sourceRefresh:{previous,patch:true,staleBlocks:[0]}};
+    const value=await generate(options);
+    assert.equal(value.sections[0].pseudocode,'Set x to 2.'); assert.deepEqual(value.sections[1],previous.sections[1]);
+    assert.equal(value.views,undefined,'other levels are refreshed lazily from the new cached revision');
+    await assert.rejects(generate({...options,model:'bad'}),/unexpected block patch/);
+  } finally {await fs.rm(temp,{recursive:true,force:true});}
+});
+
+ test('deleted selections are not silently remapped to unrelated code', () => {
+  const { currentSnapshot } = require('./cache');
+  const previous={selected:true,startLine:1,endLine:2,text:'def gone():\n    return 1',fullText:'def gone():\n    return 1\n\ndef keep():\n    return 2'};
+  assert.equal(currentSnapshot(previous,'\ndef keep():\n    return 2').selectionMappingUnknown,true);
 });
