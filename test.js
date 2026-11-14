@@ -237,7 +237,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     replaceChildren(...children) { this.children = children; }
     setAttribute(name, value) { (this.attributes ||= {})[name] = value; } addEventListener(type, callback) { (this.events ||= {})[type] = callback; }
   }
-  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'colors', 'source', 'files'].map(id => [id, new Element('div')]));
+  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files'].map(id => [id, new Element('div')]));
   let receive;
   const document = { documentElement: { style: {} }, body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
   const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
@@ -250,6 +250,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   elements.files.events.click(); assert.equal(sent.at(-1).type, 'switchFile');
   assert.equal(elements.effort.textContent, 'Effort: medium ▾');
   elements.effort.events.click(); assert.equal(sent.at(-1).type, 'effort');
+  assert.equal(elements.refinement.textContent,'Refine: 2 ▾');elements.refinement.events.click();assert.equal(sent.at(-1).type,'refinement');
   const all = []; const visit = el => { all.push(el); (el.children || []).forEach(visit); }; visit(elements.content);
   const rows = all.filter(el => el.className?.startsWith('code-line'));
   assert.equal(rows.length, 5, 'actual newlines must not collapse into one text row');
@@ -1023,4 +1024,120 @@ test('a batched source refresh returns only changed blocks and merges untouched 
   const { currentSnapshot } = require('./cache');
   const previous={selected:true,startLine:1,endLine:2,text:'def gone():\n    return 1',fullText:'def gone():\n    return 1\n\ndef keep():\n    return 2'};
   assert.equal(currentSnapshot(previous,'\ndef keep():\n    return 2').selectionMappingUnknown,true);
+});
+
+test('difficulty selection validates scope and allows skipping straightforward code', () => {
+  const { parseSelection, selectionPrompt } = require('./engine');
+  assert.deepEqual(parseSelection('{"blocks":[]}', valid, [0]), []);
+  assert.deepEqual(parseSelection('{"blocks":[{"index":0,"reason":"A non-obvious identity."}]}',valid,[0]),[0]);
+  for (const blocks of [[{index:1,reason:'Outside scope'}],[{index:0,reason:'A'},{index:0,reason:'B'}],[{index:0,reason:''}]]) assert.throws(()=>parseSelection(JSON.stringify({blocks}),valid,[0]));
+  assert.match(selectionPrompt('task',valid,[0]),/Short code can still have a difficult mathematical idea/);
+});
+test('two independent reviewers run concurrently and refinement keeps the lowest faithful objective', async () => {
+  const { refineExplanation, parseResult } = require('./engine');
+  let active=0, peak=0; const revised=[];
+  const result=await refineExplanation({initial:{...valid,round:0},steps:2,
+    evaluate:async(candidate,role)=>{active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,3));active--;return {score:candidate.round===0?6:candidate.round===1?2:0,faithful:candidate.round!==2,issues:[]};},
+    revise:async(candidate,reports,step)=>{revised.push(candidate.round);return {...candidate,round:step};}
+  });
+  assert.equal(peak,2,'both evaluator requests are in flight together');
+  assert.deepEqual(revised,[0,1]);assert.equal(result.round,1);assert.equal(result.refinement.acceptedStep,1);
+  assert.equal(result.refinement.initialObjective,9);assert.equal(result.refinement.finalObjective,3);
+  assert.equal(result.refinement.history[2].accepted,false,'a zero-cost but unfaithful answer is rejected');
+  assert.deepEqual(parseResult(JSON.stringify(result),source).refinement,result.refinement,'public audit metrics survive cache parsing');
+});
+test('fidelity repairs take priority over cheap scores and unresolved errors are withheld',async()=>{
+  const { refineExplanation }=require('./engine');
+  const options={initial:{...valid,fixed:false},steps:1,evaluate:async value=>({score:value.fixed?7:0,faithful:value.fixed,issues:[]}),revise:async value=>({...value,fixed:true})};
+  const result=await refineExplanation(options);assert.equal(result.fixed,true);
+  await assert.rejects(refineExplanation({...options,revise:async value=>value}),/unresolved fidelity/);
+});
+test('review failures retain only an already reviewed draft; cancellation stops both reviewers',async()=>{
+  const { refineExplanation }=require('./engine');
+  const retained=await refineExplanation({initial:valid,steps:2,evaluate:async()=>({score:2,faithful:true,issues:[]}),revise:async()=>{throw new Error('quota reached');}});
+  assert.equal(retained.sections,valid.sections);assert.match(retained.refinement.warning,/quota reached/);assert.equal(retained.refinement.stepsCompleted,0);
+  const controller=new AbortController();let started=0,stopped=0;
+  const work=refineExplanation({initial:valid,steps:2,signal:controller.signal,evaluate:async(value,role,step,signal)=>{started++;return new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>{stopped++;reject(new Error('Cancelled.'));},{once:true});});},revise:async()=>{throw new Error('Must not revise');}});
+  await new Promise(r=>setImmediate(r));assert.equal(started,2);controller.abort();await assert.rejects(work,/Cancelled/);assert.equal(stopped,2);
+  const failed=refineExplanation({initial:valid,steps:1,evaluate:async(value,role,step,signal)=>{if(role==='entropy')throw new Error('review failed');return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(new Error('stopped sibling')),{once:true}));},revise:async()=>valid});
+  await assert.rejects(failed,/review failed/);
+});
+test('review feedback uses valid block references and rejects invented entropy measurements',()=>{
+  const { parseReview }=require('./engine');
+  const review={score:3,faithful:true,issues:[{section:0,view:'main',severity:'critical',problem:'Wrong computation',suggestion:'Keep the sign.'}]};
+  assert.equal(parseReview(JSON.stringify(review),valid).faithful,false);
+  for (const changed of [{score:NaN},{score:11},{faithful:'yes'},{issues:[{...review.issues[0],section:3}]},{issues:[{...review.issues[0],view:'unknown'}]}]) assert.throws(()=>parseReview(JSON.stringify({...review,...changed}),valid));
+});
+
+test('provider pipeline selects difficult blocks, refines only them, and leaves easy sections byte-identical',async()=>{
+  const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const temp=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-select-refine-')),cli=path.join(temp,'fixture.cjs'),log=path.join(temp,'calls.jsonl');
+  const input={uri:'file:///hard.py',name:'hard.py',language:'python',startLine:1,text:'def easy():\n    return 1\n\ndef hard(n, d):\n    return (n + d) / 2'};
+  const base={title:'Two ideas',summary:'Return a constant and recover a count.',sections:[{title:'Return a constant',startLine:1,endLine:2,pseudocode:'Return 1.',lineMap:[]},{title:'Recover matches',startLine:4,endLine:5,pseudocode:'Compute the count.',lineMap:[]}]};
+  const program=String.raw`
+const fs=require('node:fs'),path=require('node:path'),args=process.argv.slice(2),log=path.join(__dirname,'calls.jsonl');
+const original=BASE;
+let mode=args.includes('--model')?args[args.indexOf('--model')+1]:'hard';
+function respond(prompt,schema){
+ let value,type;
+ if(schema.properties.blocks){type='selector';value={blocks:mode==='skip'?[]:[{index:1,reason:'The count identity needs a short derivation.'}]};}
+ else if(schema.properties.score){
+  type=prompt.includes('independent remaining-uncertainty')?'entropy':'readCost';
+  const match=prompt.match(/CANDIDATE EXPLANATION DATA: ([\s\S]*)\nReturn the review JSON only\./),candidate=JSON.parse(match[1]);
+  if(candidate.sections.length!==1||candidate.sections[0].title!=='Recover matches')throw new Error('Reviewer received an easy section');
+  const improved=candidate.sections[0].pseudocode.includes('Let m');value={score:improved?2:7,faithful:true,issues:improved?[]:[{section:0,view:'main',severity:'major',problem:'The count identity is unexplained.',suggestion:'Define matches and derive the identity.'}]};
+ }else if(prompt.includes('REFINEMENT PASS')){
+  type='revision';if(schema.properties.sections.maxItems!==1||schema.properties.views)throw new Error('Wrong scoped schema');
+  value={...original,sections:[{...original.sections[1],pseudocode:'Let m count matching nonzero signs.\nTheir signed sum is d = 2m − n.\nRecover m = (n + d) / 2.'}]};
+  if(mode==='boundary')value.sections[0].startLine=1;
+ }else{type='initial';value={...original,views:{overview:original}};}
+ fs.appendFileSync(log,JSON.stringify({type,model:mode})+'\n');return value;
+}
+if(args.includes('--help')){process.stdout.write('--safe-mode');process.exit(0);}
+if(args[0]==='app-server'){
+ const out=value=>process.stdout.write(JSON.stringify(value)+'\n');
+ require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);if(q.id===1)out({id:1,result:{}});if(q.id===2){mode=q.params.model||'hard';out({id:2,result:{thread:{id:'test'},model:mode}});}if(q.id===3){const text=JSON.stringify(respond(q.params.input[0].text,q.params.outputSchema));out({method:'item/agentMessage/delta',params:{delta:text}});out({method:'turn/completed',params:{turn:{status:'completed'}}});}});
+}else{let prompt='';process.stdin.on('data',data=>prompt+=data);process.stdin.on('end',()=>{if(args.includes('--json-schema')){const schema=JSON.parse(args[args.indexOf('--json-schema')+1]);process.stdout.write(JSON.stringify({structured_output:respond(prompt,schema),modelUsage:{'fixture-claude':{}}}));}else{const schema=JSON.parse(fs.readFileSync(args[args.indexOf('--output-schema')+1],'utf8'));fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(respond(prompt,schema)));}});}
+`.replace('BASE',JSON.stringify(base));
+  try{
+    await fs.writeFile(cli,program);const phases=[];
+    const value=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'hard',refinementSteps:2,onProgress:update=>{phases.push(update);}});
+    assert.deepEqual(value.sections[0],base.sections[0]);assert.match(value.sections[1].pseudocode,/Let m/);
+    assert.deepEqual(value.refinement.selectedBlocks,[1]);assert.equal(value.refinement.stepsCompleted,2);assert.equal(value.refinement.acceptedStep,1);
+    assert.equal(value.views,undefined,'old companion summaries are not silently reused after refinement');
+    assert.ok(phases.every(update=>!update.preview),'the user sees only the final reviewed result');
+    assert.deepEqual(parseResult(JSON.stringify(value),input).refinement,value.refinement);
+    let calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(calls.length,10);assert.deepEqual(calls.slice(0,2).map(row=>row.type),['initial','selector']);
+    await fs.writeFile(log,'');
+    const skipped=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'skip',refinementSteps:2});
+    assert.equal(skipped.refinement.status,'skipped');assert.deepEqual(skipped.refinement.selectedBlocks,[]);assert.ok(skipped.views.overview);
+    calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);assert.deepEqual(calls.map(row=>row.type),['initial','selector'],'easy code makes no evaluator/revision calls');
+    await fs.writeFile(log,'');
+    const bounded=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'boundary',refinementSteps:1});
+    assert.equal(bounded.sections[1].pseudocode,'Compute the count.');assert.match(bounded.refinement.warning,/boundaries/);
+    await fs.writeFile(log,'');
+    const claude=await generate({source:input,level:'logic',provider:'claude',cliPath:cli,model:'hard',refinementSteps:1});
+    assert.equal(claude.refinement.stepsCompleted,1);assert.deepEqual(claude.sections[0],base.sections[0]);assert.equal(claude.model,'fixture-claude');
+    await fs.writeFile(log,'');
+    const fast=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'hard',refinementSteps:0});
+    assert.equal(fast.refinement,undefined);calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);assert.deepEqual(calls.map(row=>row.type),['initial']);
+  }finally{await fs.rm(temp,{recursive:true,force:true});}
+});
+
+test('refinement policies have separate caches while old cached files remain readable without inference',async()=>{
+  const {LocalCache}=require('./cache'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const temp=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-refinement-policy-'));
+  try{
+    const cache=new LocalCache(temp),opts={provider:'codex',level:'logic',effort:'low',refinementSteps:0},key=hashForTest('legacy');
+    await cache.save(source,opts,valid,key);
+    assert.notEqual(cache.variant(source,opts),cache.variant(source,{...opts,refinementSteps:2}));
+    assert.equal(await cache.latest(source,{...opts,refinementSteps:2}),undefined);
+    const legacy=await cache.latest(source,{...opts,refinementSteps:2},true);assert.equal(legacy.value.sections[0].pseudocode,valid.sections[0].pseudocode);
+    assert.equal(legacy.meta.opts.refinementSteps,0,'legacy output is never relabeled as reviewed');
+    const skipped={...valid,refinement:{version:1,status:'skipped',stepsRequested:2,stepsCompleted:0,selectedBlocks:[]}};
+    await cache.save(source,{...opts,refinementSteps:2},skipped,hashForTest('selected-none'));
+    assert.equal((await cache.latest(source,{...opts,refinementSteps:2},true)).value.refinement.status,'skipped');
+  }finally{await fs.rm(temp,{recursive:true,force:true});}
+  function hashForTest(value){return require('./engine').hash(value);}
 });

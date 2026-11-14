@@ -167,6 +167,43 @@ explanation. The panel distinguishes your next-request settings from the model
 that generated the current result. Effort is labeled as requested because CLI
 policies can cap or override it.
 
+## Refine the difficult parts
+
+Yamori can improve a new explanation before showing it:
+
+1. A selector picks only blocks with difficult reasoning: a numerical identity,
+   subtle state changes, a complex algorithm or a missing conceptual bridge.
+   Straightforward functions stay untouched. It selects at most six blocks, or none.
+2. Two independent evaluator sessions run in parallel on those selected blocks.
+   One estimates remaining uncertainty; the other estimates reading cost.
+3. A writer revises only those blocks using both reviews. The evaluators check
+   each revision again, and Yamori keeps the lowest-scoring candidate that passes
+   both fidelity checks. Easy blocks retain their exact text and links.
+
+The working objective is `uncertainty + 0.5 × reading cost`, with fidelity as a
+hard constraint. Both scores use a 0–10 anchored rubric. They are **LLM judgments,
+not measured entropy or a proof of correctness**. Reviews cover the selected
+blocks; skipping an easy block does not certify it as correct.
+
+Open the AI menu → **Refine**, or run **Yamori: Choose Refinement Steps**.
+The default is **2 steps**, configurable from **0–5** through
+`yamori.refinementSteps`. Setting 0 skips selection and review. A new explanation
+uses two model requests when nothing needs refinement, or up to **3N + 4** when
+blocks are selected. More steps use more time and subscription capacity. All
+sessions use your chosen provider, model and effort, with tools disabled.
+
+Only the final best explanation is displayed; the activity trail shows selection,
+review and refinement progress. Stop cancels the writer and both evaluators.
+If a later pass fails, an already reviewed candidate can be kept with a visible
+notice. If fidelity problems remain unresolved, no new explanation is promoted.
+An evaluator pass is a useful second opinion, not a correctness guarantee.
+
+Final text and review metrics are cached locally, separated by refinement setting.
+Cached reads make no model requests. Existing pre-refinement caches stay readable;
+use **Refresh all** to apply the new setting. When a selected block changes, old
+companion views are not silently reused; other detail levels are derived from the
+final explanation when requested.
+
 ## Edit the explanation
 
 Click **Edit** to work in a CodeMirror editor with line numbers, normal selection,
@@ -283,7 +320,7 @@ links activate after final validation. The activity trail shows connection,
 writing and validation phases rather than private reasoning.
 
 Files or selections are limited to 120 KB. Folder discovery is limited to 500
-source files. Requests allow up to three minutes at Low, five at Medium/default,
+source files. Each model request allows up to three minutes at Low, five at Medium/default,
 and ten at higher effort, with Stop available throughout. A trusted local
 workspace and VS Code 1.90+ or a compatible Cursor version are required.
 
@@ -320,7 +357,7 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 42 offline tests passed, including durable cache/draft reloads, preserved undo history, offline and same-timestamp edits, selective and batched refreshes, exact preservation of untouched blocks, delete/recreate handling, failed disk saves and late-result cancellation. An isolated native VS Code host also verified filesystem detection, persisted freshness metadata, two file tabs and reopening without inference. Existing coverage includes including real CodeMirror formatting transactions, map-to-block navigation, correct block indexes, draft retention, startup launcher visibility, file-targeted one-click opening without automatic inference, simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Browser checks cover 360 px and 480 px panels, normal typing, Tab and continued indentation, undo/redo, deletion around emphasized text, equation editing, map navigation with retained undo history, theme changes and a failed update retaining the draft. No provider inference was used for these UI checks. Live Codex checks include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
+**Validation:** 49 offline tests passed, including difficulty selection/skipping, parallel evaluators, faithful best-candidate selection, scoped refinements preserving easy blocks exactly, cancellation of both reviewers, invalid-feedback rejection and structured Codex/Claude refinement pipelines. Existing checks cover including durable cache/draft reloads, preserved undo history, offline and same-timestamp edits, selective and batched refreshes, exact preservation of untouched blocks, delete/recreate handling, failed disk saves and late-result cancellation. An isolated native VS Code host also verified filesystem detection, persisted freshness metadata, two file tabs and reopening without inference. Existing coverage includes including real CodeMirror formatting transactions, map-to-block navigation, correct block indexes, draft retention, startup launcher visibility, file-targeted one-click opening without automatic inference, simulated Windows executable/npm discovery, literal-argument JS launching, explicit install/login actions, Claude safe-mode compatibility, stream parsing, independent file tabs, concurrent requests, cache reuse, block reactions and source restoration. Windows filesystem discovery is simulated on macOS; a live Windows sign-in has not been verified. Browser checks cover 360 px and 480 px panels, normal typing, Tab and continued indentation, undo/redo, deletion around emphasized text, equation editing, map navigation with retained undo history, theme changes and a failed update retaining the draft. No provider inference was used for these UI checks. A live 0.19.0 Codex check selected the non-obvious agreement-count identity while skipping a seed getter, completed both parallel reviews and one revision, and retained the improved candidate. Live Codex checks also include recognition of DKDM’s Heun-style predictor–corrector update and a brief explanation of why it averages velocities, plus model selection,
 Medium effort, block edits and full-file DKDM explanations. Claude CLI flags and
 response handling are tested with a mock executable; live Claude generation has
 not yet been verified.

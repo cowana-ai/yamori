@@ -130,7 +130,7 @@ class LocalCache {
     this.writes.set(file, next);
     return next.finally(() => { if (this.writes.get(file) === next) this.writes.delete(file); });
   }
-  variant(source, opts) { return hash(JSON.stringify([source.uri, source.selected ? [source.startLine, source.endLine] : null, opts.provider, opts.level, opts.model || '', opts.effort ?? null])); }
+  variant(source, opts) { return hash(JSON.stringify([source.uri, source.selected ? [source.startLine, source.endLine] : null, opts.provider, opts.level, opts.model || '', opts.effort ?? null, ...(opts.refinementSteps ? ['refinement-v1', opts.refinementSteps] : [])])); }
   draftScope(source, opts) { return hash(JSON.stringify([source.uri, opts.provider, opts.level, opts.model || ''])); }
   async entry(key, source) {
     if (!/^[a-f0-9]{64}$/.test(key || '')) return undefined;
@@ -140,16 +140,17 @@ class LocalCache {
     if (!snapshot || typeof snapshot.text !== 'string' || typeof snapshot.uri !== 'string') return undefined;
     try { return { value: parseResult(JSON.stringify(raw), snapshot), meta: raw._yamori }; } catch { return undefined; }
   }
-  async latest(source, opts) {
+  async latest(source, opts, legacy = false) {
     const pointer = await this.json(path.join(this.root, 'latest', this.variant(source, opts) + '.json'));
     const entry = pointer && await this.entry(pointer.key);
-    if (entry?.meta?.source.uri !== source.uri || entry.meta.opts?.provider !== opts.provider || entry.meta.opts?.level !== opts.level || (entry.meta.opts?.model || '') !== (opts.model || '') || (entry.meta.opts?.effort ?? null) !== (opts.effort ?? null)) return undefined;
+    if (!entry && legacy && opts.refinementSteps) return this.latest(source, { ...opts, refinementSteps: 0 });
+    if (entry?.meta?.source.uri !== source.uri || entry.meta.opts?.provider !== opts.provider || entry.meta.opts?.level !== opts.level || (entry.meta.opts?.model || '') !== (opts.model || '') || (entry.meta.opts?.effort ?? null) !== (opts.effort ?? null) || (entry.meta.opts?.refinementSteps || 0) !== (opts.refinementSteps || 0)) return undefined;
     return entry;
   }
   async save(source, opts, value, key, status = {}) {
     const variant = this.variant(source, opts), version = (this.versions.get(variant) || 0) + 1;
     this.versions.set(variant, version);
-    const meta = { version: 1, source, opts: { provider: opts.provider, level: opts.level, model: opts.model || '', effort: opts.effort ?? null }, savedAt: Date.now(), staleBlocks: [], removedBlocks: [], ...status };
+    const meta = { version: 1, source, opts: { provider: opts.provider, level: opts.level, model: opts.model || '', effort: opts.effort ?? null, refinementSteps: opts.refinementSteps || 0 }, savedAt: Date.now(), staleBlocks: [], removedBlocks: [], ...status };
     await this.write(path.join(this.root, key + '.json'), { ...value, _yamori: meta });
     if (this.versions.get(variant) === version) await this.write(path.join(this.root, 'latest', variant + '.json'), { key });
     return meta;

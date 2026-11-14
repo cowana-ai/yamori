@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -65,6 +65,10 @@
         "command": "yamori.switchFile",
         "title": "Yamori: Switch Files",
         "icon": "$(files)"
+      },
+      {
+        "command": "yamori.refinement",
+        "title": "Yamori: Choose Refinement Steps"
       }
     ],
     "menus": {
@@ -117,6 +121,13 @@
           "default": "",
           "scope": "machine",
           "description": "Optional absolute path to Claude Code CLI."
+        },
+        "yamori.refinementSteps": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Maximum refinement steps for difficult blocks. A selector skips straightforward functions; two parallel evaluators check uncertainty and reading cost. Up to 3N+4 model requests per new explanation, or 2 if no hard blocks. 0 skips selection and refinement. Cached reads use no AI."
         }
       }
     },

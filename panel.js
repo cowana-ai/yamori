@@ -341,7 +341,7 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
 }
 @media(forced-colors: active) { body, header, .reading-block, .section-heading, .code-line.note { background: Canvas; color: CanvasText; } button, .segments, details, .code-line.note { border: 1px solid ButtonText; } }
 </style></head><body data-palette="${palette}">
-<header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span><details class="ai-settings"><summary id="ai-summary">AI settings ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button></div></details></div>
+<header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span><details class="ai-settings"><summary id="ai-summary">AI settings ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 2 ▾</button></div></details></div>
 <div class="controls"><div class="segments" role="group" aria-label="Detail level">
 <button data-level="overview" aria-pressed="false" title="The purpose and main stages">Overview</button>
 <button data-level="logic" aria-pressed="true" title="Readable steps and important decisions">Logic</button>
@@ -424,12 +424,14 @@ function render(s) {
   document.getElementById('model').textContent = (s.requestedModel || 'Default') + ' ▾';
   document.getElementById('model').title = 'New requests: ' + (s.requestedModel || 'provider default') + ' · Choose model';
   document.getElementById('effort').textContent = 'Effort: ' + (s.requestedEffort || 'Default') + ' ▾';
+  document.getElementById('refinement').textContent = 'Refine: ' + (s.refinementSteps ?? 2) + ' ▾';
   document.getElementById('effort').title = 'New requests: ' + (s.requestedEffort || 'CLI default') + ' reasoning effort';
   document.getElementById('source').textContent = s.name || 'Choose a file…';
   document.getElementById('source').title = s.name ? s.name + ' · Open another file in its own Yamori tab' : 'Choose a file';
   document.querySelectorAll('[data-level]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.level === s.level)); });
   refresh.textContent = s.busy ? 'Stop' : 'Refresh all'; refresh.disabled = !s.name || (!!s.sourceMissing && !s.busy);
   content.setAttribute('aria-busy', String(!!s.busy)); content.replaceChildren();
+  if (s.result?.refinement?.warning) content.append(node('p', s.result.refinement.warning, 'notice'));
   if (s.modelNotice) content.append(node('p', s.modelNotice, 'notice'));
   if (s.error) {
     const el = node('div', undefined, 'notice error'); el.setAttribute('role', 'alert'); el.append(node('p', s.error));
@@ -618,6 +620,7 @@ function render(s) {
     const earlier = (s.drafts || []).filter(row => !currentKeys.has(row.key));
     if (earlier.length) { const list = node('details', undefined, 'earlier-drafts'); list.append(node('summary', earlier.length + ' earlier draft' + (earlier.length === 1 ? '' : 's') + ' cached locally')); for (const row of earlier) { const entry = node('div'); entry.append(node('span', row.title)); const copy = node('button', 'Copy draft'); copy.addEventListener('click', () => send('copyDraft', { scope: s.draftScope, key: row.key })); entry.append(copy); list.append(entry); } content.append(list); }
     const footer = node('footer');
+    if (s.result?.refinement) footer.append(node('span', s.result.refinement.status === 'skipped' ? 'Straightforward code · refinement skipped' : 'Refined ' + s.result.refinement.selectedBlocks?.length + (s.result.refinement.selectedBlocks?.length === 1 ? ' block · ' : ' blocks · ') + s.result.refinement.stepsCompleted + '/' + s.result.refinement.stepsRequested + ' steps'));
     footer.append(node('span', s.partial ? 'Live draft · source links activate when complete' : s.stale ? 'Cached locally · source needs review' : s.cacheSavedAt ? 'Cached on this device · ' + dateLabel(s.cacheSavedAt) : 'AI-generated · Verify against source'));
     const copy = node('button', 'Copy'); copy.disabled = !!s.partial; copy.addEventListener('click', () => send('copy')); footer.append(copy); content.append(footer);
   } else if (s.busy) {
@@ -643,6 +646,7 @@ if (typeof setInterval === 'function') setInterval(updateElapsed, 1000);
 document.getElementById('provider').addEventListener('click', () => send('provider'));
 document.getElementById('model').addEventListener('click', () => send('model'));
 document.getElementById('effort').addEventListener('click', () => send('effort'));
+document.getElementById('refinement').addEventListener('click', () => send('refinement'));
 document.addEventListener?.('keydown', event => { if (event.key === 'Escape') document.querySelector?.('.ai-settings')?.removeAttribute('open'); });
 document.getElementById('colors').addEventListener('click', () => send('palette'));
 document.getElementById('source').addEventListener('click', () => send('browse'));

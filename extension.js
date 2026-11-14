@@ -3,7 +3,7 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch } = require('./engine');
+const { LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps } = require('./engine');
 const { panelHTML } = require('./panel');
 const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks } = require('./cache');
 
@@ -199,7 +199,7 @@ async function activate(context) {
   }));
   command('yamori.read', open); command('yamori.browse', browse); command('yamori.project', project); command('yamori.switchFile', switchFile);
   command('yamori.connectClaude', () => connectClaude(context));
-  for (const [id, method] of [['provider', 'chooseProvider'], ['model', 'chooseModel'], ['effort', 'chooseEffort'], ['colors', 'chooseReadingColors']]) {
+  for (const [id, method] of [['provider', 'chooseProvider'], ['model', 'chooseModel'], ['effort', 'chooseEffort'], ['colors', 'chooseReadingColors'], ['refinement', 'chooseRefinement']]) {
     command('yamori.' + id, async () => { const reader = current(); if (!reader) return browse(); reader.focus(); await reader[method](); });
   }
   command('yamori.clear', async () => {
@@ -399,7 +399,7 @@ function createReader(context, navigation) {
     else if (source) dependencyChanged(event.document.uri.toString(), event.document.getText());
   }
   const matchesModel = (value, opts) => (value.requestedModel || '') === (opts.model || '') && (Object.hasOwn(value, 'requestedEffort') ? value.requestedEffort : value.effort ?? (value.requestedModel ? null : 'low')) === opts.effort;
-  const keyFor = (s, opts) => cacheKey(s, opts.level, opts.provider, opts.model || opts.effort !== 'low' ? JSON.stringify([opts.revision?.id || '', opts.model, opts.effort]) : opts.revision?.id || '');
+  const keyFor = (s, opts) => cacheKey(s, opts.level, opts.provider, opts.model || opts.effort !== 'low' || opts.refinementSteps ? JSON.stringify([opts.revision?.id || '', opts.model, opts.effort, ...(opts.refinementSteps ? ['refinement-v1', opts.refinementSteps] : [])]) : opts.revision?.id || '');
   function remember(s, opts, value) {
     memory.set(keyFor(s, opts), value);
     for (const lower of ORDER.slice(0, ORDER.indexOf(opts.level))) {
@@ -418,7 +418,7 @@ function createReader(context, navigation) {
     for (const editor of highlighted) { try { editor.setDecorations(decoration, []); } catch {} }
     highlighted.clear();
   }
-  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, modelNotice, level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined });
+  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, modelNotice, level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined });
   function post() { panel?.webview.postMessage({ type: 'state', state: view() }); }
   function cancel() { serial++; controller?.abort(); controller = undefined; busy = false; preview = undefined; progress = undefined; startedAt = undefined; clearHighlight(); }
   function ensurePanel() {
@@ -445,6 +445,7 @@ function createReader(context, navigation) {
           case 'provider': await chooseProvider(); break;
           case 'model': await chooseModel(); break;
           case 'effort': await chooseEffort(); break;
+          case 'refinement': await chooseRefinement(); break;
           case 'palette': await chooseReadingColors(); break;
           case 'stop': cancel(); activity.push('Stopped'); error = ''; post(); break;
           case 'refresh': await refresh(); break;
@@ -459,7 +460,7 @@ function createReader(context, navigation) {
               cancel(); level = message.level; result = undefined; error = '';
               void context.globalState.update('detail', level); await loadDrafts();
               if (source && wasStale) {
-                const saved = await disk.latest(source, options());
+                const saved = await disk.latest(source, options(), true);
                 if (saved) { const latest = source; source = saved.meta.source; result = saved.value; restoreStatus(saved.meta); applySource(latest, 'Source changed since this cached view'); }
                 else { result = lowerView(previous, previousLevel, level); staleBlocks = new Set(result?.sections.map((_, index) => index) || []); stale = true; if (!result) error = 'This level has no cached view yet. Use Refresh all to update it.'; }
                 post();
@@ -511,10 +512,10 @@ function createReader(context, navigation) {
     const model = typeof choice?.id === 'string' ? choice.id : '';
     const override = context.globalState.get('effortChoices', {})[provider + ':' + model];
     const effort = override === 'auto' ? null : typeof override === 'string' ? override : model ? choice.effort ?? null : provider === 'claude' ? null : 'low';
-    return { provider, level, model, effort, cliPath: config.get(provider === 'claude' ? 'claudePath' : 'codexPath'), revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
+    return { provider, level, model, effort, refinementSteps: refinementSteps(config.get('refinementSteps', 2)), cliPath: config.get(provider === 'claude' ? 'claudePath' : 'codexPath'), revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
   }
   async function cached(s, opts) {
-    if (opts.revision?.level === opts.level && matchesModel(opts.revision.value, opts)) return opts.revision.value;
+    if (opts.revision?.level === opts.level && matchesModel(opts.revision.value, opts) && (opts.revision.value.refinement?.stepsRequested || 0) === opts.refinementSteps) return opts.revision.value;
     if (memory.has(keyFor(s, opts))) return memory.get(keyFor(s, opts));
     for (const candidate of ORDER.slice(ORDER.indexOf(opts.level))) {
       const candidateOpts = { ...opts, level: candidate };
@@ -580,6 +581,7 @@ function createReader(context, navigation) {
         if (id !== serial || task.signal.aborted) return;
         if (!await stillCurrent(snapshot)) { await inspect(undefined, 'change'); return; }
         staleBlocks.clear(); removedBlocks.clear(); stale = false; sourceMissing = false; changedRanges = [];
+        if (value.refinement?.acceptedStep) opts.revision = await persistRevision(snapshot, opts, value);
         await save(snapshot, opts, value);
       }
       if (id !== serial) return;
@@ -616,7 +618,7 @@ function createReader(context, navigation) {
       if (!await stillCurrent(snapshot)) { await inspect(undefined, 'change'); throw new Error('Source changed during the edit. Your previous explanation was kept.'); }
       if (id !== serial || task.signal.aborted) return;
       const replacement = updated.sections[0];
-      const value = { ...base, edited: true, views: undefined, model: updated.model || base.model, requestedModel: opts.model, requestedEffort: opts.effort, effort: updated.effort, sections: base.sections.map((s, i) => i === message.index ? { ...s, pseudocode: replacement.pseudocode, lineMap: replacement.lineMap } : s) };
+      const value = { ...base, refinement: updated.refinement && { ...updated.refinement, selectedBlocks: updated.refinement.selectedBlocks.map(() => message.index) }, edited: true, views: undefined, model: updated.model || base.model, requestedModel: opts.model, requestedEffort: opts.effort, effort: updated.effort, sections: base.sections.map((s, i) => i === message.index ? { ...s, pseudocode: replacement.pseudocode, lineMap: replacement.lineMap } : s) };
       const revision = await persistRevision(snapshot, opts, value);
       await draftApplied(message.index, original.title);
       // New revision keys invalidate every other level without deleting the old
@@ -637,9 +639,10 @@ function createReader(context, navigation) {
     }
     if (source && !stale && source.fullHash === next.fullHash && busy) { if (settings.show !== false) ensurePanel(); return inFlight; }
     cancel();
-    const saved = await disk.latest(next, options(next));
+    const saved = await disk.latest(next, options(next), true);
     if (saved) {
       source = saved.meta.source; result = saved.value; restoreStatus(saved.meta); selectedModel = result.model; error = '';
+      modelNotice = (saved.meta.opts?.refinementSteps || 0) !== options().refinementSteps ? 'This cached result predates your refinement setting. Use Refresh all to apply it; opening the cache uses no AI.' : '';
       await loadDrafts(); applySource(next, 'Source changed since the cached explanation');
       if (settings.openSource) await showSource();
       if (settings.show !== false) { ensurePanel(); post(); }
@@ -690,7 +693,7 @@ function createReader(context, navigation) {
       let value;
       if (one) {
         const replacement = updated.sections[0];
-        value = { ...base, title: updated.title || base.title, summary: updated.summary || base.summary, views: undefined, model: updated.model || base.model, requestedModel: opts.model, requestedEffort: opts.effort, sections: base.sections.map((section, i) => i === index ? { ...replacement, title: replacement.title || section.title, startLine: section.startLine, endLine: section.endLine } : section) };
+        value = { ...base, refinement: updated.refinement && { ...updated.refinement, selectedBlocks: updated.refinement.selectedBlocks.map(() => index) }, title: updated.title || base.title, summary: updated.summary || base.summary, views: undefined, model: updated.model || base.model, requestedModel: opts.model, requestedEffort: opts.effort, sections: base.sections.map((section, i) => i === index ? { ...replacement, title: replacement.title || section.title, startLine: section.startLine, endLine: section.endLine } : section) };
       } else value = updated;
       const freshStatus = { ...status(), staleBlocks: one ? pending.filter(item => item !== index) : [], removedBlocks: one ? [...removedBlocks].filter(item => item !== index) : [], changedRanges: one ? changedRanges : [], sharedChange: one && sharedChange, sourceMissing: false, checkedAt: Date.now() };
       const revision = await persistRevision(contextSource, opts, value, freshStatus);
@@ -749,6 +752,18 @@ function createReader(context, navigation) {
     modelNotice = 'New requests use ' + (picked.id === 'auto' ? 'the CLI default effort' : picked.id + ' effort') + (result ? '. Press Refresh to regenerate this explanation.' : '.');
     error = ''; post();
   }
+  async function chooseRefinement() {
+    const config = vscode.workspace.getConfiguration('yamori');
+    const selected = refinementSteps(config.get('refinementSteps', 2));
+    const picked = await vscode.window.showQuickPick(Array.from({ length: 6 }, (_, value) => ({
+      label: value ? `${value} refinement step${value === 1 ? '' : 's'}${value === 2 ? ' · Default' : ''}` : 'Off · Fast draft', value, picked: value === selected,
+      description: value ? `Up to ${3 * value + 4} model requests per new explanation` : 'One generation request',
+      detail: value ? 'A selector picks difficult blocks; two parallel evaluators review only those blocks after generation and each revision. Only the best reviewed result is shown.' : 'Skip the evaluator loop. Cached results are never reviewed automatically.'
+    })), { title: 'Yamori · Refinement steps', placeHolder: 'Uses your selected provider, model and effort. More steps take longer and use more of your plan.' });
+    if (!picked || picked.value === selected) return;
+    cancel(); await config.update('refinementSteps', picked.value, vscode.ConfigurationTarget.Global);
+    modelNotice = 'Refinement applies to the next generation or refresh. Your current cached explanation is kept.'; post();
+  }
   async function chooseReadingColors() {
     const choices = [
       { label: 'Follow editor', id: 'auto', description: 'Monochrome light or dark to match your editor' },
@@ -791,7 +806,7 @@ function createReader(context, navigation) {
     }
   }
   const reader = {
-    read, showSource, chooseProvider, chooseModel, chooseEffort, chooseReadingColors,
+    read, showSource, chooseProvider, chooseModel, chooseEffort, chooseReadingColors, chooseRefinement,
     snapshot: () => source, isBusy: () => busy, hasPanel: () => !!panel, failure: () => error,
     stop: cancel,
     focus() { ensurePanel(); post(); },
