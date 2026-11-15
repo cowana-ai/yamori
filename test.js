@@ -1241,3 +1241,31 @@ test('a malformed sibling review cannot hide an already reported fidelity failur
   const {refineExplanation}=require('./engine');
   await assert.rejects(refineExplanation({initial:valid,steps:1,evaluate:async(candidate,role)=>{if(role==='entropy')return {score:8,faithful:false,issues:[]};throw new Error('Malformed feedback references');},revise:async()=>valid}),error=>error.code==='YAMORI_FIDELITY');
 });
+
+test('Ajv validators reject wrong types without coercion, defaults or mutation',()=>{
+  const validators=require('./validation.min');
+  const wrong={score:'2',faithful:'false',issues:[],extra:'keep me'};
+  const before=structuredClone(wrong);assert.equal(validators.review(wrong),false);assert.deepEqual(wrong,before);
+  assert.equal(validators.review({score:2,issues:[]}),false,'missing fidelity is never defaulted to approval');
+  assert.equal(validators.review({score:2,faithful:true,issues:[],extra:'unrecognized'}),false,'review extras are rejected, not silently removed');
+  assert.equal(validators.review(Object.create({score:2,faithful:true,issues:[]})),false,'required fields must be owned by the response');
+  assert.equal(validators.review({score:2,faithful:true,issues:[]}),true);
+});
+test('Ajv response errors include field paths while reference checks remain contextual',()=>{
+  const {parseReview,parseSelection}=require('./engine');
+  assert.throws(()=>parseReview('{"score":"2","faithful":true,"issues":[]}',valid),error=>error.code==='YAMORI_REVIEW_FORMAT'&&error.validation.path==='/score'&&error.validation.keyword==='type');
+  assert.throws(()=>parseReview('{"score":2,"faithful":true,"issues":[{"section":0,"view":"main","severity":"major","problem":22,"suggestion":"Define it."}]}',valid),error=>error.validation.path==='/issues/0/problem');
+  assert.throws(()=>parseSelection('{"blocks":[{"index":"0","reason":"A derivation."}]}',valid,[0]),error=>error.validation.path==='/blocks/0/index');
+  assert.throws(()=>parseReview('{"score":2,"faithful":true,"issues":[{"section":8,"view":"main","severity":"major","problem":"A gap.","suggestion":"Define it."}]}',valid),error=>error.validation.path==='/issues/0/section'&&error.validation.keyword==='reference');
+  const old={...valid,_yamori:{source:'legacy metadata'},extra:'ignored metadata'};
+  assert.deepEqual(parseResult(JSON.stringify(old),source),valid,'legacy cache metadata and absent line maps stay compatible');
+});
+test('packaged validators work with no Ajv installation, schema compilation or developer tools',async()=>{
+  const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-validator-runtime-'));
+  try{
+    await Promise.all(['engine.js','schemas.js','validation.min.js'].map(file=>fs.copyFile(path.join(__dirname,file),path.join(root,file))));
+    const script=`const Module=require('node:module'),load=Module._load;Module._load=function(id,...args){if(id==='ajv'||id.startsWith('ajv/')||id==='esbuild')throw new Error('Build-only dependency loaded at runtime');return load.call(this,id,...args);};global.Function=function(){throw new Error('Runtime schema compilation is forbidden');};const {parseResult}=require('./engine');const source=${JSON.stringify(source)},value=${JSON.stringify(valid)};if(parseResult(JSON.stringify(value),source).title!==value.title)process.exit(2);process.stdout.write('Standalone validation works');`;
+    const output=await runProcess(process.execPath,['-e',script],'',{cwd:root});assert.equal(output,'Standalone validation works');
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});

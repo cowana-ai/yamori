@@ -217,7 +217,11 @@ notice. If fidelity problems remain unresolved, no new explanation is promoted.
 An evaluator pass is a useful second opinion, not a correctness guarantee.
 
 Evaluator output is constrained to the views and zero-based blocks actually
-being reviewed. If feedback is malformed, Yamori asks only that evaluator to
+being reviewed. Ajv validates explanation, selector and evaluator structures
+without coercing types or supplying defaults. Errors identify the failing field,
+such as `/issues/0/section`. Separate contextual checks verify source ranges,
+step links and references to actual candidate blocks. Schema validation does
+not establish whether an explanation is correct. If feedback is malformed, Yamori asks only that evaluator to
 repair it once. If review still cannot finish, the valid generated explanation
 stays visible and cached with **Draft · review incomplete** and a **Retry review**
 action. Retrying unchanged code reuses that cached draft instead of paying for
@@ -354,13 +358,26 @@ and ten at higher effort, with Stop available throughout. Local files and VS Cod
 
 ## Development
 
-The extension has no dependency-install or build step for its application code. CodeMirror, KaTeX and jsdiff are vendored as local bundles; no CDN is used.
+The packaged extension needs no dependency installation. CodeMirror, KaTeX,
+jsdiff and precompiled Ajv validators are local bundles; no CDN is used.
 Use Node.js 20+ to run the checks:
 
 ```sh
 npm test
 npm run check
 ```
+
+When changing a schema, install the pinned development dependencies and rebuild
+the standalone validators before running the checks:
+
+```sh
+npm ci
+npm run build:validation
+```
+
+Only trusted, repository-owned schemas are compiled during the build. The
+extension does not load Ajv or compile schemas at runtime. Commit the generated
+`validation.min.js` alongside schema changes.
 
 Launch an extension development host with:
 
@@ -379,11 +396,15 @@ npx @vscode/vsce package --no-dependencies
 | [extension.js](extension.js) | Editor integration, model/effort pickers, source context and cache. |
 | [cache.js](cache.js) | Atomic local storage, source alignment and change analysis. |
 | [engine.js](engine.js) | Translation prompts, provider processes and response validation. |
+| [schemas.js](schemas.js) | Shared JSON Schemas and build-time validator generation. |
+| [validation.min.js](validation.min.js) | Standalone Ajv validators used by the extension. |
 | [panel.js](panel.js) | Reading panel, block editing, source navigation and math rendering. |
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 58 automated tests cover evaluator-reference repair, incomplete-review caching/retry, meaningful error states, streaming before review, compact context, early completion/plateau stops, Restricted Mode TypeScript opening,
+**Validation:** 61 automated tests cover strict schema validation, field-path errors,
+cache compatibility, loading without development dependencies or runtime schema
+compilation, evaluator-reference repair, incomplete-review caching/retry, meaningful error states, streaming before review, compact context, early completion/plateau stops, Restricted Mode TypeScript opening,
 user-only CLI settings, blocked definition lookups, first-use provider selection,
 parallel reviewers, fidelity gating, scoped refinement, local caching/drafts,
 source changes and cancellation. An isolated native VS Code profile opened and
@@ -408,6 +429,9 @@ Application code is [MIT licensed](LICENSE). Bundled [KaTeX](https://katex.org/)
 locally to produce MathML without font downloads or network requests.
 
 Bundled [jsdiff](https://github.com/kpdecker/jsdiff) is BSD-3-Clause licensed, with its notice retained in `diff.min.js`; bounded line alignment runs locally.
+
+[Ajv](https://ajv.js.org/standalone.html) 8.20.0 is MIT licensed; its full notice is
+retained in the generated `validation.min.js` bundle.
 
 Bundled CodeMirror 6 and its dependencies are MIT licensed, with their notices retained in `editor.min.js`. The editor adapter is in `panel.js`. The gecko samurai mascot was adapted from a user-supplied illustration using
 image generation. The mascot is separate artwork and is not included in the
