@@ -332,6 +332,11 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   assert.ok(draftNodes.some(el => el.textContent === 'Writing pseudocode'));
   assert.ok(!draftNodes.some(el => el.className?.includes('linked')), 'partial drafts have no actionable source links');
   assert.ok(draftNodes.find(el => el.className === 'block-reactions').children.every(b => b.disabled), 'partial output cannot start a block reaction');
+  receive({data:{type:'state',state:{...renderedState,result:undefined,error:'An evaluator returned invalid feedback references.',activity:['',undefined,null,'Checking difficult blocks']}}});
+  all.length=0;visit(elements.content);assert.equal(all.filter(el=>el.tag==='li').length,1,'blank activity entries are omitted');assert.ok(!all.some(el=>el.textContent==='Big ideas. Less guesswork.'),'a failure never shows the first-use welcome screen');
+  all.find(el=>el.textContent==='Try again').events.click();assert.equal(sent.at(-1).type,'refresh');
+  receive({data:{type:'state',state:{...renderedState,result:{...renderedState.result,refinement:{status:'incomplete',warning:'Review incomplete. Draft cached.'}}}}});
+  all.length=0;visit(elements.content);assert.ok(all.some(el=>el.textContent==='Draft · review incomplete'));all.find(el=>el.textContent==='Retry review').events.click();assert.equal(sent.at(-1).type,'refresh');
   const mapState = { ...renderedState, result: { ...valid, sections: [renderedState.result.sections[0], { ...valid.sections[0], title: 'Count the matches', pseudocode: 'Return the number of matches.' }] } };
   receive({ data: { type: 'state', state: mapState } });
   all.length = 0; visit(elements.content);
@@ -1090,9 +1095,12 @@ function respond(prompt,schema){
  if(schema.properties.blocks){type='selector';value={blocks:mode==='skip'?[]:[{index:1,reason:'The count identity needs a short derivation.'}]};}
  else if(schema.properties.score){
   type=prompt.includes('independent remaining-uncertainty')?'entropy':'readCost';
+  if(JSON.stringify(schema.properties.issues.items.properties.view.enum)!=='[\"main\"]'||JSON.stringify(schema.properties.issues.items.properties.section.enum)!=='[-1,0]')throw new Error('Review schema allows absent references');
   const match=prompt.match(/CANDIDATE EXPLANATION DATA: ([\s\S]*)\nReturn the review JSON only\./),candidate=JSON.parse(match[1]);
   if(candidate.sections.length!==1||candidate.sections[0].title!=='Recover matches')throw new Error('Reviewer received an easy section');
   const improved=candidate.sections[0].pseudocode.includes('Let m');value={score:improved?2:7,faithful:true,issues:improved?[]:[{section:0,view:'main',severity:'major',problem:'The count identity is unexplained.',suggestion:'Define matches and derive the identity.'}]};
+  if(type==='entropy' && (mode==='always-bad-reference' || mode==='bad-reference'&&!improved&&!prompt.includes('REVIEW FORMAT REPAIR')))value.issues=[{section:42,view:'logic',severity:'major',problem:'The count identity is unexplained.',suggestion:'Define its terms.'}];
+  if(mode==='fidelity-failure'){value.faithful=false;value.issues=[{section:0,view:'main',severity:'critical',problem:'The claimed behavior is wrong.',suggestion:'Fix the claim.'}];}
  }else if(prompt.includes('REFINEMENT PASS')){
   type='revision';if(schema.properties.sections.maxItems!==1||schema.properties.views)throw new Error('Wrong scoped schema');
   value={...original,sections:[{...original.sections[1],pseudocode:'Let m count matching nonzero signs.\nTheir signed sum is d = 2m − n.\nRecover m = (n + d) / 2.'}]};
@@ -1131,6 +1139,26 @@ if(args[0]==='app-server'){
     await fs.writeFile(log,'');
     const fast=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'hard',refinementSteps:0});
     assert.equal(fast.refinement,undefined);calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);assert.deepEqual(calls.map(row=>row.type),['initial']);
+    await fs.writeFile(log,'');const repairPhases=[];
+    const repaired=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'bad-reference',refinementSteps:1,onProgress:update=>repairPhases.push(update.phase)});
+    assert.equal(repaired.refinement.status,'reviewed');assert.ok(repairPhases.some(phase=>phase.includes('Repairing uncertainty')));
+    calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(calls.filter(row=>row.type==='entropy').length,3,'only the malformed evaluator is retried once');assert.equal(calls.filter(row=>row.type==='readCost').length,2,'the valid evaluator is not rerun for a sibling format repair');
+    await fs.writeFile(log,'');
+    const unreviewed=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'always-bad-reference',refinementSteps:1});
+    assert.equal(unreviewed.refinement.status,'incomplete');assert.equal(unreviewed.refinement.faithful,undefined);assert.equal(unreviewed.sections[1].pseudocode,'Compute the count.');assert.match(unreviewed.refinement.warning,/has not passed both evaluator checks/);
+    assert.equal(unreviewed.views.overview.refinement.status,'incomplete','companion views do not hide incomplete review');
+    const {LocalCache,}=require('./cache'),disk=new LocalCache(path.join(temp,'cache')),opts={provider:'codex',level:'logic',model:'always-bad-reference',effort:'low',refinementSteps:1};
+    await disk.save(input,opts,unreviewed,require('./engine').hash('incomplete-draft'));
+    const restored=await disk.latest(input,opts);assert.equal(restored.value.refinement.status,'incomplete');assert.equal(restored.value.sections[1].pseudocode,unreviewed.sections[1].pseudocode);
+    await fs.writeFile(log,'');
+    const resumed=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'hard',refinementSteps:1,initialDraft:restored.value,sourceRefresh:{previous:restored.value,staleBlocks:[],changedRanges:[]}});
+    assert.equal(resumed.refinement.status,'reviewed');calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);assert.ok(calls.every(row=>row.type!=='initial'),'retrying review reuses the cached draft without another generation');
+    await assert.rejects(generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'fidelity-failure',refinementSteps:1}),error=>error.code==='YAMORI_FIDELITY','known fidelity failures are not downgraded to a successful draft');
+    await fs.writeFile(log,'');const stopped=new AbortController();
+    await assert.rejects(generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'hard',refinementSteps:1,signal:stopped.signal,onProgress:update=>{if(update.phase.startsWith('Review 0/'))stopped.abort();}}),/Cancelled/);
+    calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse);assert.ok(calls.every(row=>!['entropy','readCost'].includes(row.type)),'cancelling at review start prevents both evaluator calls');
+
   }finally{await fs.rm(temp,{recursive:true,force:true});}
 });
 
@@ -1194,4 +1222,22 @@ test('compact refinement context retains source numbering, user intent and defin
   const context=refinementContext(source,'logic',{edit:{instruction:'Propose doubling it',draft:'Return twice the value.',section:valid.sections[0]}});
   assert.match(context,/10: x = 1\n11: print\(x\)/);assert.match(context,/Propose doubling it/);assert.match(context,/source is unchanged/);assert.match(context,/untrusted data/);assert.match(context,/unknown custom behavior/);
   assert.ok(context.length<promptFor(source,'logic').length/2,'the evaluator context excludes the long writing guide and illustrative examples');
+});
+
+test('review schemas expose only available targets and normalize only a known detail alias',()=>{
+  const {reviewSchema,parseReview}=require('./engine'),schema=reviewSchema(valid),item=schema.properties.issues.items;
+  assert.deepEqual(item.properties.view.enum,['main']);assert.deepEqual(item.properties.section.enum,[-1,0]);assert.equal(item.properties.problem.maxLength,2000);
+  const feedback={score:3,faithful:true,issues:[{view:'logic',section:0,severity:'critical',problem:'Wrong behavior.',suggestion:'Fix it.'}]};
+  const parsed=parseReview(JSON.stringify(feedback),valid,{level:'logic'});assert.equal(parsed.issues[0].view,'main');assert.equal(parsed.faithful,false,'normalizing an alias never clears a critical fidelity objection');
+  assert.throws(()=>parseReview(JSON.stringify({...feedback,issues:[{...feedback.issues[0],section:1}]}),valid,{level:'logic'}),error=>error.code==='YAMORI_REVIEW_FORMAT','one-based or original indices are not guessed');
+  assert.throws(()=>parseReview(JSON.stringify({...feedback,issues:[null]}),valid),error=>error.code==='YAMORI_REVIEW_FORMAT');
+});
+test('a failed repair after a known fidelity rejection retains the hard fidelity error',async()=>{
+  const {refineExplanation}=require('./engine');
+  await assert.rejects(refineExplanation({initial:valid,steps:1,evaluate:async()=>({score:6,faithful:false,issues:[]}),revise:async()=>{throw new Error('Bad revision references');}}),error=>error.code==='YAMORI_FIDELITY');
+});
+
+test('a malformed sibling review cannot hide an already reported fidelity failure',async()=>{
+  const {refineExplanation}=require('./engine');
+  await assert.rejects(refineExplanation({initial:valid,steps:1,evaluate:async(candidate,role)=>{if(role==='entropy')return {score:8,faithful:false,issues:[]};throw new Error('Malformed feedback references');},revise:async()=>valid}),error=>error.code==='YAMORI_FIDELITY');
 });

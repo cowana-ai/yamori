@@ -589,9 +589,9 @@ function createReader(context, navigation) {
         if (id !== serial) return;
         value = await generate({ source: snapshot, ...opts, signal: task.signal, onProgress: update => {
           if (id !== serial || task.signal.aborted) return;
-          progress = update.phase;
+          if (typeof update.phase === 'string' && update.phase.trim()) progress = update.phase;
           if (update.model) selectedModel = update.model;
-          if (activity.at(-1) !== update.phase) activity.push(update.phase);
+          if (typeof update.phase === 'string' && update.phase.trim() && activity.at(-1) !== update.phase) activity.push(update.phase);
           if (update.preview) preview = update.preview;
           post();
         } });
@@ -624,8 +624,8 @@ function createReader(context, navigation) {
     try {
       const updated = await generate({ source: snapshot, ...opts, edit: { section: original, draft: message.draft, instruction: message.instruction }, signal: task.signal, onProgress: update => {
         if (id !== serial || task.signal.aborted) return;
-        progress = update.phase; if (update.model) selectedModel = update.model;
-        if (activity.at(-1) !== update.phase) activity.push(update.phase);
+        if (typeof update.phase === 'string' && update.phase.trim()) progress = update.phase; if (update.model) selectedModel = update.model;
+        if (typeof update.phase === 'string' && update.phase.trim() && activity.at(-1) !== update.phase) activity.push(update.phase);
         // Keep all other blocks untouched while the selected one streams.
         if (update.preview?.sections?.[0]) preview = { ...base, sections: base.sections.map((s, i) => i === message.index ? { ...update.preview.sections[0], title: original.title } : s) };
         post();
@@ -695,10 +695,10 @@ function createReader(context, navigation) {
     cancel(); const id = serial, opts = options(contextSource), task = new AbortController(); controller = task;
     busy = true; error = ''; startedAt = Date.now(); activity = []; progress = one ? 'Updating cached block' : 'Updating cached explanation'; post();
     try {
-      const updated = await generate({ source: requestSource, ...opts, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: update => {
+      const updated = await generate({ source: requestSource, ...opts, initialDraft: !one && !stale && result === base && base.refinement?.status === 'incomplete' ? base : undefined, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: update => {
         if (id !== serial || task.signal.aborted) return;
-        progress = update.phase; if (update.model) selectedModel = update.model;
-        if (activity.at(-1) !== update.phase) activity.push(update.phase);
+        if (typeof update.phase === 'string' && update.phase.trim()) progress = update.phase; if (update.model) selectedModel = update.model;
+        if (typeof update.phase === 'string' && update.phase.trim() && activity.at(-1) !== update.phase) activity.push(update.phase);
         // Cached text remains visible and authoritative until the update validates.
         post();
       } });

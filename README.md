@@ -202,7 +202,7 @@ Open the AI menu → **Refine**, or run **Yamori: Choose Refinement Steps**.
 The default is **2 steps**, configurable from **0–5** through
 `yamori.refinementSteps`. Setting 0 skips selection and review. A new explanation
 uses two model requests when nothing needs refinement, or up to **3N + 4** when
-blocks are selected. More steps use more time and subscription capacity. All
+blocks are selected. More steps use more time and subscription capacity. A malformed evaluator response may add one bounded repair request for that evaluator. All
 sessions use your chosen provider, model and effort, with tools disabled.
 
 The first draft streams immediately so you can start reading while selection
@@ -215,6 +215,15 @@ candidate. N remains an upper bound, not a requirement to spend every pass. Stop
 If a later pass fails, an already reviewed candidate can be kept with a visible
 notice. If fidelity problems remain unresolved, no new explanation is promoted.
 An evaluator pass is a useful second opinion, not a correctness guarantee.
+
+Evaluator output is constrained to the views and zero-based blocks actually
+being reviewed. If feedback is malformed, Yamori asks only that evaluator to
+repair it once. If review still cannot finish, the valid generated explanation
+stays visible and cached with **Draft · review incomplete** and a **Retry review**
+action. Retrying unchanged code reuses that cached draft instead of paying for
+another generation. This fallback does not mark the draft as reviewed or bypass
+a known fidelity rejection. Error screens show a retry action rather than the
+first-use welcome screen, and empty activity entries are omitted.
 
 Final text and review metrics are cached locally, separated by refinement setting.
 Cached reads make no model requests. Existing pre-refinement caches stay readable;
@@ -374,13 +383,15 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 55 automated tests cover streaming before review, compact context, early completion/plateau stops, Restricted Mode TypeScript opening,
+**Validation:** 58 automated tests cover evaluator-reference repair, incomplete-review caching/retry, meaningful error states, streaming before review, compact context, early completion/plateau stops, Restricted Mode TypeScript opening,
 user-only CLI settings, blocked definition lookups, first-use provider selection,
 parallel reviewers, fidelity gating, scoped refinement, local caching/drafts,
 source changes and cancellation. An isolated native VS Code profile opened and
 explained a TypeScript file while remaining untrusted, ignored project-controlled
-CLI/usage settings, and activated Yamori automatically. Earlier native checks
-covered file watching, independent tabs and cache reuse.
+CLI/usage settings, and activated Yamori automatically. A separate native VS Code check reproduced persistently malformed evaluator
+feedback, retained both explanation blocks as an incomplete-review draft, and
+reopened them from cache with no inference. Earlier native checks covered file
+watching, independent tabs and cache reuse.
 
 Browser fixture checks cover narrow panels, math, editing/undo, navigation,
 cache warnings and retained drafts. A live Codex check selected an agreement-count

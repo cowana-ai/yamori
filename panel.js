@@ -431,7 +431,11 @@ function render(s) {
   document.querySelectorAll('[data-level]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.level === s.level)); });
   refresh.textContent = s.busy ? 'Stop' : 'Refresh all'; refresh.disabled = !s.name || (!!s.sourceMissing && !s.busy);
   content.setAttribute('aria-busy', String(!!s.busy)); content.replaceChildren();
-  if (s.result?.refinement?.warning) content.append(node('p', s.result.refinement.warning, 'notice'));
+  if (s.result?.refinement?.warning) {
+    const notice = node('div', undefined, 'notice'); notice.setAttribute('role', 'status'); notice.append(node('p', s.result.refinement.warning));
+    if (s.result.refinement.status === 'incomplete') { const retry = node('button', 'Retry review'); retry.disabled = !!s.busy || !!s.sourceMissing; retry.addEventListener('click', () => { flushDrafts(); send('refresh'); }); notice.append(retry); }
+    content.append(notice);
+  }
   if (s.modelNotice) content.append(node('p', s.modelNotice, 'notice'));
   if (s.error) {
     const el = node('div', undefined, 'notice error'); el.setAttribute('role', 'alert'); el.append(node('p', s.error));
@@ -459,10 +463,11 @@ function render(s) {
   }
   if (s.cacheWarning) { const warning = node('p', s.cacheWarning, 'notice error'); warning.setAttribute('role', 'alert'); content.append(warning); }
 
-  if (s.activity?.length) {
+  const activitySteps = (s.activity || []).filter(step => typeof step === 'string' && step.trim());
+  if (activitySteps.length) {
     const activity = node('details', undefined, 'activity');
     const caption = node('summary'); caption.id = 'activity-caption';
-    const list = node('ol'); s.activity.forEach(step => list.append(node('li', step)));
+    const list = node('ol'); activitySteps.forEach(step => list.append(node('li', step)));
     activity.append(caption, list); content.append(activity);
   }
   const aiSummary = document.getElementById('ai-summary');
@@ -620,11 +625,13 @@ function render(s) {
     const earlier = (s.drafts || []).filter(row => !currentKeys.has(row.key));
     if (earlier.length) { const list = node('details', undefined, 'earlier-drafts'); list.append(node('summary', earlier.length + ' earlier draft' + (earlier.length === 1 ? '' : 's') + ' cached locally')); for (const row of earlier) { const entry = node('div'); entry.append(node('span', row.title)); const copy = node('button', 'Copy draft'); copy.addEventListener('click', () => send('copyDraft', { scope: s.draftScope, key: row.key })); entry.append(copy); list.append(entry); } content.append(list); }
     const footer = node('footer');
-    if (s.result?.refinement) footer.append(node('span', s.result.refinement.status === 'skipped' ? 'Straightforward code · refinement skipped' : 'Refined ' + s.result.refinement.selectedBlocks?.length + (s.result.refinement.selectedBlocks?.length === 1 ? ' block · ' : ' blocks · ') + s.result.refinement.stepsCompleted + '/' + s.result.refinement.stepsRequested + ' steps'));
+    if (s.result?.refinement) footer.append(node('span', s.result.refinement.status === 'incomplete' ? 'Draft · review incomplete' : s.result.refinement.status === 'skipped' ? 'Straightforward code · refinement skipped' : 'Refined ' + s.result.refinement.selectedBlocks?.length + (s.result.refinement.selectedBlocks?.length === 1 ? ' block · ' : ' blocks · ') + s.result.refinement.stepsCompleted + '/' + s.result.refinement.stepsRequested + ' steps'));
     footer.append(node('span', s.partial ? s.result.draftComplete ? 'Draft · reviews running · final result will be cached' : 'Writing draft · source links activate when complete' : s.stale ? 'Cached locally · source needs review' : s.cacheSavedAt ? 'Cached on this device · ' + dateLabel(s.cacheSavedAt) : 'AI-generated · Verify against source'));
     const copy = node('button', 'Copy'); copy.disabled = !!s.partial; copy.addEventListener('click', () => send('copy')); footer.append(copy); content.append(footer);
   } else if (s.busy) {
     for (let i = 0; i < 8; i++) { const line = node('div', undefined, 'skeleton'); line.style.width = i % 3 === 0 ? '55%' : '90%'; content.append(line); }
+  } else if (s.error) {
+    const retry = node('button', 'Try again', 'primary'); retry.addEventListener('click', () => send('refresh')); content.append(retry);
   } else {
     const empty = node('div', undefined, 'empty');
     empty.append(node('h1', 'Big ideas. Less guesswork.'), node('p', 'Open a script. Pick an idea from its logic map. Read, explore, and make it your own.'));
