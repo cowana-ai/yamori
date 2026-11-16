@@ -230,7 +230,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test \"test/**/*.test.js\"",
     "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/schemas.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/mcp.js && node --check src/storage/cache.js",
     "build:validation": "node src/ai/schemas.js",
     "build:parser": "node src/project/graph.js"
