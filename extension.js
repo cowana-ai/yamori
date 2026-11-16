@@ -3,9 +3,11 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps } = require('./engine');
+const { runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./engine');
 const { panelHTML } = require('./panel');
 const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks } = require('./cache');
+const { mapHTML } = require('./map');
+const project = require('./project');
 
 const INCLUDE = '**/*.{py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,h,hpp,rb,php,swift,dart,r,R,sh,bash,lua,pl,sql,vue,svelte}';
 const EXCLUDE = '**/{node_modules,.git,.venv,venv,env,dist,build,out,vendor,.next,coverage,__pycache__}/**';
@@ -82,6 +84,455 @@ async function collectCallContext(snapshot, api = vscode, timeout = 1600) {
   return { ...snapshot, callContext };
 }
 
+// Hover text is escaped; only Yamori's own two commands may run from its links.
+function hoverMarkdown(info, api = vscode) {
+  const md = new api.MarkdownString();
+  md.isTrusted = { enabledCommands: ['yamori.openAt', 'yamori.showSource'] };
+  const link = (label, command, uri, line) => '[' + label + '](command:' + command + '?' + encodeURIComponent(JSON.stringify([uri, line])) + ')';
+  md.appendMarkdown('**'); md.appendText(info.word); md.appendMarkdown('** · Yamori\n\n');
+  if (info.term) {
+    md.appendText(info.term.meaning); md.appendMarkdown('\n\n');
+    md.appendText('Defined in ' + info.term.file + ':' + info.term.line + (info.term.outdated ? ' (note may be outdated)' : ''));
+    md.appendMarkdown(' · ' + link('Show definition', 'yamori.showSource', info.term.uri, info.term.line) + '\n\n');
+  }
+  for (const def of info.definitions) {
+    md.appendText(def.kind + ' in ' + def.file + ':' + def.line + (def.block ? ' · explained in "' + def.block + '"' : '')); md.appendMarkdown('\n\n');
+    if (def.purpose) { md.appendText(def.purpose); md.appendMarkdown('\n\n'); }
+    md.appendMarkdown(link(def.block ? 'Open in Yamori' : 'Explain in Yamori', 'yamori.openAt', def.uri, def.line) + ' · ' + link('Go to definition', 'yamori.showSource', def.uri, def.line) + '\n\n');
+  }
+  return md;
+}
+
+// The quick-job model for a provider: AI notes, Overview and block picking.
+function quickModel(provider, cliPath, api = vscode) {
+  return fastModel(provider, cliPath, setting(api, 'fastModel', 'auto')).catch(() => undefined);
+}
+
+// The provider, model and effort the reader would use for its next request.
+function connectionOptions(globalState, provider, api = vscode) {
+  const choice = globalState.get(provider + 'Model');
+  const model = typeof choice?.id === 'string' ? choice.id : '';
+  const override = globalState.get('effortChoices', {})[provider + ':' + model];
+  // Without a choice, both providers think at low effort. On a dense 162-line
+  // file Opus started writing after 2 s at low, against 77 s at medium.
+  const effort = override === 'auto' ? null : typeof override === 'string' ? override : model ? choice.effort ?? null : 'low';
+  return { provider, model, effort, cliPath: setting(api, provider === 'claude' ? 'claudePath' : 'codexPath') };
+}
+
+// Project map: one local graph (plus optional AI notes and moved node
+// positions) per mapped folder. The scan reads files but never runs them and
+// never asks a language service, so it also works in Restricted Mode.
+function createProjectMap(context, { openFile, api = vscode, indexer = new project.Indexer() } = {}) {
+  const cache = new LocalCache(path.join(context.globalStorageUri.fsPath, 'cache'));
+  const maps = new Map(), listeners = new Set();
+  // Readers, hovers and CodeLens refresh when a map, its notes or an explanation change.
+  const changed = () => { for (const listener of listeners) { try { listener(); } catch { /* One listener cannot block another. */ } } };
+  const relative = (root, fsPath) => { const rel = path.relative(root, fsPath); return !rel || rel.startsWith('..') || path.isAbsolute(rel) ? undefined : rel.split(path.sep).join('/'); };
+  const fileUri = (entry, rel) => api.Uri.joinPath ? api.Uri.joinPath(entry.root, ...rel.split('/')) : api.Uri.file(path.join(entry.root.fsPath, ...rel.split('/')));
+  async function entryFor(root) {
+    const key = root.toString();
+    if (!maps.has(key)) {
+      const store = new project.ProjectStore(cache, key);
+      maps.set(key, { key, root, store, loading: store.load().then(loaded => Object.assign(maps.get(key), loaded)), graph: undefined, notes: { files: {} }, layout: {}, explanations: {}, guideFolder: '' });
+    }
+    const entry = maps.get(key);
+    await entry.loading;
+    return entry;
+  }
+  // The deepest mapped folder containing a file, else its workspace folder.
+  async function entryForFile(uri) {
+    if (uri?.scheme !== 'file') return undefined;
+    const mapped = [...maps.values()].filter(entry => relative(entry.root.fsPath, uri.fsPath)).sort((a, b) => b.root.fsPath.length - a.root.fsPath.length)[0];
+    if (mapped) return mapped;
+    const folder = api.workspace.getWorkspaceFolder?.(uri);
+    return folder ? entryFor(folder.uri) : undefined;
+  }
+  function counts(entry) {
+    const files = Object.entries(entry.graph?.files || {}).filter(([, file]) => !file.test);
+    const notes = entry.notes.files || {};
+    return { total: files.length, done: files.filter(([rel]) => notes[rel]).length, outdated: files.filter(([rel, file]) => notes[rel] && notes[rel].hash !== file.hash).length };
+  }
+  // Folded folders and moved boxes, remembered per mapped folder.
+  function grouped(entry) {
+    const saved = entry.layout.grouped || {};
+    return { positions: saved.positions && typeof saved.positions === 'object' ? saved.positions : {}, collapsed: Array.isArray(saved.collapsed) ? saved.collapsed : project.defaultCollapsed(entry.graph) };
+  }
+  function groupKeys(entry) {
+    const rels = Object.keys(entry.graph?.files || {}), depth = project.folderDepth(rels);
+    return new Set(rels.map(rel => project.folderOf(rel, depth)));
+  }
+  async function saveGrouped(entry, change) {
+    entry.layout = { ...entry.layout, grouped: { ...grouped(entry), ...change } };
+    await entry.store.save('layout', entry.layout);
+  }
+  function whyStep(graph, step, folder) {
+    if (step.why) return step.why;
+    if (step.via) return 'Used by ' + step.via.split('/').at(-1) + (step.names?.length ? ' for ' + step.names.join(', ') : '') + '.';
+    if (graph.files[step.id].entry) return 'Entry point: the program starts here.';
+    if (step.usedOutside) return 'The way into this folder: used by ' + step.usedOutside + ' file' + (step.usedOutside === 1 ? '' : 's') + ' outside it.';
+    return 'Starts a separate part of ' + (folder ? 'this folder.' : 'the project.');
+  }
+  function stateOf(entry) {
+    const graph = entry.graph, notes = entry.notes;
+    const base = { readingPalette: context.globalState.get('readingPalette', 'auto'), busy: !!entry.busy, notesBusy: !!entry.notesController, autoNotes: setting(api, 'autoNotes', true) !== false && api.workspace.isTrusted !== false, progress: entry.progress, error: entry.error, notes: counts(entry),
+      ...(entry.focus ? { focus: entry.focus.id, focusToken: entry.focus.token } : {}), ...(entry.viewRequest ? { view: entry.viewRequest.view, viewToken: entry.viewRequest.token } : {}) };
+    if (!graph) return { ...base, folders: [], guide: { folder: '', steps: [] }, map: { boxes: [], nodes: [], edges: [] }, files: 0, links: 0 };
+    const known = new Set(Object.keys(graph.files));
+    const aiOrder = (notes.readingPath || []).map(step => step.file).filter(file => known.has(file));
+    const layout = grouped(entry);
+    const map = project.layoutGrouped(graph, { collapsed: layout.collapsed, saved: layout.positions, order: aiOrder.length ? aiOrder : undefined });
+    const folders = project.folderTree(graph);
+    const folder = folders.some(item => item.key === entry.guideFolder) ? entry.guideFolder : '';
+    const out = project.linksFor;
+    const steps = project.readingPathFor(graph, notes, folder).slice(0, 80).map(step => {
+      const links = out(graph, step.id, 4);
+      return { id: step.id, why: whyStep(graph, step, folder), purpose: notes.files?.[step.id]?.purpose, uses: links.uses.map(link => link.file), usedBy: links.usedBy.map(link => link.file),
+        terms: (notes.files?.[step.id]?.terms || []).slice(0, 8).map(term => ({ term: term.term, meaning: term.meaning, line: term.line })),
+        explained: !!entry.explanations?.[step.id], entry: !!graph.files[step.id].entry };
+    });
+    const cards = {};
+    for (const node of map.nodes) {
+      if (node.kind !== 'file') continue;
+      const file = graph.files[node.id], note = notes.files?.[node.id];
+      cards[node.id] = { ...(note ? { purpose: note.purpose, role: note.role, terms: note.terms, ...(note.hash !== file.hash ? { outdated: true } : {}) } : {}), explained: !!entry.explanations?.[node.id],
+        defs: file.defs.filter(def => ['class', 'function', 'interface', 'type', 'enum'].includes(def.kind)).slice(0, 10).map(def => def.name) };
+    }
+    const glossary = project.glossaryOf(graph, notes).map(term => ({ term: term.term, aliases: term.aliases, meaning: term.meaning, kind: term.kind, file: term.file, line: term.line }));
+    return { ...base, folders, guide: { folder, steps }, map, overview: notes.overview, cards, glossary,
+      files: known.size, links: graph.edges.length, scannedAt: graph.scannedAt, limited: !!graph.limited };
+  }
+  function post(entry) { entry.panel?.webview.postMessage({ type: 'map', state: stateOf(entry) }); }
+  async function readSource(entry, rootReal, uri) {
+    // A symlink must not pull files from outside the mapped folder, even when
+    // the file is open with unsaved edits.
+    const real = await fs.realpath(uri.fsPath);
+    if (!relative(rootReal, real)) throw new Error('Outside the mapped folder.');
+    const doc = api.workspace.textDocuments?.find(item => item.uri.toString() === uri.toString());
+    if (doc?.isDirty) return doc.getText();
+    if ((await fs.stat(real)).size > project.MAX_FILE_BYTES) throw new Error('Too large.');
+    return fs.readFile(real, 'utf8');
+  }
+  async function scan(entry) {
+    if (entry.scanning) { entry.rescan = true; return entry.scanning; }
+    entry.busy = true; entry.progress = 'Scanning files…'; entry.error = ''; post(entry);
+    entry.scanning = (async () => {
+      try {
+        const found = await api.workspace.findFiles(new api.RelativePattern(entry.root, INCLUDE), EXCLUDE, project.MAX_FILES + 1);
+        const rootReal = await fs.realpath(entry.root.fsPath);
+        const files = found.map(uri => ({ uri, rel: relative(entry.root.fsPath, uri.fsPath) })).filter(item => item.rel).sort((a, b) => a.rel.localeCompare(b.rel));
+        const limited = files.length > project.MAX_FILES;
+        const manifests = {};
+        for (const uri of await api.workspace.findFiles(new api.RelativePattern(entry.root, '**/{package.json,go.mod,Cargo.toml}'), EXCLUDE, 50)) {
+          const rel = relative(entry.root.fsPath, uri.fsPath);
+          if (rel) try { manifests[rel] = await readSource(entry, rootReal, uri); } catch { /* Unreadable manifests add nothing. */ }
+        }
+        const scanned = await project.scanFiles(files.slice(0, project.MAX_FILES).map(item => ({ rel: item.rel, read: () => readSource(entry, rootReal, item.uri) })), entry.graph, indexer,
+          { onProgress: ({ done, total }) => { entry.progress = `Scanning files ${done}/${total}…`; post(entry); } });
+        entry.graph = { ...project.buildGraph(scanned.records, manifests), scannedAt: Date.now(), limited, root: entry.key };
+        try { await entry.store.save('graph', entry.graph); } catch (e) { entry.error = 'The project map could not be saved locally: ' + e.message; }
+      } catch (e) { entry.error = 'Project scan failed: ' + e.message; }
+      finally { entry.busy = false; entry.progress = undefined; entry.scanning = undefined; post(entry); changed(); if (!entry.error) scheduleAutoNotes(entry); }
+      if (entry.rescan) { entry.rescan = false; await scan(entry); }
+    })();
+    return entry.scanning;
+  }
+  function watch(entry) {
+    if (entry.watchers || !api.workspace.createFileSystemWatcher || !api.RelativePattern) return;
+    const watcher = api.workspace.createFileSystemWatcher(new api.RelativePattern(entry.root, INCLUDE));
+    const queue = () => { clearTimeout(entry.timer); entry.timer = setTimeout(() => { if (entry.panel) void scan(entry); }, 1200); };
+    entry.watchers = [watcher, watcher.onDidCreate(queue), watcher.onDidDelete(queue), watcher.onDidChange(queue)];
+    entry.queue = queue;
+  }
+  function unwatch(entry) { clearTimeout(entry.timer); clearTimeout(entry.notesTimer); entry.watchers?.forEach(item => item.dispose()); entry.watchers = undefined; }
+  // AI notes run on their own after each scan (auto) or from the button. Auto
+  // runs stay quiet, ask once only for big projects, and stop after a failure.
+  const AUTO_NOTES_LIMIT = 120;
+  function scheduleAutoNotes(entry) {
+    if (setting(api, 'autoNotes', true) === false || api.workspace.isTrusted === false || entry.autoFailed || entry.autoDeclined || !entry.graph || !entry.panel) return;
+    clearTimeout(entry.notesTimer);
+    entry.notesTimer = setTimeout(() => { if (!entry.notesController && entry.panel) void runNotes(entry, { auto: true }); }, 1500);
+  }
+  async function runNotes(entry, { auto = false } = {}) {
+    if (entry.notesController) return;
+    if (!auto) { entry.autoFailed = false; entry.autoDeclined = false; }
+    if (!entry.graph) { if (auto) return; await scan(entry); }
+    const graph = entry.graph; if (!graph) return;
+    const provider = PROVIDERS[context.globalState.get('provider')] ? context.globalState.get('provider') : 'codex';
+    const main = connectionOptions(context.globalState, provider, api);
+    const connection = { ...main, ...(await quickModel(provider, main.cliPath, api) || {}) };
+    const rootReal = await fs.realpath(entry.root.fsPath);
+    const order = new Map(graph.readingPath.map((step, index) => [step.id, index]));
+    const pending = Object.entries(graph.files).filter(([rel, file]) => !file.test && entry.notes.files[rel]?.hash !== file.hash)
+      .sort(([a, fa], [b, fb]) => (order.get(a) ?? 1e6) - (order.get(b) ?? 1e6) || fb.rank - fa.rank || a.localeCompare(b));
+    const items = [];
+    for (const [rel, file] of pending) {
+      try {
+        const text = await readSource(entry, rootReal, fileUri(entry, rel));
+        const links = project.linksFor(graph, rel, 4);
+        items.push({ rel, text, record: file, language: file.language, hash: hash(text), links: { uses: links.uses.map(link => link.file), usedBy: links.usedBy.map(link => link.file) } });
+      } catch { /* Unreadable files keep their previous note. */ }
+    }
+    // Automatic runs refresh the project summary only when files are new to it.
+    const needsSummary = auto ? !entry.notes.summaryAt || items.some(item => !entry.notes.files[item.rel]) : !!items.length || !entry.notes.summaryAt;
+    if (!items.length && !needsSummary) { if (!auto) api.window.showInformationMessage('Yamori: AI notes are up to date.'); return; }
+    const batches = project.noteBatches(items), requests = batches.length + (needsSummary ? 1 : 0);
+    const label = PROVIDERS[provider] + (connection.model ? ' · ' + connection.model : '') + (connection.effort ? ' · ' + connection.effort + ' effort' : '');
+    if (!auto || items.length > AUTO_NOTES_LIMIT) {
+      if (auto) entry.autoAsked = true;
+      const action = auto ? 'Write notes' : 'Add notes';
+      const choice = await api.window.showWarningMessage(`${auto ? 'This project has ' + items.length + ' files without AI notes. Write' : 'Add'} AI notes for ${items.length} file${items.length === 1 ? '' : 's'} with ${label}? This sends their source text to the provider and uses about ${requests} model request${requests === 1 ? '' : 's'}. Tools stay disabled.`, { modal: true }, action);
+      if (choice !== action) { if (auto) { entry.autoDeclined = true; entry.error = 'AI notes are paused for this large project. Press Write AI notes when you want them.'; post(entry); } return; }
+    }
+    const controller = new AbortController();
+    entry.notesController = controller; entry.error = ''; post(entry);
+    let changed = false, failure;
+    const notify = () => { for (const listener of listeners) { try { listener(); } catch { /* ignored */ } } };
+    const run = async (progress, token) => {
+      token?.onCancellationRequested?.(() => controller.abort());
+      // Three batches at a time; each finished batch is saved at once.
+      let next = 0, done = 0;
+      entry.progress = `Writing AI notes 0/${batches.length}…`; post(entry);
+      const worker = async () => {
+        while (next < batches.length && !controller.signal.aborted) {
+          const batch = batches[next++];
+          const response = await requestStructured({ ...connection, prompt: notesPrompt(batch), schema: NOTES_SCHEMA, signal: controller.signal, showPreview: false });
+          if (controller.signal.aborted) throw new Error('Cancelled.');
+          Object.assign(entry.notes.files, parseNotes(response.raw, batch)); changed = true; done++;
+          entry.progress = `Writing AI notes ${done}/${batches.length}…`; progress?.report?.({ message: entry.progress, increment: 100 / requests }); notify();
+          await entry.store.save('notes', entry.notes); post(entry);
+        }
+      };
+      // A failed batch stops its siblings; that is a failure, not the user's Stop.
+      try { await Promise.all(Array.from({ length: Math.min(3, batches.length) }, worker)); }
+      catch (error) { failure ||= error; controller.abort(); throw failure; }
+      if (needsSummary) {
+        entry.progress = 'Writing the project guide…'; post(entry); progress?.report?.({ message: entry.progress, increment: 100 / requests });
+        const files = Object.entries(graph.files).filter(([, file]) => !file.test).sort((a, b) => b[1].rank - a[1].rank).slice(0, 300).map(([rel, file]) => {
+          const note = entry.notes.files[rel], links = project.linksFor(graph, rel, 5);
+          return { file: rel, ...(note ? { purpose: note.purpose, role: note.role } : {}), ...(file.entry ? { entry: true } : {}), rank: Math.round(file.rank * 1000) / 1000, uses: links.uses.map(link => link.file), usedBy: links.usedBy.map(link => link.file) };
+        });
+        const response = await requestStructured({ ...connection, prompt: mapSummaryPrompt({ files, entries: graph.entries, suggestedPath: graph.readingPath.map(step => step.id) }), schema: MAP_SUMMARY_SCHEMA, signal: controller.signal, showPreview: false });
+        if (controller.signal.aborted) throw new Error('Cancelled.');
+        Object.assign(entry.notes, parseMapSummary(response.raw, Object.keys(graph.files)), { summaryAt: Date.now(), model: response.actualModel || connection.model || undefined });
+        await entry.store.save('notes', entry.notes); changed = true; notify();
+      }
+    };
+    try {
+      // Automatic notes show a quiet status-bar spinner; the guide has Stop.
+      if (api.window.withProgress && api.ProgressLocation) await api.window.withProgress(auto ? { location: api.ProgressLocation.Window, title: 'Yamori: writing AI notes' } : { location: api.ProgressLocation.Notification, title: 'Yamori · AI notes', cancellable: true }, run);
+      else await run();
+    } catch (e) {
+      const stopped = controller.signal.aborted && !failure;
+      if (auto && !stopped) entry.autoFailed = true;
+      entry.error = stopped ? 'AI notes stopped. Notes written so far are saved.' : (auto ? 'AI notes could not be written automatically: ' : 'AI notes failed: ') + e.message + (changed ? ' Notes written so far are saved.' : '') + (auto ? ' Press Write AI notes to retry.' : '');
+    } finally { entry.notesController = undefined; entry.progress = undefined; post(entry); }
+  }
+  function ensurePanel(entry) {
+    if (entry.panel) { entry.panel.reveal(entry.panel.viewColumn); return; }
+    const panel = api.window.createWebviewPanel('yamoriMap', 'Project map · ' + path.basename(entry.root.fsPath), { viewColumn: api.ViewColumn.Active ?? api.ViewColumn.One, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
+    if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'yamori.png');
+    panel.webview.html = mapHTML(context.globalState.get('readingPalette', 'auto'));
+    entry.panel = panel; watch(entry);
+    panel.onDidDispose(() => { entry.panel = undefined; unwatch(entry); entry.notesController?.abort(); });
+    panel.webview.onDidReceiveMessage(async message => {
+      try { await receive(entry, message); } catch (e) { entry.error = e.message; post(entry); }
+    });
+  }
+  async function receive(entry, message) {
+    if (!message || typeof message.type !== 'string') return;
+    const file = typeof message.id === 'string' && entry.graph?.files[message.id] ? message.id : undefined;
+    switch (message.type) {
+      case 'ready': post(entry); break;
+      case 'openFile': {
+        // Start here opens files as a tour of the chosen folder.
+        const tour = typeof message.tour === 'string' && (message.tour === '' || project.folderTree(entry.graph).some(item => item.key === message.tour)) ? message.tour : undefined;
+        if (file) await openFile(fileUri(entry, file), tour === undefined ? {} : { tour });
+        break;
+      }
+      case 'revealSource': if (file) await reveal(entry, file, message.line); break;
+      case 'rescan': await scan(entry); break;
+      case 'notes': await runNotes(entry); break;
+      case 'stop': entry.notesController?.abort(); break;
+      case 'guideFolder':
+        if (typeof message.folder === 'string' && entry.graph && project.folderTree(entry.graph).some(item => item.key === message.folder)) { entry.guideFolder = message.folder; post(entry); }
+        break;
+      case 'toggleFolder': {
+        if (typeof message.folder !== 'string' || !groupKeys(entry).has(message.folder)) break;
+        const collapsed = new Set(grouped(entry).collapsed);
+        collapsed.has(message.folder) ? collapsed.delete(message.folder) : collapsed.add(message.folder);
+        await saveGrouped(entry, { collapsed: [...collapsed] }); post(entry); break;
+      }
+      case 'foldAll': if (entry.graph) { await saveGrouped(entry, { collapsed: message.collapsed ? [...groupKeys(entry)] : [] }); post(entry); } break;
+      case 'focusMap': {
+        if (!file) break;
+        const rels = Object.keys(entry.graph.files), key = project.folderOf(file, project.folderDepth(rels));
+        const collapsed = grouped(entry).collapsed.filter(item => item !== key);
+        await saveGrouped(entry, { collapsed });
+        entry.focus = { id: file, token: Date.now() }; entry.viewRequest = { view: 'map', token: Date.now() }; post(entry); break;
+      }
+      case 'saveLayout': {
+        if (typeof message.id !== 'string' || !message.id.startsWith('folder:') || !groupKeys(entry).has(message.id.slice(7)) || !Number.isFinite(message.x) || !Number.isFinite(message.y)) break;
+        await saveGrouped(entry, { positions: { ...grouped(entry).positions, [message.id]: { x: Math.round(message.x), y: Math.round(message.y) } } }); break;
+      }
+      case 'resetLayout': await saveGrouped(entry, { positions: {} }); post(entry); break;
+    }
+  }
+  async function reveal(entry, rel, line, viewColumn) {
+    const doc = await api.workspace.openTextDocument(fileUri(entry, rel));
+    const target = Number.isInteger(line) ? Math.max(0, Math.min(doc.lineCount - 1, line - 1)) : 0;
+    const range = new api.Range(target, 0, target, 0);
+    await api.window.showTextDocument(doc, { viewColumn: viewColumn ?? api.ViewColumn.Beside, preserveFocus: false, preview: true, selection: range });
+  }
+  return {
+    async show(folderUri, focusUri) {
+      const root = folderUri || (focusUri && api.workspace.getWorkspaceFolder?.(focusUri)?.uri) || api.workspace.workspaceFolders?.[0]?.uri;
+      if (!root) throw new Error('Open a folder or workspace to map its project.');
+      const entry = focusUri ? await entryForFile(focusUri) || await entryFor(root) : await entryFor(root);
+      // Opened from a file: start in that file's folder with the file highlighted.
+      // The webview applies each token once, even if it loads after this post.
+      const rel = focusUri && relative(entry.root.fsPath, focusUri.fsPath);
+      if (rel) {
+        const parts = rel.split('/').slice(0, -1);
+        entry.guideFolder = parts.slice(0, 4).join('/');
+        entry.focus = { id: rel, token: Date.now() };
+      }
+      entry.viewRequest = { view: 'start', token: Date.now() };
+      ensurePanel(entry); post(entry);
+      await scan(entry);
+      return entry;
+    },
+    // A bounded slice of the stored map for one explanation; undefined until a
+    // folder has been mapped, so explanations never trigger a scan.
+    async contextFor(snapshot) {
+      if (!snapshot?.uri?.startsWith('file:')) return undefined;
+      const uri = api.Uri.parse(snapshot.uri), entry = await entryForFile(uri);
+      if (!entry?.graph) return undefined;
+      const rel = relative(entry.root.fsPath, uri.fsPath);
+      return rel ? project.projectContextFor(entry.graph, entry.notes, rel, snapshot.text, entry.explanations) : undefined;
+    },
+    // How the CLI starts Yamori's read-only knowledge server for one request.
+    // Off in Restricted Mode, when disabled, or before the folder is mapped.
+    async toolsFor(snapshot) {
+      if (api.workspace.isTrusted === false || setting(api, 'agentTools', true) === false || !snapshot?.uri?.startsWith('file:')) return undefined;
+      const entry = await entryForFile(api.Uri.parse(snapshot.uri));
+      if (!entry?.graph) return undefined;
+      return { command: process.execPath, args: [path.join(__dirname, 'mcp.js'), '--store', entry.store.dir, '--root', entry.root.fsPath], env: { ELECTRON_RUN_AS_NODE: '1' } };
+    },
+    async recordExplanation(snapshot, level, value) {
+      if (!snapshot?.uri?.startsWith('file:') || snapshot.selected || !Array.isArray(value?.sections) || !LEVELS[level]) return;
+      const uri = api.Uri.parse(snapshot.uri), entry = await entryForFile(uri);
+      const rel = entry?.graph && relative(entry.root.fsPath, uri.fsPath);
+      if (!rel || !entry.graph.files[rel]) return;
+      const pack = view => ({ title: view.title, summary: view.summary, sections: view.sections.map(({ title, startLine, endLine, pseudocode }) => ({ title, startLine, endLine, pseudocode })), hash: snapshot.fullHash, savedAt: Date.now() });
+      const saved = { ...(entry.explanations[rel] || {}), [level]: pack(value) };
+      for (const [name, view] of Object.entries(value.views || {})) if (LEVELS[name] && name !== level) saved[name] = pack(view);
+      entry.explanations = { ...entry.explanations, [rel]: saved };
+      await entry.store.save('explanations', entry.explanations);
+      if (entry.panel) post(entry);
+      changed();
+    },
+    // Facts for file pickers: the AI-note purpose and whether Yamori explained it.
+    async fileFacts(uri) {
+      const entry = await entryForFile(uri), rel = entry?.graph && relative(entry.root.fsPath, uri.fsPath);
+      if (!rel) return {};
+      return { purpose: entry.notes.files?.[rel]?.purpose, explained: !!entry.explanations?.[rel] };
+    },
+    async revealDefinition(sourceUri, defined, viewColumn) {
+      const match = typeof defined === 'string' && defined.match(/^(.*):(\d+)$/);
+      const entry = match && await entryForFile(api.Uri.parse(sourceUri));
+      if (!entry?.graph?.files[match[1]]) return;
+      await reveal(entry, match[1], Number(match[2]), viewColumn);
+    },
+    onChange(listener) { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; },
+    // Unit tests that exercise each block's functions, from the map. No AI.
+    async testsForBlocks(uri, sections) {
+      const entry = uri?.scheme === 'file' ? await entryForFile(uri) : undefined;
+      const rel = entry?.graph && relative(entry.root.fsPath, uri.fsPath);
+      if (!rel || !Array.isArray(sections)) return {};
+      const found = {};
+      sections.forEach((section, index) => { const tests = project.testsFor(entry.graph, rel, section.startLine, section.endLine); if (tests.length) found[index] = tests; });
+      return found;
+    },
+    // The files, lines and source text one test run needs, read through the map.
+    async testRunInfo(uri, test) {
+      const entry = uri?.scheme === 'file' ? await entryForFile(uri) : undefined;
+      const rel = entry?.graph && relative(entry.root.fsPath, uri.fsPath), testFile = entry?.graph?.files[test?.file];
+      if (!rel || !testFile?.test || !testFile.tests?.some(item => item.name === test.name)) return undefined;
+      const rootReal = await fs.realpath(entry.root.fsPath), testUri = fileUri(entry, test.file);
+      const [sourceText, testText] = await Promise.all([readSource(entry, rootReal, uri), readSource(entry, rootReal, testUri)]);
+      // Tests run from their own project folder, as `pytest` would there.
+      let projectRoot = entry.root.fsPath;
+      for (let dir = path.dirname(testUri.fsPath); relative(entry.root.fsPath, dir) !== undefined || dir === entry.root.fsPath; dir = path.dirname(dir)) {
+        const found = await Promise.all(['pyproject.toml', 'setup.py', 'setup.cfg', 'pytest.ini', 'tox.ini'].map(name => fs.stat(path.join(dir, name)).then(() => true, () => false)));
+        if (found.some(Boolean)) { projectRoot = dir; break; }
+        if (dir === entry.root.fsPath) break;
+      }
+      return { root: projectRoot, workspaceRoot: entry.root.fsPath, testFile: testUri.fsPath, testName: test.name, target: { file: uri.fsPath, function: test.function, line: test.functionLine, end: test.functionEnd },
+        functionText: sourceText.split('\n').slice(test.functionLine - 1, test.functionEnd).join('\n'), testText: testText.split('\n').slice(test.line - 1, test.end).join('\n') };
+    },
+    // Where a file sits in a reading order, with its neighbours, for the tour bar.
+    async tourFor(uri, folder) {
+      const entry = uri?.scheme === 'file' ? await entryForFile(uri) : undefined;
+      const rel = entry?.graph && relative(entry.root.fsPath, uri.fsPath);
+      const step = rel && project.tourStep(entry.graph, entry.notes, rel, folder);
+      if (!step) return undefined;
+      const links = project.linksFor(entry.graph, rel, 4);
+      const item = id => id ? { id, label: id.split('/').at(-1), uri: fileUri(entry, id).toString(), explained: !!entry.explanations?.[id] } : undefined;
+      return { folder: step.folder, label: step.folder ? step.folder + '/' : 'whole project', index: step.index, total: step.steps.length,
+        prev: item(step.steps[step.index - 1]), next: item(step.steps[step.index + 1]), uses: links.uses.map(link => item(link.file)), usedBy: links.usedBy.map(link => item(link.file)) };
+    },
+    // Project names an explanation of this file can link to.
+    async symbolsFor(snapshot) {
+      if (!snapshot?.uri?.startsWith('file:')) return [];
+      const uri = api.Uri.parse(snapshot.uri), entry = await entryForFile(uri);
+      const rel = entry?.graph && relative(entry.root.fsPath, uri.fsPath);
+      return rel ? project.symbolLinks(entry.graph, rel, entry.explanations, entry.notes).map(link => ({ ...link, uri: fileUri(entry, link.file).toString() })) : [];
+    },
+    // Editor hover: a project term or definition Yamori knows. No AI.
+    async hoverInfo(uri, word) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(word || '') || word.length < 2) return undefined;
+      const entry = uri?.scheme === 'file' ? await entryForFile(uri) : undefined;
+      const rel = entry?.graph && relative(entry.root.fsPath, uri.fsPath);
+      if (!rel || !entry.graph.files[rel]) return undefined;
+      const graph = entry.graph, uses = new Set(graph.edges.filter(edge => edge.from === rel).map(edge => edge.to));
+      const term = project.glossaryOf(graph, entry.notes).find(item => item.meaning && (item.term === word || item.aliases?.includes(word)));
+      const definitions = [];
+      // Only this file and files it uses: a local variable elsewhere is not this name.
+      for (const file of [rel, ...uses]) for (const def of graph.files[file]?.defs || []) if (def.name === word && !graph.files[file].test) definitions.push({ file, line: def.line, kind: def.kind });
+      const shown = definitions.slice(0, 3).map(def => {
+        const block = project.blockAt(entry.explanations, def.file, def.line), purpose = entry.notes.files?.[def.file]?.purpose;
+        return { ...def, uri: fileUri(entry, def.file).toString(), ...(block ? { block: block.title } : {}), ...(purpose ? { purpose } : {}) };
+      });
+      if (!term && !shown.length) return undefined;
+      return { word, ...(term ? { term: { meaning: term.meaning, file: term.file, line: term.line, uri: fileUri(entry, term.file).toString(), ...(term.outdated ? { outdated: true } : {}) } } : {}), definitions: shown };
+    },
+    // CodeLens: Yamori's block titles above the code they explain, while the
+    // explanation still matches the text; otherwise one "Explain" lens.
+    async lensesFor(uri, text) {
+      if (setting(api, 'codeLens', true) === false) return [];
+      const entry = uri?.scheme === 'file' ? await entryForFile(uri) : undefined;
+      const rel = entry?.graph && relative(entry.root.fsPath, uri.fsPath);
+      if (!rel || !entry.graph.files[rel] || entry.graph.files[rel].test) return [];
+      const saved = entry.explanations?.[rel], view = saved?.logic || saved?.overview;
+      if (view && view.hash === hash(text)) return view.sections.map(section => ({ line: section.startLine, title: 'Yamori · ' + section.title }));
+      const step = project.tourStep(entry.graph, entry.notes, rel);
+      const where = step && step.steps.length > 1 ? 'Step ' + (step.index + 1) + ' of ' + step.steps.length + ' in ' + (step.folder ? step.folder + '/' : 'the project') + ' · ' : '';
+      return [{ line: 1, title: view ? 'Yamori · The code changed since its explanation · Open' : 'Yamori · ' + where + 'Explain this file' }];
+    },
+    saved(uri) { for (const entry of maps.values()) if (entry.panel && entry.queue && uri?.scheme === 'file' && relative(entry.root.fsPath, uri.fsPath)) entry.queue(); },
+    // Called before the cache folder is removed: stop work and drop state.
+    async clear() {
+      for (const entry of maps.values()) entry.notesController?.abort();
+      await Promise.all([...maps.values()].map(entry => entry.scanning).filter(Boolean));
+      await cache.flush();
+      for (const entry of maps.values()) Object.assign(entry, { graph: undefined, notes: { files: {} }, layout: {}, explanations: {}, guideFolder: '', focus: undefined });
+      changed();
+    },
+    rescanOpen() { for (const entry of maps.values()) if (entry.panel) void scan(entry); },
+    dispose() { for (const entry of maps.values()) { entry.notesController?.abort(); unwatch(entry); entry.panel?.dispose?.(); } maps.clear(); }
+  };
+}
+
 async function migratePreferences(context) {
   const file = path.join(context.globalStorageUri.fsPath, 'migration.json');
   let saved;
@@ -130,6 +581,101 @@ async function activate(context) {
   await context.secrets.delete?.('geminiKey');
   const readers = new Map();
   let activeReader, readingColumn, lastEditor = vscode.window.activeTextEditor;
+  const projectMap = createProjectMap(context, { openFile: (uri, options) => open(uri, options) });
+  // One background preparation at a time, only for the next step of a tour.
+  const prefetching = new Set();
+  const notifyReaders = () => { for (const reader of readers.values()) reader.projectChanged(); };
+  async function prefetch(uri) {
+    const key = uri.toString(), existing = readers.get(key);
+    if (setting(vscode, 'prefetchNext', true) === false || prefetching.size || existing?.hasResult() || existing?.isBusy()) return;
+    prefetching.add(key); notifyReaders();
+    try { const doc = await vscode.workspace.openTextDocument(uri); await readerFor(doc.uri).read(doc, undefined, { show: false, sourceColumn: sourceColumn() }); }
+    catch { /* A failed preparation only means the file is written when opened. */ }
+    finally { prefetching.delete(key); notifyReaders(); }
+  }
+  // ---- Test runs: a real run with the project's Python, or an AI simulation ----
+  async function pythonFor(uri, projectRoot, workspaceRoot) {
+    const configured = setting(vscode, 'pythonPath', '');
+    if (configured) return configured;
+    // The nearest virtualenv first: each sub-project of a monorepo has its own.
+    for (let dir = projectRoot; dir && (dir === workspaceRoot || dir.startsWith(workspaceRoot + path.sep)); dir = path.dirname(dir)) {
+      for (const candidate of ['.venv/bin/python', 'venv/bin/python', '.venv/Scripts/python.exe', 'venv/Scripts/python.exe']) {
+        const full = path.join(dir, candidate);
+        if (await fs.stat(full).then(stat => stat.isFile(), () => false)) return full;
+      }
+      if (dir === workspaceRoot) break;
+    }
+    try {
+      const extension = vscode.extensions?.getExtension?.('ms-python.python');
+      const api = extension && (extension.isActive ? extension.exports : await extension.activate());
+      const active = await Promise.resolve(api?.environments?.getActiveEnvironmentPath?.(uri));
+      if (active?.path && active.path !== 'python') return active.path;
+      const command = api?.settings?.getExecutionDetails?.(uri)?.execCommand;
+      if (Array.isArray(command) && command[0]) return command[0];
+    } catch { /* Fall back to the folder's own environment. */ }
+    const folder = vscode.workspace.getWorkspaceFolder?.(uri)?.uri.fsPath;
+    for (const candidate of ['.venv/bin/python', 'venv/bin/python', '.venv/Scripts/python.exe', 'venv/Scripts/python.exe']) {
+      const full = folder && path.join(folder, candidate);
+      if (full && await fs.stat(full).then(stat => stat.isFile(), () => false)) return full;
+    }
+    return process.platform === 'win32' ? 'python' : 'python3';
+  }
+  // Running tests runs project code: ask once per folder unless always allowed.
+  async function allowRun(root, test, python) {
+    const key = 'runTests:' + root;
+    if (context.globalState.get(key) === 'always') return 'run';
+    const choice = await vscode.window.showWarningMessage(`Run the unit test ${test.name}? Yamori will run your project's test code with ${python} in ${path.basename(root)} and record how ${test.function} runs.`, { modal: true }, 'Run', 'Always run tests in this folder', 'Simulate with AI instead');
+    if (choice === 'Always run tests in this folder') { await context.globalState.update(key, 'always'); return 'run'; }
+    return choice === 'Run' ? 'run' : choice === 'Simulate with AI instead' ? 'simulate' : undefined;
+  }
+  const kindOf = value => { const kind = project.VALUE_KINDS[value?.kind]; return kind ? { emoji: kind[0], kindLabel: kind[1], guidance: kind[2] } : {}; };
+  const shown = (value, limit = 400) => value && typeof value === 'object' ? { name: String(value.name || '').slice(0, 80), repr: String(value.repr ?? '').slice(0, limit), type: String(value.type || '').slice(0, 60),
+    ...(project.VALUE_KINDS[value.kind] ? { kind: value.kind, detail: String(value.detail || '').slice(0, 200), ...kindOf(value) } : {}), ...(Number.isInteger(value.size) ? { size: value.size } : {}) } : undefined;
+  const fromText = (name, text) => shown({ name, repr: text, kind: project.valueKind(text) });
+  async function realRun(info, python, signal) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-run-')), request = path.join(dir, 'request.json'), output = path.join(dir, 'result.json');
+    try {
+      await fs.writeFile(request, JSON.stringify({ root: info.root, testFile: info.testFile, testName: info.testName, target: info.target }));
+      let log = '';
+      try { log = await runProcess(python, [path.join(__dirname, 'runner', 'trace.py'), request, output], '', { cwd: info.root, signal, timeout: 60000 }); }
+      catch (error) { if (/ENOENT/.test(error.message) || error.code === 'ENOENT') throw new Error(`Python was not found (${python}). Pick an interpreter with the Python extension, or set yamori.pythonPath.`); throw error; }
+      const raw = JSON.parse(await fs.readFile(output, 'utf8'));
+      const calls = (Array.isArray(raw.calls) ? raw.calls : []).slice(0, 3).map(call => ({
+        inputs: (call.inputs || []).slice(0, 20).map(value => shown(value)), steps: (call.steps || []).slice(0, 300).map(step => ({ line: Number(step.line) || 0, changed: (step.changed || []).slice(0, 12).map(value => shown(value)) })),
+        output: shown(call.output), error: call.error ? { type: String(call.error.type || '').slice(0, 80), message: String(call.error.message || '').slice(0, 400) } : undefined, truncated: !!call.truncated }));
+      return { mode: 'real', outcome: ['passed', 'failed', 'error'].includes(raw.outcome) ? raw.outcome : 'error', message: String(raw.message || '').slice(0, 400), durationMs: Number(raw.durationMs) || 0, runner: String(raw.runner || ''), python: String(raw.python || ''), calls, log: String(log || '').slice(-600) };
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  }
+  async function simulatedRun(info, test, connection, signal, reason) {
+    const prompt = simulationPrompt({ functionName: test.function, functionText: info.functionText, functionStart: info.target.line, testName: test.name, testText: info.testText, testStart: test.line, language: test.language === 'python' ? 'Python' : 'JavaScript' });
+    const response = await requestStructured({ provider: connection.provider, cliPath: connection.cliPath, model: connection.model, effort: connection.effort, prompt, schema: SIMULATION_SCHEMA, signal, showPreview: false });
+    const run = parseSimulation(response.raw, info.target.line, info.target.end);
+    return { mode: 'simulated', outcome: 'simulated', reason, model: response.actualModel || connection.model || '', caveats: run.caveats.slice(0, 400),
+      calls: [{ inputs: run.inputs.map(value => fromText(value.name, value.value)), steps: run.steps.map(step => ({ line: step.line, note: step.note.slice(0, 300), changed: step.changed.map(value => fromText(value.name, value.value)) })),
+        output: run.output.kind === 'return' ? fromText('return', run.output.value) : undefined, error: run.output.kind === 'raises' ? { type: '', message: run.output.value.slice(0, 400) } : undefined }] };
+  }
+  async function runTest({ uri, test, simulate, signal, connection }) {
+    const info = await projectMap.testRunInfo(uri, test);
+    if (!info) throw new Error('This test is no longer in the project map. Rescan the Project guide and try again.');
+    const realPossible = vscode.workspace.isTrusted !== false && test.language === 'python';
+    if (!simulate && realPossible) {
+      const python = await pythonFor(uri, info.root, info.workspaceRoot), allowed = await allowRun(info.workspaceRoot, test, python);
+      if (allowed === 'run') return realRun(info, python, signal);
+      if (allowed !== 'simulate') return undefined;
+    }
+    const reason = simulate ? 'You asked for a simulation.' : vscode.workspace.isTrusted === false ? 'Restricted Mode: Yamori does not run project code here.' : test.language !== 'python' ? 'Real runs support Python tests for now.' : undefined;
+    return simulatedRun(info, test, connection, signal, reason);
+  }
+  async function tourWithStatus(uri, folder) {
+    const tour = await projectMap.tourFor(uri, folder);
+    if (!tour) return undefined;
+    const status = item => {
+      if (!item) return item;
+      const reader = readers.get(item.uri);
+      return { ...item, status: prefetching.has(item.uri) || reader?.isBusy() ? 'preparing' : reader?.hasResult() || item.explained ? 'ready' : 'waiting' };
+    };
+    return { ...tour, prev: status(tour.prev), next: status(tour.next) };
+  }
   const sourceColumn = () => (vscode.window.activeTextEditor || lastEditor)?.viewColumn || vscode.ViewColumn.One;
   function readerFor(uri) {
     const key = uri.toString();
@@ -138,6 +684,17 @@ async function activate(context) {
       const reader = createReader(local, {
         uri: key, column: () => readingColumn || vscode.ViewColumn.Beside,
         open, browse, switchFile, connectClaude: () => connectClaude(context),
+        projectContext: snapshot => projectMap.contextFor(snapshot),
+        openMap: uri => projectMap.show(undefined, uri),
+        revealDefinition: (uri, defined, column) => projectMap.revealDefinition(uri, defined, column),
+        agentTools: snapshot => projectMap.toolsFor(snapshot),
+        tourFor: (uri, folder) => tourWithStatus(uri, folder),
+        symbolsFor: snapshot => projectMap.symbolsFor(snapshot),
+        openRel: (uri, options) => open(uri, options),
+        prefetch: uri => prefetch(uri),
+        testsFor: (snapshot, sections) => projectMap.testsForBlocks(vscode.Uri.parse(snapshot.uri), sections),
+        runTest: request => runTest(request),
+        recordExplanation: (snapshot, level, value) => projectMap.recordExplanation(snapshot, level, value),
         active(value, panel) { activeReader = value; if (panel.viewColumn) readingColumn = panel.viewColumn; void value.showSource().catch(() => {}); },
         closed(value) { if (readers.get(key) === value) readers.delete(key); if (activeReader === value) activeReader = undefined; if (!readers.size) readingColumn = undefined; }
       });
@@ -145,7 +702,7 @@ async function activate(context) {
     }
     return readers.get(key);
   }
-  async function open(uri) {
+  async function open(uri, options = {}) {
     await chooseInstalledProvider(context);
     if (!uri && !vscode.window.activeTextEditor && activeReader?.snapshot()) { activeReader.focus(); return activeReader; }
     const editor = vscode.window.activeTextEditor || lastEditor;
@@ -154,7 +711,8 @@ async function activate(context) {
     const reader = readerFor(doc.uri);
     const selection = !uri && editor?.document === doc ? editor.selection : undefined;
     activeReader = reader;
-    await reader.read(doc, selection, { sourceColumn: sourceColumn(), openSource: !!uri });
+    await reader.read(doc, selection, { sourceColumn: sourceColumn(), openSource: !!uri, ...(typeof options?.tour === 'string' ? { tour: options.tour } : {}) });
+    if (Number.isInteger(options?.line)) reader.focusAt(options.line);
     return reader;
   }
   function current() {
@@ -164,22 +722,38 @@ async function activate(context) {
   async function files(root) {
     return vscode.workspace.findFiles(root ? new vscode.RelativePattern(root, INCLUDE) : INCLUDE, EXCLUDE, 501);
   }
-  async function browse() {
-    const found = await files();
-    const pick = await vscode.window.showQuickPick(found.map(uri => ({ label: path.basename(uri.fsPath), description: vscode.workspace.asRelativePath(uri), detail: readers.get(uri.toString())?.hasPanel() ? 'Open Yamori tab' : undefined, uri })), { title: 'Yamori · Open a file', placeHolder: 'Search files. Each file opens in its own Yamori tab.', matchOnDescription: true });
-    if (pick) await open(pick.uri);
-  }
+  async function browse() { return switchFile(); }
+  // One picker: files already open in Yamori, then project files by folder,
+  // each with its AI-note purpose and whether Yamori has explained it.
   async function switchFile() {
     const opened = [...readers.values()].filter(reader => reader.snapshot());
-    if (!opened.length) return browse();
-    const pick = await vscode.window.showQuickPick([
-      { label: '$(add) Open another file…', add: true },
-      ...opened.map(reader => ({ label: path.basename(vscode.Uri.parse(reader.snapshot().uri).fsPath), description: reader.snapshot().name, detail: reader.isBusy() ? 'Generating…' : reader.hasPanel() ? 'Open Yamori tab' : 'Prepared explanation', reader }))
-    ], { title: 'Yamori · Switch files', placeHolder: 'Switch tabs without regenerating, or open another file.', matchOnDescription: true });
-    if (pick?.add) return browse();
+    const found = await files();
+    const Separator = vscode.QuickPickItemKind?.Separator, items = [];
+    const openUris = new Set(opened.map(reader => reader.snapshot().uri));
+    if (opened.length) {
+      if (Separator) items.push({ label: 'Open in Yamori', kind: Separator });
+      for (const reader of opened) items.push({ label: path.basename(vscode.Uri.parse(reader.snapshot().uri).fsPath), description: reader.snapshot().name, detail: reader.isBusy() ? 'Writing…' : reader.hasPanel() ? 'Open tab' : 'Ready to read', reader });
+    }
+    const groups = new Map();
+    const facts = await Promise.all(found.map(uri => Promise.resolve(projectMap.fileFacts(uri)).catch(() => ({}))));
+    found.forEach((uri, index) => {
+      if (openUris.has(uri.toString())) return;
+      const rel = vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/');
+      const folder = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+      if (!groups.has(folder)) groups.set(folder, []);
+      const fact = facts[index] || {};
+      groups.get(folder).push({ label: path.basename(uri.fsPath), description: [fact.explained ? '✓ explained' : '', fact.purpose ? fact.purpose.slice(0, 90) : ''].filter(Boolean).join(' · ') || undefined, folder, uri });
+    });
+    for (const folder of [...groups.keys()].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b))) {
+      if (Separator) items.push({ label: folder ? folder + '/' : 'Project root', kind: Separator });
+      items.push(...groups.get(folder).sort((a, b) => a.label.localeCompare(b.label)).map(item => Separator ? item : { ...item, description: [folder, item.description].filter(Boolean).join(' · ') }));
+    }
+    const pick = await vscode.window.showQuickPick(items, { title: 'Yamori · Switch file', placeHolder: 'Type a file or folder name. Files open in Yamori are listed first.', matchOnDescription: true });
     if (pick?.reader) { activeReader = pick.reader; pick.reader.focus(); }
+    else if (pick?.uri) await open(pick.uri);
   }
-  async function project(uri) {
+  // Yamori: Read a Folder or Project (named so it never hides the project module).
+  async function prepareFolder(uri) {
     const root = uri instanceof vscode.Uri ? uri : vscode.workspace.workspaceFolders?.[0]?.uri;
     if (!root) throw new Error('Open a project folder first.');
     const found = await files(root);
@@ -211,14 +785,42 @@ async function activate(context) {
   const command = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, async (...args) => {
     try { return await fn(...args); } catch (e) { vscode.window.showErrorMessage(e.message); }
   }));
-  command('yamori.read', open); command('yamori.browse', browse); command('yamori.project', project); command('yamori.switchFile', switchFile);
+  command('yamori.read', open); command('yamori.browse', browse); command('yamori.project', prepareFolder); command('yamori.switchFile', switchFile);
   command('yamori.connectClaude', () => connectClaude(context));
+  // Hidden commands behind hovers, CodeLens and links: open a file's explanation
+  // at a line, or show the source line itself. Local files only.
+  const fileTarget = uri => { const target = typeof uri === 'string' ? vscode.Uri.parse(uri) : uri; return target?.scheme === 'file' ? target : undefined; };
+  command('yamori.openAt', async (uri, line) => { const target = fileTarget(uri); if (target) await open(target, Number.isInteger(line) ? { line } : {}); });
+  command('yamori.showSource', async (uri, line) => {
+    const target = fileTarget(uri); if (!target) return;
+    const doc = await vscode.workspace.openTextDocument(target), at = Math.max(0, Math.min(doc.lineCount - 1, (Number.isInteger(line) ? line : 1) - 1));
+    await vscode.window.showTextDocument(doc, { selection: new vscode.Range(at, 0, at, 0), preview: true });
+  });
+  if (vscode.languages?.registerHoverProvider && vscode.MarkdownString && vscode.Hover) {
+    context.subscriptions.push(vscode.languages.registerHoverProvider({ scheme: 'file' }, { provideHover: async (document, position) => {
+      const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+      const info = range && await projectMap.hoverInfo(document.uri, document.getText(range)).catch(() => undefined);
+      return info ? new vscode.Hover(hoverMarkdown(info), range) : undefined;
+    } }));
+  }
+  let lensesChanged;
+  if (vscode.languages?.registerCodeLensProvider && vscode.CodeLens && vscode.EventEmitter) {
+    lensesChanged = new vscode.EventEmitter();
+    context.subscriptions.push(lensesChanged, vscode.languages.registerCodeLensProvider({ scheme: 'file' }, { onDidChangeCodeLenses: lensesChanged.event, provideCodeLenses: async document => {
+      const lenses = await projectMap.lensesFor(document.uri, document.getText()).catch(() => []);
+      return lenses.filter(lens => lens.line >= 1 && lens.line <= document.lineCount).map(lens => new vscode.CodeLens(new vscode.Range(lens.line - 1, 0, lens.line - 1, 0), { title: lens.title, command: 'yamori.openAt', arguments: [document.uri.toString(), lens.line] }));
+    } }));
+  }
+  context.subscriptions.push(projectMap.onChange(() => { notifyReaders(); lensesChanged?.fire(); }));
+  command('yamori.map', uri => projectMap.show(uri instanceof vscode.Uri ? uri : undefined, uri instanceof vscode.Uri ? undefined : vscode.window.activeTextEditor?.document.uri));
   for (const [id, method] of [['provider', 'chooseProvider'], ['model', 'chooseModel'], ['effort', 'chooseEffort'], ['colors', 'chooseReadingColors'], ['refinement', 'chooseRefinement']]) {
     command('yamori.' + id, async () => { const reader = current(); if (!reader) return browse(); reader.focus(); await reader[method](); });
   }
   command('yamori.clear', async () => {
     await Promise.all([...readers.values()].map(reader => reader.clear()));
+    await projectMap.clear();
     await fs.rm(path.join(context.globalStorageUri.fsPath, 'cache'), { recursive: true, force: true });
+    projectMap.rescanOpen();
     vscode.window.setStatusBarMessage('Yamori cache cleared', 2000);
   });
   const launcher = vscode.window.createStatusBarItem('yamori.open', vscode.StatusBarAlignment.Right, 110);
@@ -241,7 +843,7 @@ async function activate(context) {
   context.subscriptions.push(launcher, vscode.window.onDidChangeActiveTextEditor(updateLauncher));
   updateLauncher(vscode.window.activeTextEditor);
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => { for (const reader of readers.values()) reader.changed(event); }));
-  if (vscode.workspace.onDidSaveTextDocument) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => { for (const reader of readers.values()) void reader.check(doc.uri, 'save').catch(() => {}); }));
+  if (vscode.workspace.onDidSaveTextDocument) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => { projectMap.saved(doc.uri); for (const reader of readers.values()) void reader.check(doc.uri, 'save').catch(() => {}); }));
   if (vscode.window.onDidChangeWindowState) context.subscriptions.push(vscode.window.onDidChangeWindowState(state => { if (state.focused) for (const reader of readers.values()) void reader.check(undefined, 'focus').catch(() => {}); }));
   if (!context.globalState.get('launcherHintShown') && vscode.window.showInformationMessage) {
     await context.globalState.update('launcherHintShown', true);
@@ -250,11 +852,17 @@ async function activate(context) {
       if (choice === action) return vscode.commands.executeCommand(action === 'Open current file' ? 'yamori.read' : 'yamori.browse');
     }).catch(error => vscode.window.showErrorMessage(error.message));
   }
-  context.subscriptions.push({ dispose() { const closing = [...readers.values()].map(reader => reader.dispose()); readers.clear(); return Promise.all(closing); } });
+  context.subscriptions.push({ dispose() { projectMap.dispose(); const closing = [...readers.values()].map(reader => reader.dispose()); readers.clear(); return Promise.all(closing); } });
 }
 
 function createReader(context, navigation) {
-  let panel, source, result, refreshBase, error = '', stale = false, busy = false, controller, serial = 0, progress, preview, startedAt;
+  let panel, source, result, refreshBase, error = '', stale = false, busy = false, controller, serial = 0, progress, preview, startedAt, run;
+  // Tour: where this file sits in a reading order. Opened from the guide (or
+  // Next/Previous), the reader also prepares the next step in the background.
+  let tour, tourFolder, tourMode = false, symbols = [], focusLine;
+  // Unit tests per block, and notebook-style runs keyed by block index.
+  let blockTests = {}, runs = {}, runsKey;
+  const runControllers = new Map();
   let selectedModel, modelNotice = '', activity = [];
   let level = context.globalState.get('detail', 'logic');
   let provider = context.globalState.get('provider', 'codex');
@@ -362,7 +970,7 @@ function createReader(context, navigation) {
       changedAt = next.stamp?.dirty || next.stamp?.modifiedAt === source.stamp?.modifiedAt ? Date.now() : next.stamp?.modifiedAt || Date.now(); changeReason = reason;
     }
     if (!different && source.stamp?.dirty && !next.stamp?.dirty && stale) { changedAt = next.stamp?.modifiedAt || Date.now(); changeReason = 'Source file saved'; }
-    source = { ...next, callContext: next.callContext || source.callContext };
+    source = { ...next, callContext: next.callContext || source.callContext, projectContext: next.projectContext || source.projectContext };
     sourceMissing = false; missingStale = []; trackSources(); checkedAt = Date.now(); stale = sharedChange || staleBlocks.size > 0 || (different && !result);
     if (different || metadataChanged) { clearHighlight(); queuePersist(); }
     post();
@@ -404,6 +1012,14 @@ function createReader(context, navigation) {
       }
     }
   }
+  // The stored project map adds file roles and project terms. A map never
+  // starts a scan from here; a missing or failing map simply adds nothing.
+  // Read-only Yamori lookups for the agent, when this file's folder is mapped.
+  async function agentTools(snapshot) { return Promise.resolve(navigation.agentTools?.(snapshot)).catch(() => undefined); }
+  async function withProjectContext(snapshot) {
+    const projectContext = await Promise.resolve(navigation.projectContext?.(snapshot)).catch(() => undefined);
+    return projectContext ? { ...snapshot, projectContext } : snapshot;
+  }
   async function stillCurrent(snapshot) {
     for (const item of [{ uri: snapshot.uri, fullHash: snapshot.fullHash }, ...(snapshot.callContext?.definitions || [])]) {
       const doc = vscode.workspace.textDocuments.find(doc => doc.uri.toString() === item.uri);
@@ -439,9 +1055,66 @@ function createReader(context, navigation) {
     for (const editor of highlighted) { try { editor.setDecorations(decoration, []); } catch {} }
     highlighted.clear();
   }
-  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, modelNotice, level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined });
+  // Runs belong to one explanation; a new document starts without them.
+  function currentRuns() {
+    const key = source && result ? keyFor(source, options()) + ':' + result.sections.length : undefined;
+    if (key !== runsKey) { runsKey = key; for (const controller of runControllers.values()) controller.abort(); runControllers.clear(); runs = {}; }
+    return runs;
+  }
+  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, modelNotice, level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined, run, tour, focusLine, runs: currentRuns(),
+    canRunTests: vscode.workspace.isTrusted !== false && !stale,
+    blockTests: stale ? {} : Object.fromEntries(Object.entries(blockTests).map(([index, tests]) => [index, tests.map(({ id, name, function: fn, file, language }) => ({ id, name, function: fn, file, language }))])),
+    symbols: symbols.map(({ name, file, line, kind, block, purpose, explained }) => ({ name, file, line, kind, block, purpose, explained })),
+    glossary: (source?.projectContext?.glossary || []).map(term => ({ term: term.term, aliases: term.aliases || [], meaning: term.meaning || '', kind: term.kind || '', defined: term.defined || '' })) });
   function post() { panel?.webview.postMessage({ type: 'state', state: view() }); }
-  function cancel() { serial++; controller?.abort(); controller = undefined; busy = false; preview = undefined; progress = undefined; startedAt = undefined; clearHighlight(); }
+  function cancel() { serial++; controller?.abort(); controller = undefined; busy = false; preview = undefined; progress = undefined; startedAt = undefined; if (run?.state === 'running') finishRun('stopped'); clearHighlight(); }
+  // What the reader sees while a request runs: who is writing, and each stage.
+  const STAGES = [['context', 'Read the code and its context'], ['think', 'Think it through'], ['write', 'Write the explanation'], ['review', 'Review difficult blocks']];
+  function startRun(snapshot, opts, tools, title) {
+    const definitions = snapshot.callContext?.definitions?.length || 0, terms = snapshot.projectContext?.glossary?.length;
+    run = { title, state: 'running', provider: PROVIDERS[opts.provider], model: opts.model || '', effort: opts.effort || null, startedAt: Date.now(), lookups: 0,
+      steps: STAGES.map(([id, label]) => ({ id, label, state: id === 'review' && !opts.refinementSteps ? 'skipped' : 'waiting' })) };
+    run.steps[0] = { ...run.steps[0], state: 'done', startedAt: run.startedAt, endedAt: run.startedAt,
+      detail: [definitions + ' called definition' + (definitions === 1 ? '' : 's'), snapshot.projectContext ? 'project guide' + (terms ? ' · ' + terms + ' term' + (terms === 1 ? '' : 's') : '') : 'no project guide yet', tools ? 'lookups on' : ''].filter(Boolean).join(' · ') };
+    if (!opts.refinementSteps) run.steps[3].detail = 'Off (AI ▾ → Refine)';
+  }
+  function stage(id, detail, done) {
+    if (!run || run.state !== 'running') return;
+    const index = run.steps.findIndex(step => step.id === id), now = Date.now();
+    if (index < 0) return;
+    run.steps.forEach((step, i) => { if (i < index && (step.state === 'active' || step.state === 'waiting')) Object.assign(step, { state: 'done', endedAt: now, startedAt: step.startedAt || now }); });
+    const step = run.steps[index];
+    if (step.state === 'waiting' || step.state === 'skipped') Object.assign(step, { state: 'active', startedAt: now });
+    if (detail) step.detail = detail;
+    if (done) Object.assign(step, { state: 'done', endedAt: now });
+  }
+  function finishRun(state) {
+    if (!run) return;
+    const now = Date.now();
+    run.state = state; run.endedAt = now;
+    for (const step of run.steps) if (step.state === 'active' || (state === 'done' && step.state === 'waiting')) Object.assign(step, { state: state === 'done' ? 'done' : 'stopped', endedAt: now, startedAt: step.startedAt || now });
+  }
+  function track(update) {
+    if (!run) return;
+    if (update.model) run.model = update.model;
+    if (update.lookup) { run.lookups++; run.lastLookup = update.lookup.replace(/^Looked up /, ''); }
+    if (update.stage === 'start') stage('think', 'Starting ' + run.provider + '…');
+    else if (update.stage === 'think') {
+      if (Number.isFinite(update.thinkingTokens)) run.thinkingTokens = update.thinkingTokens;
+      stage('think', [run.thinkingTokens ? '~' + run.thinkingTokens.toLocaleString('en-US') + ' thinking tokens' : update.phase === 'Thinking' ? 'Thinking…' : update.phase,
+        run.lookups ? run.lookups + ' lookup' + (run.lookups === 1 ? '' : 's') + ' · ' + run.lastLookup : ''].filter(Boolean).join(' · '));
+    } else if (update.stage === 'write') stage('write', Number.isFinite(update.characters) ? update.characters.toLocaleString('en-US') + ' characters written' : undefined);
+    else if (update.stage === 'review') stage('review', update.detail || update.phase, update.done);
+  }
+  function progressFor(id, task, onPreview) {
+    return update => {
+      if (id !== serial || task.signal.aborted) return;
+      if (typeof update.phase === 'string' && update.phase.trim()) { progress = update.phase; if (activity.at(-1) !== update.phase) activity.push(update.phase); }
+      if (update.model) selectedModel = update.model;
+      track(update); onPreview?.(update);
+      post();
+    };
+  }
   function ensurePanel() {
     if (panel) { panel.reveal(panel.viewColumn || navigation.column(), false); return; }
     panel = vscode.window.createWebviewPanel('yamori', path.basename(vscode.Uri.parse(navigation.uri).fsPath) + ' · Yamori', { viewColumn: navigation.column(), preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
@@ -458,6 +1131,28 @@ function createReader(context, navigation) {
           case 'read': await navigation.open(); break;
           case 'browse': await navigation.browse(); break;
           case 'switchFile': await navigation.switchFile(); break;
+          case 'showSource': if (source) { await showSource(); const doc = vscode.window.visibleTextEditors.find(editor => editor.document.uri.toString() === source.uri); if (doc) await vscode.window.showTextDocument(doc.document, { viewColumn: doc.viewColumn, preserveFocus: false }); } break;
+          case 'map': await navigation.openMap?.(source ? vscode.Uri.parse(source.uri) : undefined); break;
+          case 'tourGo': {
+            // Only files the tour bar itself listed can be opened from it.
+            const target = tour && [tour.prev, tour.next, ...(tour.uses || []), ...(tour.usedBy || [])].find(item => item?.id === message.id);
+            if (target) await navigation.openRel?.(vscode.Uri.parse(target.uri), { tour: tour.folder });
+            break;
+          }
+          case 'runTest': await runBlockTest(message); break;
+          case 'closeRun': if (Number.isInteger(message.index)) { runControllers.get(message.index)?.abort(); const next = { ...runs }; delete next[message.index]; runs = next; post(); } break;
+          case 'openSymbol': {
+            const link = Number.isInteger(message.index) && message.documentKey === view().documentKey ? symbols[message.index] : undefined;
+            if (!link) break;
+            if (link.uri === source?.uri) focusAt(link.line);
+            else await navigation.openRel?.(vscode.Uri.parse(link.uri), { line: link.line });
+            break;
+          }
+          case 'revealTerm': {
+            const term = Number.isInteger(message.index) && message.documentKey === view().documentKey ? source?.projectContext?.glossary?.[message.index] : undefined;
+            if (term) await navigation.revealDefinition?.(source.uri, term.defined, sourceColumn);
+            break;
+          }
           case 'connectClaude': {
             const notice = await navigation.connectClaude();
             if (notice) { error = ''; modelNotice = notice; post(); }
@@ -483,7 +1178,7 @@ function createReader(context, navigation) {
               if (source && wasStale) {
                 const saved = await disk.latest(source, options(), true);
                 if (saved) { const latest = source; source = saved.meta.source; result = saved.value; restoreStatus(saved.meta); applySource(latest, 'Source changed since this cached view'); }
-                else { result = lowerView(previous, previousLevel, level); staleBlocks = new Set(result?.sections.map((_, index) => index) || []); stale = true; if (!result) error = 'This level has no cached view yet. Use Refresh all to update it.'; }
+                else { result = lowerView(previous, previousLevel, level); staleBlocks = new Set(result?.sections.map((_, index) => index) || []); stale = true; if (!result) error = 'This level has no cached view yet. Use Update from code to write it.'; }
                 post();
               } else if (source) await explain(false); else post();
             }
@@ -525,11 +1220,8 @@ function createReader(context, navigation) {
     };
   }
   function options(snapshot = source) {
-    const choice = context.globalState.get(provider + 'Model');
-    const model = typeof choice?.id === 'string' ? choice.id : '';
-    const override = context.globalState.get('effortChoices', {})[provider + ':' + model];
-    const effort = override === 'auto' ? null : typeof override === 'string' ? override : model ? choice.effort ?? null : provider === 'claude' ? null : 'low';
-    return { provider, level, model, effort, refinementSteps: refinementSteps(setting(vscode, 'refinementSteps', 2)), cliPath: setting(vscode, provider === 'claude' ? 'claudePath' : 'codexPath'), revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
+    const { model, effort, cliPath } = connectionOptions(context.globalState, provider);
+    return { provider, level, model, effort, refinementSteps: refinementSteps(setting(vscode, 'refinementSteps', 2)), cliPath, revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
   }
   async function cached(s, opts) {
     if (opts.revision?.level === opts.level && matchesModel(opts.revision.value, opts) && (opts.revision.value.refinement?.stepsRequested || 0) === opts.refinementSteps) return opts.revision.value;
@@ -551,6 +1243,8 @@ function createReader(context, navigation) {
     try {
       const meta = await disk.save(s, opts, value, keyFor(s, opts), freshStatus);
       Object.defineProperty(value, '_cacheMeta', { value: meta, configurable: true });
+      // Current explanations become project knowledge for other files.
+      if (!freshStatus.staleBlocks?.length && !freshStatus.sourceMissing) void Promise.resolve(navigation.recordExplanation?.(s, opts.level, value)).catch(() => {});
       for (const lower of ORDER.slice(0, ORDER.indexOf(opts.level))) {
         const lowerValue = value.views?.[lower];
         if (lowerValue) await disk.save(s, { ...opts, level: lower }, lowerValue, keyFor(s, { ...opts, level: lower }), { ...freshStatus, staleBlocks: freshStatus.staleBlocks.length ? lowerValue.sections.map((_, index) => index) : [] });
@@ -561,15 +1255,49 @@ function createReader(context, navigation) {
   function explain(force) {
     const request = runExplanation(force);
     inFlight = request;
-    return request.finally(() => { if (inFlight === request) inFlight = undefined; });
+    return request.finally(() => { if (inFlight === request) inFlight = undefined; if (result && !error && !busy) afterReady(); });
+  }
+  async function refreshProjectView() {
+    if (!source || disposed) return;
+    const uri = source.uri;
+    const [nextTour, nextSymbols, nextTests] = await Promise.all([Promise.resolve(navigation.tourFor?.(vscode.Uri.parse(uri), tourFolder)).catch(() => undefined), Promise.resolve(navigation.symbolsFor?.(source)).catch(() => []),
+      Promise.resolve(result && !source.selected ? navigation.testsFor?.(source, result.sections) : undefined).catch(() => undefined)]);
+    if (disposed || source?.uri !== uri) return;
+    tour = nextTour; symbols = Array.isArray(nextSymbols) ? nextSymbols : []; blockTests = nextTests && typeof nextTests === 'object' ? nextTests : {}; post();
+  }
+  function afterReady() {
+    void refreshProjectView().then(() => {
+      if (tourMode && tour?.next && tour.next.status !== 'ready' && result && !busy && !disposed) navigation.prefetch?.(vscode.Uri.parse(tour.next.uri));
+    });
+  }
+  async function runBlockTest(message) {
+    const index = message.index, test = Number.isInteger(index) && message.documentKey === view().documentKey ? blockTests[index]?.find(item => item.id === message.id) : undefined;
+    if (!test || !source) return;
+    runControllers.get(index)?.abort();
+    const controller = new AbortController(), base = { id: test.id, name: test.name, function: test.function };
+    runControllers.set(index, controller);
+    runs = { ...runs, [index]: { ...base, state: 'running', mode: message.simulate ? 'simulated' : 'real' } }; post();
+    try {
+      const outcome = await navigation.runTest?.({ uri: vscode.Uri.parse(source.uri), test, simulate: !!message.simulate, signal: controller.signal, connection: options() });
+      if (controller.signal.aborted) return;
+      const next = { ...runs };
+      if (outcome) next[index] = { ...base, ...outcome, state: 'done' }; else delete next[index];
+      runs = next;
+    } catch (e) {
+      if (!controller.signal.aborted) runs = { ...runs, [index]: { ...base, state: 'failed', mode: runs[index]?.mode, message: e.message } };
+    } finally { if (runControllers.get(index) === controller) runControllers.delete(index); post(); }
+  }
+  function focusAt(line) {
+    if (!Number.isInteger(line)) return;
+    focusLine = { line, token: Date.now() }; ensurePanel(); post();
   }
   async function runExplanation(force) {
     if (!source) return;
     modelNotice = '';
-    cancel(); const id = serial; let snapshot = stale ? { ...source, callContext: undefined } : source;
+    cancel(); const id = serial; let snapshot = stale ? { ...source, callContext: undefined, projectContext: undefined } : source;
     if (!snapshot.callContext) {
       busy = true; progress = 'Finding function definitions'; post();
-      snapshot = await collectCallContext(snapshot);
+      snapshot = await withProjectContext(await collectCallContext(snapshot));
       if (id !== serial) return;
       source = snapshot; trackSources();
     }
@@ -587,18 +1315,18 @@ function createReader(context, navigation) {
       if (id !== serial) return;
       if (!value) {
         if (id !== serial) return;
-        value = await generate({ source: snapshot, ...opts, signal: task.signal, onProgress: update => {
-          if (id !== serial || task.signal.aborted) return;
-          if (typeof update.phase === 'string' && update.phase.trim()) progress = update.phase;
-          if (update.model) selectedModel = update.model;
-          if (typeof update.phase === 'string' && update.phase.trim() && activity.at(-1) !== update.phase) activity.push(update.phase);
-          if (update.preview) preview = update.preview;
-          post();
-        } });
+        const tools = await agentTools(snapshot);
+        if (id !== serial || task.signal.aborted) return;
+        startRun(snapshot, opts, tools, 'Writing the ' + (LEVELS[opts.level]?.label || '') + ' explanation'); post();
+        const fast = await quickModel(opts.provider, opts.cliPath);
+        if (id !== serial || task.signal.aborted) return;
+        value = await generate({ source: snapshot, ...opts, tools, fast, signal: task.signal, onProgress: progressFor(id, task, update => { if (update.preview) preview = update.preview; }) });
         if (id !== serial || task.signal.aborted) return;
         if (!await stillCurrent(snapshot)) { await inspect(undefined, 'change'); return; }
         staleBlocks.clear(); removedBlocks.clear(); stale = false; sourceMissing = false; changedRanges = [];
-        if (value.refinement?.acceptedStep) opts.revision = await persistRevision(snapshot, opts, value);
+        // A refined view derived from another level's revision is cached under
+        // that revision. Promoting it would invalidate every other level again.
+        if (value.refinement?.acceptedStep && (!opts.revision || opts.revision.level === opts.level)) opts.revision = await persistRevision(snapshot, opts, value);
         await save(snapshot, opts, value);
       }
       if (id !== serial) return;
@@ -608,8 +1336,8 @@ function createReader(context, navigation) {
       if (activity.length) activity.push('Ready');
       const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === snapshot.uri);
       stale = sharedChange || staleBlocks.size > 0 || (doc ? hash(doc.getText()) !== snapshot.fullHash : false);
-    } catch (e) { if (id === serial && !task.signal.aborted) error = e.message; }
-    finally { if (id === serial) { busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
+    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; finishRun('failed'); } }
+    finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
   }
   async function updateBlock(message) {
     if (busy || sourceMissing || staleBlocks.has(message.index) || !source || !result || !Number.isInteger(message.index)) return;
@@ -622,14 +1350,12 @@ function createReader(context, navigation) {
     cancel(); const id = serial, opts = options(snapshot), task = new AbortController(); controller = task;
     busy = true; modelNotice = ''; startedAt = Date.now(); activity = []; progress = 'Updating block'; post();
     try {
-      const updated = await generate({ source: snapshot, ...opts, edit: { section: original, draft: message.draft, instruction: message.instruction }, signal: task.signal, onProgress: update => {
-        if (id !== serial || task.signal.aborted) return;
-        if (typeof update.phase === 'string' && update.phase.trim()) progress = update.phase; if (update.model) selectedModel = update.model;
-        if (typeof update.phase === 'string' && update.phase.trim() && activity.at(-1) !== update.phase) activity.push(update.phase);
+      const tools = await agentTools(snapshot);
+      startRun(snapshot, opts, tools, 'Updating "' + original.title + '"'); post();
+      const updated = await generate({ source: snapshot, ...opts, tools, fast: await quickModel(opts.provider, opts.cliPath), edit: { section: original, draft: message.draft, instruction: message.instruction }, signal: task.signal, onProgress: progressFor(id, task, update => {
         // Keep all other blocks untouched while the selected one streams.
         if (update.preview?.sections?.[0]) preview = { ...base, sections: base.sections.map((s, i) => i === message.index ? { ...update.preview.sections[0], title: original.title } : s) };
-        post();
-      } });
+      }) });
       if (id !== serial || task.signal.aborted) return;
       if (!await stillCurrent(snapshot)) { await inspect(undefined, 'change'); throw new Error('Source changed during the edit. Your previous explanation was kept.'); }
       if (id !== serial || task.signal.aborted) return;
@@ -642,15 +1368,17 @@ function createReader(context, navigation) {
       await save(snapshot, { ...opts, revision }, value);
       if (id !== serial) return;
       result = value; selectedModel = value.model; error = ''; activity.push('Block updated and cached');
-    } catch (e) { if (id === serial && !task.signal.aborted) error = e.message; }
-    finally { if (id === serial) { busy = false; controller = undefined; preview = undefined; post(); } }
+    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; finishRun('failed'); } }
+    finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; post(); } }
   }
   async function read(doc, selection, settings = {}) {
     sourceColumn = settings.sourceColumn || sourceColumn;
+    if (typeof settings.tour === 'string') { tourFolder = settings.tour; tourMode = true; }
     const next = await stamp(capture(doc, selection));
     if (source && result && source.uri === next.uri && source.selected === next.selected && (!next.selected || (source.startLine === next.startLine && source.endLine === next.endLine)) && matchesModel(result, options())) {
       applySource(next, 'Source file changed');
       if (settings.show !== false) { ensurePanel(); post(); }
+      if (!busy) afterReady();
       return inFlight;
     }
     if (source && !stale && source.fullHash === next.fullHash && busy) { if (settings.show !== false) ensurePanel(); return inFlight; }
@@ -658,11 +1386,14 @@ function createReader(context, navigation) {
     const saved = await disk.latest(next, options(next), true);
     if (saved) {
       source = saved.meta.source; result = saved.value; restoreStatus(saved.meta); selectedModel = result.model; error = '';
-      modelNotice = (saved.meta.opts?.refinementSteps || 0) !== options().refinementSteps ? 'This cached result predates your refinement setting. Use Refresh all to apply it; opening the cache uses no AI.' : '';
+      modelNotice = (saved.meta.opts?.refinementSteps || 0) !== options().refinementSteps ? 'This cached result predates your refinement setting. Use Regenerate to apply it; opening the cache uses no AI.' : '';
       await loadDrafts(); applySource(next, 'Source changed since the cached explanation');
+      const fresh = await Promise.resolve(navigation.projectContext?.(source)).catch(() => undefined);
+      if (fresh && fresh.fingerprint !== source.projectContext?.fingerprint) modelNotice = (modelNotice ? modelNotice + ' ' : '') + 'The project map has new context for this file. Use Regenerate to include it; opening the cache uses no AI.';
       if (settings.openSource) await showSource();
       if (settings.show !== false) { ensurePanel(); post(); }
       await inspect(undefined, 'open');
+      afterReady();
       return;
     }
     source = next; result = undefined; refreshBase = undefined; restoreStatus(); stale = false; error = ''; trackSources();
@@ -684,9 +1415,9 @@ function createReader(context, navigation) {
     if (sourceMissing) throw new Error('The source is unavailable. Restore the file or choose another script before refreshing.');
     if (!result && !refreshBase) { await explain(true); return; }
     const one = Number.isInteger(index);
-    if (one && (!result.sections[index] || removedBlocks.has(index))) throw new Error('This code block was removed. Use Refresh all to reorganize the explanation.');
+    if (one && (!result.sections[index] || removedBlocks.has(index))) throw new Error('This code block was removed. Use Update from code to reorganize the explanation.');
     const base = result || refreshBase, previousSource = source, pending = [...staleBlocks];
-    const contextSource = await collectCallContext({ ...source, callContext: undefined });
+    const contextSource = await withProjectContext(await collectCallContext({ ...source, callContext: undefined, projectContext: undefined }));
     const original = one ? base.sections[index] : undefined;
     const scope = one ? { ...contextSource, startLine: original.startLine, endLine: original.endLine, text: contextSource.text.split('\n').slice(original.startLine - contextSource.startLine, original.endLine - contextSource.startLine + 1).join('\n'), callContext: undefined } : contextSource;
     const requestSource = one ? await collectCallContext(scope) : scope;
@@ -695,13 +1426,9 @@ function createReader(context, navigation) {
     cancel(); const id = serial, opts = options(contextSource), task = new AbortController(); controller = task;
     busy = true; error = ''; startedAt = Date.now(); activity = []; progress = one ? 'Updating cached block' : 'Updating cached explanation'; post();
     try {
-      const updated = await generate({ source: requestSource, ...opts, initialDraft: !one && !stale && result === base && base.refinement?.status === 'incomplete' ? base : undefined, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: update => {
-        if (id !== serial || task.signal.aborted) return;
-        if (typeof update.phase === 'string' && update.phase.trim()) progress = update.phase; if (update.model) selectedModel = update.model;
-        if (typeof update.phase === 'string' && update.phase.trim() && activity.at(-1) !== update.phase) activity.push(update.phase);
-        // Cached text remains visible and authoritative until the update validates.
-        post();
-      } });
+      const tools = await agentTools(contextSource);
+      startRun(requestSource, opts, tools, one ? 'Updating one block from the code' : 'Updating the explanation from the code'); post();
+      const updated = await generate({ source: requestSource, ...opts, tools, fast: await quickModel(opts.provider, opts.cliPath), initialDraft: !one && !stale && result === base && base.refinement?.status === 'incomplete' ? base : undefined, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: progressFor(id, task) });
       if (id !== serial || task.signal.aborted || source.fullHash !== previousSource.fullHash) return;
       if (!await stillCurrent(contextSource)) { await inspect(undefined, 'change'); return; }
       if (id !== serial || task.signal.aborted || source.fullHash !== previousSource.fullHash) return;
@@ -716,8 +1443,8 @@ function createReader(context, navigation) {
       if (id !== serial || task.signal.aborted) return;
       source = contextSource; trackSources(); result = value; refreshBase = undefined; restoreStatus({ ...freshStatus, savedAt: saved ? cacheSavedAt : undefined });
       selectedModel = value.model; activity.push(saved ? one ? 'Block refreshed and cached' : 'Explanation refreshed and cached' : 'Updated; local cache needs attention');
-    } catch (e) { if (id === serial && !task.signal.aborted) error = e.message; }
-    finally { if (id === serial) { busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
+    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; finishRun('failed'); } }
+    finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
   }
   async function chooseProvider() {
     const picked = await vscode.window.showQuickPick([
@@ -822,7 +1549,8 @@ function createReader(context, navigation) {
   }
   const reader = {
     read, showSource, chooseProvider, chooseModel, chooseEffort, chooseReadingColors, chooseRefinement,
-    snapshot: () => source, isBusy: () => busy, hasPanel: () => !!panel, failure: () => error,
+    snapshot: () => source, isBusy: () => busy, hasPanel: () => !!panel, hasResult: () => !!result, failure: () => error, focusAt,
+    projectChanged() { if (panel && source && !disposed) void refreshProjectView(); },
     stop: cancel,
     focus() { ensurePanel(); post(); },
     async clear() { clearTimeout(persistTimer); for (const timer of watchTimers.values()) clearTimeout(timer); watchTimers.clear(); cancel(); result = undefined; refreshBase = undefined; await disk.flush(); memory.clear(); revisions.clear(); revisionLoaded.clear(); draftScopes.clear(); error = ''; cacheWarning = ''; restoreStatus(); panel?.webview.postMessage({ type: 'cacheCleared' }); post(); },
@@ -840,4 +1568,4 @@ function createReader(context, navigation) {
   };
   return reader;
 }
-module.exports = { chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext, connectClaude };
+module.exports = { hoverMarkdown, createProjectMap, connectionOptions, chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext, connectClaude };

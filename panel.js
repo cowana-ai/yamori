@@ -29,6 +29,28 @@ function emphasisParts(text) {
   return parts;
 }
 
+// Project terms (from the project map) become hover/click links in prose and
+// notes. Longest names win; matches never split an identifier.
+function glossaryMatcher(terms) {
+  const names = new Map();
+  (Array.isArray(terms) ? terms : []).forEach((term, index) => [term.term, ...(term.aliases || [])].forEach(name => {
+    if (typeof name === 'string' && name.length >= 2 && name.length <= 80 && !names.has(name)) names.set(name, index);
+  }));
+  if (!names.size) return undefined;
+  const escaped = [...names.keys()].sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^$|()[\]{}\\]/g, '\\$&'));
+  return { names, pattern: new RegExp('(?<![A-Za-z0-9_])(?:' + escaped.join('|') + ')(?![A-Za-z0-9_])', 'g') };
+}
+function glossaryParts(text, matcher) {
+  if (!matcher || !text) return [{ text }];
+  const parts = []; let offset = 0;
+  for (const match of text.matchAll(matcher.pattern)) {
+    if (match.index > offset) parts.push({ text: text.slice(offset, match.index) });
+    parts.push({ text: match[0], term: matcher.names.get(match[0]) }); offset = match.index + match[0].length;
+  }
+  if (offset < text.length) parts.push({ text: text.slice(offset) });
+  return parts;
+}
+
 // Highlight real control at the start of a step. Ordinary prose stays quiet.
 function tokenize(text) {
   const pattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#.*$|\/\/.*$|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|^\s*(?:FOR\s+EACH|IF|OTHERWISE|ELSE|WHILE|REPEAT|UNTIL|WHEN|RETURN|YIELD|PRINT|OUTPUT|REJECT|STOP)\b)/gim;
@@ -161,17 +183,8 @@ function createDraftEditor(parent, record, { nonce, disabled, onSubmit, onChange
   }, destroy: () => view.destroy() };
 }
 
-function panelHTML(initialPalette = 'auto') {
-  const nonce = randomBytes(18).toString('base64');
-  const palette = ['paper', 'slate'].includes(initialPalette) ? initialPalette : 'auto';
-  const logo = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges"><path fill="#888" d="M3 8h9V5h4V3h5v2h3v8h-3v3h3v3h3v3h-5v-2h-4v3h3v4h4v3h-8v-5h-3v5H7v-3h4v-5H8v-4H5v-3h7v-2H6v-2H3z"/><path fill="#fafafa" d="M16 5h4v4h-4zM12 16h9v3h-9z"/><path fill="#161616" d="M17 6h3v1h-3zM2 17h27v2H2z"/></svg>');
-  const editorLibrary = require('node:fs').readFileSync(require('node:path').join(__dirname, 'editor.min.js'), 'utf8');
-  const mathLibrary = require('node:fs').readFileSync(require('node:path').join(__dirname, 'katex.min.js'), 'utf8');
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-<title>Yamori</title><style nonce="${nonce}">
-:root {
+// Shared by the reader and the project map so both follow one palette.
+const BASE_STYLES = `:root {
   color-scheme: dark;
   --read-page: #161616; --read-surface: #1b1b1b; --read-header: #222; --read-ink: #f5f5f5;
   --read-muted: #b6b6b6; --read-border: #626262; --read-accent: #f5f5f5; --read-on-accent: #161616;
@@ -192,7 +205,19 @@ button { font: inherit; color: inherit; cursor: pointer; border: 1px solid trans
 button:hover:not(:disabled) { background: var(--read-hover); }
 button:focus-visible, summary:focus-visible { outline: 2px solid var(--read-ink); outline-offset: 3px; }
 button:disabled { opacity: .45; cursor: default; }
-header { position: sticky; top: 0; z-index: 5; padding: 14px 20px 10px; background: var(--read-page); border-bottom: 1px solid var(--read-border); }
+`;
+const LOGO = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges"><path fill="#888" d="M3 8h9V5h4V3h5v2h3v8h-3v3h3v3h3v3h-5v-2h-4v3h3v4h4v3h-8v-5h-3v5H7v-3h4v-5H8v-4H5v-3h7v-2H6v-2H3z"/><path fill="#fafafa" d="M16 5h4v4h-4zM12 16h9v3h-9z"/><path fill="#161616" d="M17 6h3v1h-3zM2 17h27v2H2z"/></svg>');
+function panelHTML(initialPalette = 'auto') {
+  const logo = LOGO;
+  const nonce = randomBytes(18).toString('base64');
+  const palette = ['paper', 'slate'].includes(initialPalette) ? initialPalette : 'auto';
+  const editorLibrary = require('node:fs').readFileSync(require('node:path').join(__dirname, 'editor.min.js'), 'utf8');
+  const mathLibrary = require('node:fs').readFileSync(require('node:path').join(__dirname, 'katex.min.js'), 'utf8');
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<title>Yamori</title><style nonce="${nonce}">
+${BASE_STYLES}header { position: sticky; top: 0; z-index: 5; padding: 14px 20px 10px; background: var(--read-page); border-bottom: 1px solid var(--read-border); }
 .top, .controls, .brand { display: flex; align-items: center; gap: 8px; }
 .top { justify-content: space-between; margin-bottom: 12px; }
 .brand { gap: 10px; }
@@ -209,9 +234,52 @@ body.vscode-light:not([data-palette="slate"]) .brand img, body[data-palette="pap
 .segments button[aria-pressed="true"] { font-weight: 700; border-bottom-color: var(--read-ink); }
 #refresh { margin-left: auto; font-size: 12px; border: 1px solid var(--read-border); }
 #colors { font-size: 11px; color: var(--read-muted); }
-.file-nav { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-#source { min-width: 0; flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 0; color: var(--read-muted); font: 11px/1.8 ui-monospace, monospace; }
-#files { flex-shrink: 0; font-size: 11px; }
+.crumb { min-width: 0; flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 6px; color: var(--read-muted); font: 12px/1.6 ui-monospace, monospace; }
+.crumb strong { color: var(--read-ink); font-weight: 700; }
+.control-label { font: 600 10px/1.6 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; color: var(--read-muted); }
+.controls { flex-wrap: wrap; }
+.controls .nav { font-size: 12px; border: 1px solid var(--read-border); }
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; }
+#files, #map { flex-shrink: 0; }
+.term { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+.symbol { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
+.symbol:hover, .symbol:focus-visible { background: var(--read-mark-bg); color: var(--read-mark-ink); outline: none; }
+.test-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px dotted var(--read-border); font-size: 12px; }
+.test-label { color: var(--read-muted); font: 11px/1.6 ui-monospace, monospace; }
+.test-chip { border: 1px solid var(--read-border); font: 12px ui-monospace, monospace; padding: 2px 8px; }
+.run-cell { margin: 0 14px 14px; padding: 10px 12px; border: 1px solid var(--read-ink); background: var(--read-page); font-size: 12px; }
+.run-cell.simulated { border-style: dashed; }
+.run-cell:focus-visible { outline: 2px solid var(--read-ink); outline-offset: 2px; }
+.run-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.run-mode, .run-outcome { font: 11px ui-monospace, monospace; color: var(--read-muted); }
+.run-outcome.failed, .run-outcome.error, .run-error { color: var(--read-error); font-weight: 650; }
+.run-tools { margin-left: auto; display: flex; gap: 4px; }
+.run-tools button, .run-nav button, .run-calls button { border: 1px solid var(--read-border); font-size: 11px; padding: 2px 7px; }
+.run-calls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
+.run-calls button[aria-pressed="true"] { border-color: var(--read-ink); font-weight: 700; }
+.run-row { display: grid; grid-template-columns: 4.6em minmax(0, 1fr); gap: 8px; margin-top: 8px; align-items: baseline; }
+.run-key { font: 600 10px/1.6 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .05em; color: var(--read-muted); }
+.run-values { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.run-name { font: 12px ui-monospace, monospace; color: var(--read-muted); }
+.run-nav { display: flex; align-items: center; gap: 6px; }
+.run-position { font: 11px ui-monospace, monospace; }
+.run-note { font-style: italic; }
+.value { font: 12px ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--read-header); padding: 1px 4px; }
+.value.file { background: var(--read-mark-bg); cursor: help; font-family: inherit; }
+.value-emoji { font-size: 14px; }
+.run-log pre { max-height: 140px; overflow: auto; font-size: 11px; }
+.code-line.run-current { background: var(--read-mark-bg); box-shadow: inset 3px 0 0 var(--read-ink); }
+.tour { margin: 0 0 18px; padding: 8px 10px; border: 1px solid var(--read-border); background: var(--read-surface); font-size: 12px; }
+.tour-row, .tour-links { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.tour-links { margin-top: 6px; color: var(--read-muted); }
+.tour-where { font: 600 11px/1.6 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em; color: var(--read-muted); }
+.tour button { font-size: 12px; padding: 3px 8px; }
+.tour .tour-next { border: 1px solid var(--read-ink); box-shadow: 2px 2px 0 var(--read-ink); font-weight: 650; }
+.tour .tour-prev, .tour .tour-guide { border: 1px solid var(--read-border); }
+.tour .tour-guide { margin-left: auto; }
+.tour .tour-link { padding: 0 2px; text-decoration: underline; text-underline-offset: 3px; }
+.tour-status { font-size: 11px; color: var(--read-muted); }
+.term:hover, .term:focus-visible { background: var(--read-mark-bg); color: var(--read-mark-ink); outline: none; }
 main { max-width: 76ch; margin: 0 auto; padding: 28px 24px 44px; scroll-margin-top: 170px; }
 h1 { font-size: 22px; line-height: 1.3; font-weight: 650; margin: 0 0 12px; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .summary { color: var(--read-muted); margin: 0 0 26px; max-width: 64ch; font-size: 13px; }
@@ -306,6 +374,25 @@ textarea:focus { outline: 1px solid var(--read-ink); }
 .waiting img { width: 32px; height: 32px; image-rendering: pixelated; filter: brightness(0) invert(1); animation: pixel-step 1.2s steps(2, end) infinite; }
 body.vscode-light:not([data-palette="slate"]) .waiting img, body[data-palette="paper"] .waiting img { filter: brightness(0); }
 .waiting .notice { margin: 0; }
+.run { margin: 0 0 22px; border: 1px solid var(--read-ink); background: var(--read-surface); padding: 12px 14px; }
+.run.live { box-shadow: 3px 3px 0 var(--read-ink); }
+.run-head { display: flex; align-items: center; gap: 10px; }
+.run-head img { width: 28px; height: 28px; image-rendering: pixelated; filter: brightness(0) invert(1); animation: pixel-step 1.2s steps(2, end) infinite; }
+body.vscode-light:not([data-palette="slate"]) .run-head img, body[data-palette="paper"] .run-head img { filter: brightness(0); }
+.run-title { font-weight: 650; }
+.run-time { margin-left: auto; font: 12px ui-monospace, monospace; color: var(--read-muted); }
+.run-meta { margin: 2px 0 10px; font: 11px/1.5 ui-monospace, monospace; color: var(--read-muted); overflow-wrap: anywhere; }
+.run ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.run li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; font-size: 12px; line-height: 1.5; }
+.run li .icon, .run li .time { font-family: ui-monospace, monospace; }
+.run li .time { color: var(--read-muted); }
+.run li.waiting, .run li.skipped, .run li.stopped { color: var(--read-muted); }
+.run li.active .label { font-weight: 700; }
+.run li .detail { display: block; color: var(--read-muted); font-size: 11px; overflow-wrap: anywhere; }
+.run .hint { margin: 10px 0 0; font-size: 12px; }
+details.run { padding: 8px 12px; }
+details.run summary { cursor: pointer; font: 11px/1.6 ui-monospace, monospace; color: var(--read-muted); }
+details.run ol { margin-top: 8px; }
 @keyframes pixel-step { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
 .jump-in { animation: arrive 150ms cubic-bezier(.16, 1, .3, 1); }
 @keyframes arrive { from { opacity: .6; transform: translateY(3px); } to { opacity: 1; transform: none; } }
@@ -341,13 +428,16 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
 }
 @media(forced-colors: active) { body, header, .reading-block, .section-heading, .code-line.note { background: Canvas; color: CanvasText; } button, .segments, details, .code-line.note { border: 1px solid ButtonText; } }
 </style></head><body data-palette="${palette}">
-<header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span><details class="ai-settings"><summary id="ai-summary">AI settings ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 2 ▾</button></div></details></div>
-<div class="controls"><div class="segments" role="group" aria-label="Detail level">
-<button data-level="overview" aria-pressed="false" title="The purpose and main stages">Overview</button>
-<button data-level="logic" aria-pressed="true" title="Readable steps and important decisions">Logic</button>
-<button data-level="detailed" aria-pressed="false" title="Formulas, edge cases and error handling">Detailed</button>
-</div><button id="refresh" title="Update the cached explanation from current code">Refresh</button><button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
-<div class="file-nav"><button id="source" title="Open another project file in Yamori">Choose a file…</button><button id="files" title="Switch open Yamori tabs or open another file" aria-label="Switch Yamori files">▤ Files</button></div></header>
+<header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
+<button id="source" class="crumb" title="Show this file in the editor">No file yet</button>
+<details class="ai-settings"><summary id="ai-summary" title="Which AI writes explanations, and how hard it thinks">AI ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 2 ▾</button></div></details>
+<button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
+<div class="controls"><span class="control-label" id="detail-label">Detail</span><div class="segments" role="group" aria-labelledby="detail-label">
+<button data-level="overview" aria-pressed="false" title="Short: the goal and the main stages">Overview</button>
+<button data-level="logic" aria-pressed="true" title="Step by step: decisions, data and useful math">Logic</button></div>
+<button id="files" class="nav" title="Explain another file. Shows open Yamori tabs and project files grouped by folder." aria-label="Switch file">Switch file…</button>
+<button id="map" class="nav" title="Where to start reading, how files connect, and project terms" aria-label="Open project guide">Project guide</button>
+<button id="refresh" title="Write this explanation again from the current code">Regenerate</button></div></header>
 <main id="content" aria-busy="false"></main>
 <script nonce="${nonce}">
 ${mathLibrary}
@@ -374,6 +464,9 @@ const reactions = [
   { id: 'example', icon: '+', label: 'Show example', pending: 'Adding example…', instruction: 'Add one tiny worked example that makes this block click. Put it in a clearly labeled # Example: note with illustrative inputs, necessary assumptions and the resulting output or state change. Use simple values consistent with the visible computation, and show the key intermediate step if useful. Do not imply these were actual runtime values or infer missing function internals. Preserve existing steps, edits, meaning and caveats. Keep it short and source-linked; change only this explanation.' }
 ];
 const tokenize = ${tokenize.toString()};
+const glossaryMatcher = ${glossaryMatcher.toString()};
+const glossaryParts = ${glossaryParts.toString()};
+let termMatcher, symbolMatcher, appliedFocus;
 const pseudocodeLines = ${pseudocodeLines.toString()};
 const mathParts = ${mathParts.toString()};
 const emphasisParts = ${emphasisParts.toString()};
@@ -394,7 +487,58 @@ function persistDraft(key, flush = false) {
   if (!flush && typeof setTimeout === 'function') draftTimers.set(key, setTimeout(write, 300)); else write();
 }
 function flushDrafts() { for (const key of [...draftTimers.keys()]) persistDraft(key, true); }
-function appendText(parent, text) { for (const token of tokenize(text)) parent.append(node('span', token.text, token.kind)); }
+// A clickable name inside pseudocode: text only, opened by index, never by path.
+function linkSpan(text, className, title, type, index) {
+  const link = node('span', text, className), open = event => { event?.stopPropagation?.(); event?.preventDefault?.(); send(type, { index, documentKey: state.documentKey }); };
+  link.title = title; link.tabIndex = 0; link.setAttribute('role', 'link');
+  link.addEventListener('click', open);
+  link.addEventListener('keydown', event => { if (event.key === 'Enter') open(event); });
+  return link;
+}
+function symbolTitle(link) {
+  const here = state.name && state.name.split(' · ')[0] === link.file;
+  return link.name + ': ' + link.kind + ' in ' + link.file + ':' + link.line + (link.block ? ' · "' + link.block + '"' : '') + (link.purpose && !here ? ' · ' + link.purpose : '')
+    + (here ? ' · click to show its block' : link.explained ? ' · click to open its explanation' : ' · not explained yet; click to explain it');
+}
+function appendText(parent, text) {
+  for (const token of tokenize(text)) {
+    if ((!termMatcher && !symbolMatcher) || (token.kind && token.kind !== 'comment')) { parent.append(node('span', token.text, token.kind)); continue; }
+    const span = node('span', undefined, token.kind);
+    // Project terms first (L1, HOOK), then project names (plan_loops, Script).
+    for (const part of glossaryParts(token.text, termMatcher)) {
+      const term = part.term === undefined ? undefined : state.glossary?.[part.term];
+      if (term) { span.append(linkSpan(part.text, 'term', term.term + ': ' + (term.meaning || (term.kind || 'project name') + ' defined elsewhere') + (term.defined ? ' · defined in ' + term.defined + ' (click to open)' : ''), 'revealTerm', part.term)); continue; }
+      for (const piece of glossaryParts(part.text, symbolMatcher)) {
+        const link = piece.term === undefined ? undefined : state.symbols?.[piece.term];
+        span.append(link ? linkSpan(piece.text, 'symbol', symbolTitle(link), 'openSymbol', piece.term) : document.createTextNode(piece.text));
+      }
+    }
+    parent.append(span);
+  }
+}
+// Where this file sits in a reading order, and the files around it.
+function renderTour(s) {
+  const tour = s.tour, bar = node('nav', undefined, 'tour'); bar.setAttribute('aria-label', 'Reading tour');
+  const go = (item, text, className) => { const button = node('button', text, className); button.title = 'Open ' + item.id + ' in Yamori'; button.addEventListener('click', () => send('tourGo', { id: item.id })); return button; };
+  const row = node('div', undefined, 'tour-row');
+  row.append(node('span', tour.label + ' · Step ' + (tour.index + 1) + ' of ' + tour.total, 'tour-where'));
+  if (tour.prev) row.append(go(tour.prev, '← ' + tour.prev.label, 'tour-prev'));
+  if (tour.next) {
+    row.append(go(tour.next, 'Next: ' + tour.next.label + ' →', 'tour-next primary'));
+    row.append(node('span', tour.next.status === 'ready' ? 'ready ✓' : tour.next.status === 'preparing' ? 'preparing…' : 'written when you open it', 'tour-status'));
+  } else row.append(node('span', 'Last step in ' + tour.label, 'tour-status'));
+  const guide = node('button', 'Project guide', 'tour-guide'); guide.title = 'Where to start reading, how files connect'; guide.addEventListener('click', () => send('map'));
+  row.append(guide); bar.append(row);
+  const links = node('div', undefined, 'tour-links');
+  for (const [label, items] of [['Used by', tour.usedBy], ['Uses', tour.uses]]) {
+    if (!items?.length) continue;
+    const group = node('span', undefined, 'tour-group'); group.append(node('span', label + ': ', 'tour-label'));
+    items.forEach((item, index) => { if (index) group.append(document.createTextNode(', ')); group.append(go(item, item.label, 'tour-link')); });
+    links.append(group);
+  }
+  if (links.children.length) bar.append(links);
+  content.append(bar);
+}
 function appendMath(parent, text) {
   for (const part of mathParts(text)) {
     if (!part.tex) { appendText(parent, part.text); continue; }
@@ -415,6 +559,8 @@ function render(s) {
   send('clearHover');
   const restoreEditorFocus = editing && draftEditors.get(editing.key)?.hasFocus();
   state = s;
+  termMatcher = glossaryMatcher(s.glossary);
+  symbolMatcher = glossaryMatcher((s.symbols || []).map(link => ({ term: link.name })));
   for (const row of s.drafts || []) if (!drafts.has(row.key)) drafts.set(row.key, { ...row, scope: s.draftScope });
   document.body.setAttribute('data-palette', ['paper', 'slate'].includes(s.readingPalette) ? s.readingPalette : 'auto');
   if (editing && editing.documentKey !== s.documentKey) editing = undefined;
@@ -426,11 +572,22 @@ function render(s) {
   document.getElementById('effort').textContent = 'Effort: ' + (s.requestedEffort || 'Default') + ' ▾';
   document.getElementById('refinement').textContent = 'Refine: ' + (s.refinementSteps ?? 2) + ' ▾';
   document.getElementById('effort').title = 'New requests: ' + (s.requestedEffort || 'CLI default') + ' reasoning effort';
-  document.getElementById('source').textContent = s.name || 'Choose a file…';
-  document.getElementById('source').title = s.name ? s.name + ' · Open another file in its own Yamori tab' : 'Choose a file';
+  const crumb = document.getElementById('source');
+  crumb.replaceChildren();
+  if (s.name) {
+    // "pipeline/plan.py · lines 3–9" reads as pipeline › plan.py · lines 3–9.
+    const [file, range] = s.name.split(' · '), parts = file.split('/');
+    if (parts.length > 1) crumb.append(document.createTextNode(parts.slice(0, -1).join(' › ') + ' › '));
+    crumb.append(node('strong', parts.at(-1)));
+    if (range) crumb.append(document.createTextNode(' · ' + range));
+    crumb.title = 'Show ' + file + ' in the editor';
+  } else { crumb.textContent = 'No file yet'; crumb.title = 'Open a file to explain it'; }
+  crumb.disabled = !s.name;
   document.querySelectorAll('[data-level]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.level === s.level)); });
-  refresh.textContent = s.busy ? 'Stop' : 'Refresh all'; refresh.disabled = !s.name || (!!s.sourceMissing && !s.busy);
+  refresh.textContent = s.busy ? 'Stop' : s.stale ? 'Update from code' : 'Regenerate'; refresh.disabled = !s.name || (!!s.sourceMissing && !s.busy);
+  refresh.title = s.busy ? 'Stop the current request' : s.stale ? 'The code changed: update this explanation to match it' : 'Write this explanation again from the current code';
   content.setAttribute('aria-busy', String(!!s.busy)); content.replaceChildren();
+  if (s.tour) renderTour(s);
   if (s.result?.refinement?.warning) {
     const notice = node('div', undefined, 'notice'); notice.setAttribute('role', 'status'); notice.append(node('p', s.result.refinement.warning));
     if (s.result.refinement.status === 'incomplete') { const retry = node('button', 'Retry review'); retry.disabled = !!s.busy || !!s.sourceMissing; retry.addEventListener('click', () => { flushDrafts(); send('refresh'); }); notice.append(retry); }
@@ -446,6 +603,7 @@ function render(s) {
     }
     content.append(el);
   }
+  if (s.run) renderRun(s);
   else if (s.busy) {
     const waiting = node('div', undefined, 'waiting');
     const mascot = node('img'); mascot.src = ${JSON.stringify(logo)}; mascot.alt = '';
@@ -457,8 +615,8 @@ function render(s) {
     const count = s.staleBlocks?.length;
     const message = s.sourceMissing ? s.changeReason || 'Source file unavailable. The cached explanation is kept.' : (s.changeReason || 'Source changed') + ' · ' + dateLabel(s.changedAt) + (count ? ' · ' + count + ' block' + (count === 1 ? '' : 's') + (count === 1 ? ' needs review.' : ' need review.') : '.');
     warning.append(node('p', message));
-    if (!s.sourceMissing) { const update = node('button', 'Refresh all', 'primary'); update.disabled = !!s.busy; update.addEventListener('click', () => { flushDrafts(); send('refresh'); }); warning.append(update); }
-    warning.append(node('p', s.sourceMissing ? 'Restore or reselect the source to refresh. Your local cache is still available.' : s.sharedChange ? 'Shared or new code changed. Refresh all also updates the logic map.' : 'Refresh one block below, or update the cached explanation together.', 'sync-hint'));
+    if (!s.sourceMissing) { const update = node('button', 'Update from code', 'primary'); update.disabled = !!s.busy; update.addEventListener('click', () => { flushDrafts(); send('refresh'); }); warning.append(update); }
+    warning.append(node('p', s.sourceMissing ? 'Restore or reselect the source to refresh. Your local cache is still available.' : s.sharedChange ? 'Shared or new code changed. Update from code also reorganizes the logic map.' : 'Refresh one block below, or update the cached explanation together.', 'sync-hint'));
     content.append(warning);
   }
   if (s.cacheWarning) { const warning = node('p', s.cacheWarning, 'notice error'); warning.setAttribute('role', 'alert'); content.append(warning); }
@@ -471,10 +629,16 @@ function render(s) {
     activity.append(caption, list); content.append(activity);
   }
   const aiSummary = document.getElementById('ai-summary');
-  if (aiSummary) aiSummary.textContent = s.providerLabel + ' · ' + (s.requestedModel || 'Default') + ' ▾';
+  if (aiSummary) aiSummary.textContent = 'AI: ' + s.providerLabel + (s.requestedModel ? ' · ' + s.requestedModel : '') + ' ▾';
   if (s.result) {
     content.append(node('h1', s.result.title));
     const navKey = [s.name, s.level, s.providerLabel].join('|');
+    // A link, hover or CodeLens asked for the block covering a line.
+    if (s.focusLine?.token && s.focusLine.token !== appliedFocus && !s.partial) {
+      const index = s.result.sections.findIndex(section => s.focusLine.line >= section.startLine && s.focusLine.line <= section.endLine);
+      appliedFocus = s.focusLine.token;
+      if (index >= 0) focusedBlocks.set(navKey, index);
+    }
     let selected = focusedBlocks.get(navKey);
     if (selected >= s.result.sections.length) selected = undefined;
     if (selected === undefined && (s.result.sections.length === 1 || s.partial && !s.result.draftComplete)) selected = 0;
@@ -539,8 +703,10 @@ function render(s) {
       actions.append(copyBlock, edit, refreshBlock); heading.append(actions);
       const code = node('pre');
       let stepNumber = 0;
+      const rowsByLine = [];
       pseudocodeLines(section.pseudocode).forEach(({ text, kind }, lineIndex) => {
         const row = node('span', undefined, 'code-line' + (kind ? ' ' + kind : ''));
+        rowsByLine[lineIndex + 1] = row;
         if (kind === 'note' && /^\\s*#\\s*(Context|Why|How|What):/i.test(text)) row.className += ' context-note';
         const mapping = section.lineMap?.find(m => m.pseudocodeLine === lineIndex + 1);
         row.append(node('span', text.trim() && kind !== 'note' ? String(++stepNumber) : '', 'step-number'));
@@ -564,7 +730,7 @@ function render(s) {
         code.append(row);
       });
       el.append(heading);
-      if (blockStale) { const warning = node('div', undefined, 'block-stale'); warning.append(node('span', s.removedBlocks?.includes(index) ? 'This code was removed. Refresh all to reorganize the map.' : 'This cached block needs review.')); if (!s.removedBlocks?.includes(index)) { const refresh = node('button', 'Refresh block'); refresh.disabled = !!s.busy || !!s.sourceMissing; refresh.addEventListener('click', () => { flushDrafts(); send('refreshBlock', { index, documentKey: s.documentKey }); }); warning.append(refresh); } el.append(warning); }
+      if (blockStale) { const warning = node('div', undefined, 'block-stale'); warning.append(node('span', s.removedBlocks?.includes(index) ? 'This code was removed. Update from code to reorganize the map.' : 'This cached block needs review.')); if (!s.removedBlocks?.includes(index)) { const refresh = node('button', 'Refresh block'); refresh.disabled = !!s.busy || !!s.sourceMissing; refresh.addEventListener('click', () => { flushDrafts(); send('refreshBlock', { index, documentKey: s.documentKey }); }); warning.append(refresh); } el.append(warning); }
 
       if (editing?.index === index && editing.documentKey === s.documentKey) {
         el.open = true;
@@ -595,6 +761,7 @@ function render(s) {
         editor.append(draftEditor.host, instruction, cacheStatus); el.append(editor);
       } else {
         el.append(code);
+        appendTests(el, s, section, index, rowsByLine);
         const row = node('div', undefined, 'block-reactions');
         row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Improve ' + section.title + ' with ' + s.providerLabel);
         const buttons = [];
@@ -634,8 +801,12 @@ function render(s) {
     const retry = node('button', 'Try again', 'primary'); retry.addEventListener('click', () => send('refresh')); content.append(retry);
   } else {
     const empty = node('div', undefined, 'empty');
-    empty.append(node('h1', 'Big ideas. Less guesswork.'), node('p', 'Open a script. Pick an idea from its logic map. Read, explore, and make it your own.'));
-    const button = node('button', 'Read current file', 'primary'); button.addEventListener('click', () => send('read')); empty.append(button);
+    empty.append(node('h1', 'Big ideas. Less guesswork.'), node('p', 'Explain a file as short pseudocode, or let the project guide show where to start reading.'));
+    const actions = node('div', undefined, 'empty-actions');
+    for (const [label, type, primary] of [['Explain current file', 'read', true], ['Switch file…', 'switchFile'], ['Open project guide', 'map']]) {
+      const button = node('button', label, primary ? 'primary' : ''); button.addEventListener('click', () => send(type)); actions.append(button);
+    }
+    empty.append(actions);
     if (s.providerLabel === 'Claude Code' && !s.error) {
       const connect = node('button', 'Connect Claude'); connect.title = 'Sign in with Claude Code or install its CLI';
       connect.addEventListener('click', () => send('connectClaude')); empty.append(connect);
@@ -645,7 +816,130 @@ function render(s) {
   if (restoreEditorFocus && editing) draftEditors.get(editing.key)?.focus();
   updateElapsed();
 }
+const clock = ms => { const total = Math.max(0, Math.round(ms / 1000)); return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0'); };
+// The request being written: who writes it, each stage, and live details.
+function renderRun(s) {
+  const run = s.run, live = run.state === 'running' && !!s.busy;
+  const effort = run.effort ? run.effort + ' effort' : 'CLI default effort';
+  const meta = [run.provider, run.model || 'default model', effort, run.lookups ? run.lookups + ' Yamori lookup' + (run.lookups === 1 ? '' : 's') : ''].filter(Boolean).join(' · ');
+  const steps = node('ol');
+  for (const step of run.steps) {
+    const item = node('li', undefined, step.state);
+    item.append(node('span', ({ done: '✓', active: '●', waiting: '○', skipped: '–', stopped: '×' })[step.state] || '○', 'icon'));
+    const text = node('span'); text.append(node('span', step.label, 'label'));
+    if (step.detail) text.append(node('span', step.detail, 'detail'));
+    item.append(text);
+    const time = node('span', step.state === 'done' && step.startedAt && step.endedAt - step.startedAt >= 1000 ? clock(step.endedAt - step.startedAt) : '', 'time');
+    if (step.state === 'active' && live && step.startedAt) time.setAttribute('data-since', String(step.startedAt));
+    item.append(time); steps.append(item);
+  }
+  if (live) {
+    const box = node('section', undefined, 'run live'); box.setAttribute('role', 'status'); box.setAttribute('aria-live', 'polite');
+    const head = node('div', undefined, 'run-head'), mascot = node('img'); mascot.src = ${JSON.stringify(logo)}; mascot.alt = '';
+    const title = run.steps.find(step => step.state === 'active');
+    const total = node('span', clock(Date.now() - run.startedAt), 'run-time'); total.setAttribute('data-since', String(run.startedAt));
+    head.append(mascot, node('span', title ? title.label : run.title, 'run-title'), total);
+    box.append(head, node('div', meta, 'run-meta'), steps);
+    if (s.partial && s.result?.draftComplete) box.append(node('p', 'The draft below is ready to read. It may still improve while the review finishes.', 'hint'));
+    content.append(box);
+  } else {
+    const box = node('details', undefined, 'run');
+    const verb = run.state === 'done' ? 'Done in ' : run.state === 'failed' ? 'Failed after ' : 'Stopped after ';
+    box.append(node('summary', verb + clock((run.endedAt || Date.now()) - run.startedAt) + ' · ' + meta), steps);
+    content.append(box);
+  }
+}
+// ---- Unit tests as notebook cells ----
+const runCalls = new Map(), runSteps = new Map();
+const duration = ms => ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(1) + ' s';
+// One value: text in a code chip, or an emoji chip for files, images and data.
+function valueNode(value) {
+  if (!value) return node('span', '—', 'value muted');
+  if (value.emoji) {
+    const chip = node('span', undefined, 'value file'); chip.tabIndex = 0;
+    chip.append(node('span', value.emoji, 'value-emoji'), document.createTextNode(' ' + (value.detail || value.repr)));
+    chip.title = [value.kindLabel, value.repr, value.detail, value.guidance].filter(Boolean).join('\\n');
+    return chip;
+  }
+  const text = node('code', value.repr ?? '', 'value');
+  text.title = [value.type, Number.isInteger(value.size) ? value.size + ' items' : ''].filter(Boolean).join(' · ');
+  return text;
+}
+function valueList(values) {
+  const list = node('span', undefined, 'run-values');
+  for (const value of values || []) { const item = node('span', undefined, 'run-value'); item.append(node('span', value.name + ' = ', 'run-name'), valueNode(value)); list.append(item); }
+  if (!values?.length) list.append(node('span', 'nothing', 'muted'));
+  return list;
+}
+function runRow(key, content) { const row = node('div', undefined, 'run-row'); row.append(node('span', key, 'run-key'), content); return row; }
+// Tests that exercise this block's functions, and the run the reader chose.
+function appendTests(el, s, section, index, rows) {
+  const tests = s.blockTests?.[index], run = s.runs?.[index];
+  if (!tests?.length && !run) return;
+  if (tests?.length) {
+    const bar = node('div', undefined, 'test-bar'), real = test => s.canRunTests && test.language === 'python';
+    bar.append(node('span', tests.some(real) ? 'Run with a test:' : 'Simulate with a test:', 'test-label'));
+    for (const test of tests) {
+      const button = node('button', '▸ ' + test.name.split('::').at(-1), 'test-chip');
+      button.title = (real(test) ? 'Run ' : 'Simulate ') + test.name + ' from ' + test.file + ' and watch ' + test.function + ' step by step' + (real(test) ? '' : ' (simulated by AI: real runs need a trusted workspace and a Python test)');
+      button.disabled = run?.state === 'running' || !!s.partial;
+      button.addEventListener('click', () => send('runTest', { index, id: test.id, documentKey: s.documentKey, ...(real(test) ? {} : { simulate: true }) }));
+      bar.append(button);
+    }
+    el.append(bar);
+  }
+  if (!run) return;
+  const cell = node('section', undefined, 'run-cell' + (run.mode === 'simulated' ? ' simulated' : '')); cell.tabIndex = 0;
+  cell.setAttribute('aria-label', (run.mode === 'simulated' ? 'Simulated run of ' : 'Run of ') + run.name);
+  const head = node('div', undefined, 'run-head');
+  head.append(node('strong', run.state === 'running' ? (run.mode === 'simulated' ? 'Simulating ' : 'Running ') + run.name + '…' : '▶ ' + run.name));
+  if (run.state === 'done') head.append(node('span', run.mode === 'real' ? 'Real run' : 'Simulated by AI, not a real run', 'run-mode'));
+  if (run.state === 'done' && run.mode === 'real') head.append(node('span', run.outcome + ' · ' + duration(run.durationMs) + (run.python ? ' · Python ' + run.python : ''), 'run-outcome ' + run.outcome));
+  const tools = node('span', undefined, 'run-tools'), test = tests?.find(item => item.id === run.id);
+  const tool = (label, title, message) => { const button = node('button', label); button.title = title; button.addEventListener('click', () => send(message.type, message)); tools.append(button); };
+  if (run.state !== 'running' && test) {
+    tool('Run again', 'Run this test again', { type: 'runTest', index, id: test.id, documentKey: s.documentKey, ...(run.mode === 'simulated' ? { simulate: true } : {}) });
+    if (run.mode !== 'simulated') tool('Simulate with AI', 'Ask the AI to trace this run without running anything', { type: 'runTest', index, id: test.id, documentKey: s.documentKey, simulate: true });
+  }
+  tool(run.state === 'running' ? 'Stop' : 'Close', run.state === 'running' ? 'Stop this run' : 'Close this cell', { type: 'closeRun', index });
+  head.append(tools); cell.append(head);
+  if (run.state === 'running') { cell.append(node('p', run.mode === 'simulated' ? 'Asking the AI to trace this run…' : 'Running the test with your project’s Python…', 'muted')); el.append(cell); return; }
+  if (run.state === 'failed') { cell.append(node('p', run.message || 'The run failed.', 'run-error')); el.append(cell); return; }
+  if (run.reason) cell.append(node('p', run.reason, 'muted'));
+  if (run.mode === 'real' && run.outcome !== 'passed' && run.message) cell.append(node('p', 'Test ' + run.outcome + ': ' + run.message, 'run-error'));
+  const calls = run.calls || [], callKey = s.documentKey + ':' + index;
+  if (!calls.length) { cell.append(node('p', run.mode === 'real' ? 'The test finished without calling ' + run.function + '.' : 'The AI returned no steps.', 'muted')); el.append(cell); return; }
+  const callIndex = Math.min(runCalls.get(callKey) || 0, calls.length - 1), call = calls[callIndex];
+  if (calls.length > 1) {
+    const picker = node('div', undefined, 'run-calls'); picker.append(node('span', run.function + ' ran ' + calls.length + ' times:', 'muted'));
+    calls.forEach((_, i) => { const button = node('button', 'Call ' + (i + 1)); button.setAttribute('aria-pressed', String(i === callIndex)); button.addEventListener('click', () => { runCalls.set(callKey, i); render(state); }); picker.append(button); });
+    cell.append(picker);
+  }
+  cell.append(runRow('In', valueList(call.inputs)));
+  if (call.error) cell.append(runRow('Raises', node('code', [call.error.type, call.error.message].filter(Boolean).join(': '), 'value run-error')));
+  else { const out = node('span', undefined, 'run-values'); out.append(valueNode(call.output)); cell.append(runRow('Out', out)); }
+  if (call.steps?.length) {
+    const stepKey = callKey + ':' + callIndex, at = Math.max(0, Math.min(call.steps.length - 1, runSteps.get(stepKey) || 0)), step = call.steps[at];
+    const move = delta => { runSteps.set(stepKey, Math.max(0, Math.min(call.steps.length - 1, at + delta))); render(state); };
+    const nav = node('div', undefined, 'run-nav');
+    const back = node('button', '◀'); back.setAttribute('aria-label', 'Previous step'); back.disabled = at === 0; back.addEventListener('click', () => move(-1));
+    const forward = node('button', '▶'); forward.setAttribute('aria-label', 'Next step'); forward.disabled = at === call.steps.length - 1; forward.addEventListener('click', () => move(1));
+    nav.append(back, node('span', 'Step ' + (at + 1) + ' / ' + call.steps.length + ' · source line ' + step.line, 'run-position'), forward);
+    cell.append(runRow('Steps', nav));
+    if (step.note) cell.append(runRow('', node('span', step.note, 'run-note')));
+    cell.append(runRow('Changed', valueList(step.changed)));
+    cell.addEventListener('keydown', event => { if (event.key === 'ArrowRight') { event.preventDefault?.(); move(1); } if (event.key === 'ArrowLeft') { event.preventDefault?.(); move(-1); } });
+    // The pseudocode step whose source link covers the line that ran.
+    const mapping = (section.lineMap || []).filter(item => item.startLine <= step.line && step.line <= item.endLine).sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine))[0];
+    if (mapping && rows[mapping.pseudocodeLine]) rows[mapping.pseudocodeLine].className += ' run-current';
+    if (call.truncated) cell.append(node('p', 'Only the first steps were recorded.', 'muted'));
+  }
+  if (run.caveats) cell.append(node('p', 'Caveats: ' + run.caveats, 'muted'));
+  if (run.log && run.log.trim()) { const log = node('details', undefined, 'run-log'); log.append(node('summary', 'Test output'), node('pre', run.log)); cell.append(log); }
+  el.append(cell);
+}
 function updateElapsed() {
+  document.querySelectorAll?.('[data-since]').forEach(el => { const since = Number(el.getAttribute('data-since')); if (since) el.textContent = clock(Date.now() - since); });
   const caption = document.getElementById('activity-caption');
   if (caption) caption.textContent = (state.error || state.activity?.at(-1) === 'Stopped' ? 'Stopped' : state.busy ? state.progress || 'Working' : 'Completed') + (state.busy && state.startedAt ? ' · ' + Math.floor((Date.now() - state.startedAt) / 1000) + 's' : '') + ' · Activity';
 }
@@ -656,8 +950,9 @@ document.getElementById('effort').addEventListener('click', () => send('effort')
 document.getElementById('refinement').addEventListener('click', () => send('refinement'));
 document.addEventListener?.('keydown', event => { if (event.key === 'Escape') document.querySelector?.('.ai-settings')?.removeAttribute('open'); });
 document.getElementById('colors').addEventListener('click', () => send('palette'));
-document.getElementById('source').addEventListener('click', () => send('browse'));
+document.getElementById('source').addEventListener('click', () => send('showSource'));
 document.getElementById('files').addEventListener('click', () => send('switchFile'));
+document.getElementById('map').addEventListener('click', () => send('map'));
 refresh.addEventListener('click', () => { flushDrafts(); send(state.busy ? 'stop' : 'refresh'); });
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => send('level', { level: b.dataset.level })));
 window.addEventListener('message', e => {
@@ -671,4 +966,4 @@ window.addEventListener('beforeunload', flushDrafts);
 send('ready');
 </script></body></html>`;
 }
-module.exports = { cleanEmphasis, panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts };
+module.exports = { glossaryMatcher, glossaryParts, BASE_STYLES, LOGO, cleanEmphasis, panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts };

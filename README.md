@@ -5,7 +5,7 @@
 <h1 align="center">Yamori</h1>
 
 <p align="center"><strong>Programming context, made explicit.</strong></p>
-<p align="center">Cursor &amp; VS Code · Codex &amp; Claude Code · Three levels of detail</p>
+<p align="center">Cursor &amp; VS Code · Codex &amp; Claude Code · Overview or step-by-step Logic</p>
 
 **Yamori is for someone who can handle difficult ideas but needs the programming context made explicit.**
 
@@ -19,7 +19,7 @@ independently, navigate unfamiliar code and become more efficient. Useful
 mathematics stays precise. Programming conventions and consequential details get
 a short explanation where they matter.
 
-[See an example](#from-a-call-to-an-idea) · [Get started](#get-started) · [Choose your model](#models-and-reasoning-effort) · [Develop](#development)
+[See an example](#from-a-call-to-an-idea) · [Get started](#get-started) · [Project guide](#project-guide) · [Choose your model](#models-and-reasoning-effort) · [Develop](#development)
 
 ## From a call to an idea
 
@@ -52,18 +52,62 @@ available definitions. A function's name alone does not establish its behavior.
 | View | What you get |
 | --- | --- |
 | **Overview** | The goal, main stages and essential insights. |
-| **Logic** | Short steps, meaningful decisions and useful mathematics. |
-| **Detailed** | Closer explanations of operations, boundaries and side effects. |
+| **Logic** | Short steps, meaningful decisions, exact constants and boundaries, and useful mathematics. |
+
+Switch between them with the **Detail: Overview | Logic** control. The panel's
+other controls say what they do:
+- **Switch file…** opens another file: files already open in Yamori first, then
+  project files grouped by folder, with "✓ explained" and each file's purpose.
+- **Project guide** shows where to start reading.
+- **Regenerate** writes the explanation again. It reads **Update from code** when
+  the source changed, and **Stop** while a request runs.
+- Click the file name at the top to show it in the editor.
+- **AI ▾** holds provider, model, effort and refinement.
 
 - **Start with the logic map.** See the script’s named ideas first. Open one block at a time, use Previous/Next, or return to the map. Moving around starts no AI request. Unsaved drafts are marked on the map and reopen in the same editor.
-- **Work across files.** Click the Yamori gecko icon in a source editor to open **filename.py · Yamori** beside your code. Each file gets its own tab in the same reader column. Reopening a file reuses its tab and running request. The **▤ Files** button switches between open/prepared explanations or opens another project file. Each tab keeps its detail level and unsaved block drafts; switching back restores the source file without moving the caret.
+- **Work across files.** Click the Yamori gecko icon in a source editor to open **filename.py · Yamori** beside your code. Each file gets its own tab in the same reader column. Reopening a file reuses its tab and running request. **Switch file…** moves between open and prepared explanations or opens another project file. Each tab keeps its detail level and unsaved block drafts; switching back restores the source file without moving the caret.
 - **Stay connected to the source.** Hover over a mapped step to highlight its code. Click to jump to the corresponding lines.
 - **Understand custom calls.** Yamori uses available project definitions to explain a call's role, inputs and output.
 - **See the reasoning that matters.** Important source comments are preserved. Brief notes explain non-obvious consequences, assumptions and guards.
-- **Follow generation live.** Pseudocode streams into the panel, with activity updates and a Stop button.
+- **See what is happening.** While a request runs, a progress card names the
+  provider, the model that actually answered and the effort. It lists each stage:
+  - read the code and its context
+  - think it through, with a live estimate of thinking tokens for Claude
+  - write the explanation, with a character count
+  - review difficult blocks, with the current review round
+  Yamori lookups and a timer per stage appear as they happen. Pseudocode streams
+  into the panel as it is written, and **Stop** is always available. Afterwards the
+  card folds into one line, such as "Done in 0:48 · Claude Code · claude-opus-5-5 ·
+  medium effort".
 - **Improve a block in one click.** Use **Explain better**, **Make shorter** or **Show example** beneath a block. Each asks your selected provider, model and effort to revise only that explanation. Results are cached; other detail levels update when opened. Buttons are disabled during generation or when that block needs a source refresh.
 - **Make an explanation your own.** Copy a block, edit it in place, then ask Codex or Claude to update that block. Approved edits are cached; other views are rebuilt when requested.
 - **Move between views quickly.** Generation prepares the lower-detail views too. Returning to them uses memory or disk cache.
+
+- **Follow a reading order without waiting.** Open a file from the guide's
+  **Start here** and a tour bar shows where it sits (**pipeline/ · Step 2 of 4**),
+  what uses it and what it uses, and **Next: write.py →**. While you read, Yamori
+  prepares the next step in the background with your AI settings, one file ahead,
+  so Next opens instantly. Files you open some other way show the bar but prepare
+  nothing. Turn this off with `yamori.prefetchNext`.
+- **Click through to the code a name refers to.** Project names in an
+  explanation, such as `plan_loops` or `Script`, are underlined. Hover to see
+  where each is defined, the Yamori block that explains it and its file's purpose.
+  Click to open that explanation at that block; for a name from the same file,
+  Yamori jumps to its block.
+- **Get help without leaving the editor.** In a mapped project, hovering a
+  project name in your source shows what Yamori knows: a glossary meaning, or
+  where the name is defined and which block explains it. Links open it in Yamori
+  or go to the definition. Above the code, CodeLens shows Yamori's block titles as
+  a table of contents (**Yamori · Plan the loops**). They only appear while the
+  explanation still matches the code. A file without an explanation gets one
+  **Yamori · Step 1 of 4 · Explain this file** link. Neither uses AI. Turn the
+  lenses off with `yamori.codeLens`.
+- **Watch a function run.** When a unit test calls a block's function, the block
+  offers **Run with a test**. You get a notebook-style cell with **In**, **Out**
+  and **◀ Step ▶**, and each step highlights its pseudocode line. Images,
+  documents and data files show as emoji with guidance on hover. See
+  [Run a function with its tests](#run-a-function-with-its-tests).
+- **See the whole project.** **Project guide** shows, folder by folder, which files to read first, plus a map of files grouped in folder boxes. Explanations of mapped files know the file's role, its neighbours and terms defined elsewhere, and the AI can look up more. See [Project guide](#project-guide).
 
 The reading panel uses a minimal black-and-white pixel style: crisp edges, a tiny
 pixel gecko samurai and subtle feedback on navigation and loading. One idea stays
@@ -77,7 +121,7 @@ Yamori is an early preview. Its public extension ID is **`cowana-ai.yamori`**.
 
 1. Open a code file in Cursor or VS Code.
 2. Click the **Yamori gecko icon** at the top right of the script, or **Yamori** in the bottom status bar.
-3. Choose **Overview**, **Logic** or **Detailed** in the reading panel.
+3. Choose **Overview** or **Logic** in the reading panel, or open **Project guide** to see where to start.
 
 Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori),
 or search for **Yamori** by **Yamori** (`cowana-ai`) in VS Code’s Extensions panel.
@@ -100,7 +144,7 @@ After updating an installed version, run **Developer: Reload Window**.
 
 Try the included [demo.py](demo.py), a small logistic-regression example.
 Right-click a folder and choose **Yamori: Read a Folder or Project** to select
-multiple files. Files are prepared sequentially without opening a stack of tabs. Use **Yamori: Switch Files** or **▤ Files** to open a prepared explanation. Completed results remain cached
+multiple files. Files are prepared sequentially without opening a stack of tabs. Use **Yamori: Switch Files** or **Switch file…** to open a prepared explanation. Completed results remain cached
 if you stop.
 
 On the first install, Yamori shows a one-time **Open current file** action. The
@@ -114,7 +158,8 @@ In Restricted Mode, Yamori ignores workspace-controlled CLI paths and refinement
 settings, skips project language-service definition lookups, and uses your user-level
 CLI installation through isolated, tool-disabled sessions outside the project.
 Custom behavior whose definition is unavailable stays explicitly unknown. VS Code's
-workspace trust setting stays unchanged; Yamori does not run project code.
+workspace trust setting stays unchanged; Yamori does not run project code there
+(see [Run a function with its tests](#run-a-function-with-its-tests) for trusted folders).
 
 ### Connect a provider
 
@@ -149,6 +194,161 @@ authentication and network settings while excluding customizations; older versio
 retain the isolated fallback. Update Claude Code if your older installation needs
 user settings to authenticate.
 
+## Project guide
+
+One file rarely explains itself. A planner may use `L1`, `HOOK` and `BRIDGE`
+without saying that `L1` is the first loop, opened by the hook, and that the
+section names live in another file. The project guide gives you, and the AI,
+that context.
+
+Open it with **Project guide** in the reading panel, **Yamori: Open Project Guide**,
+or right-click a folder → **Yamori: Open Project Guide**. Opened from a file, it
+starts in that file's folder with the file highlighted.
+
+**Start here.** Pick a folder on the left, or **Whole project**. Yamori lists its
+files in reading order, one numbered step each, with why that file comes next,
+its purpose and "✓ explained" when Yamori already has an explanation. A collapsed
+**Details** line holds what it uses, what uses it and its project terms. Each step
+has **Explain**, **Open source** and **Show on map**.
+- A folder starts where it is entered: files nothing else in the folder imports,
+  entry points first, then files the rest of the project uses.
+- From there it follows what each file imports, in the order it uses it.
+- For the whole project, the main entry point comes first. Entry points are files
+  nothing else imports that have a main guard, a `package.json` `main`/`bin` entry
+  or a name such as `main`, `app` or `cli`.
+- Tests are left out. When AI notes exist, their reading order leads.
+
+**Map.** Files sit inside folder boxes; arrows point from a file to what it uses,
+and numbered badges follow the reading order.
+- Drag a folder (its title or any file in it) to move the whole box. Positions are
+  remembered; **Reset layout** forgets them.
+- Click a folder title to fold it into one node; **Expand all** and **Collapse all**
+  do every folder. Projects with more than 80 files open folded except the main
+  entry point's folder.
+- The map takes the whole tab. Click a file to open **Details**: purpose, role,
+  terms, what it uses and what uses it (grouped by folder), and definitions, plus the
+  searchable project terms. **Details** and **Close** toggle the panel; in a narrow
+  column it sits below the map. Double-click a file, or press Enter, to explain it.
+- Drag the background to pan. Scroll, pinch or use **− / +** to zoom; **Fit** shows everything.
+
+**How it is built.** Like Aider's repo map, Yamori parses each file with
+tree-sitter, records definitions, references and imports, and ranks files with
+PageRank over "uses" links. Python, JavaScript, TypeScript/TSX, Go, Java and Rust
+use bundled tree-sitter grammars; other languages use lighter pattern matching.
+In Python and JavaScript/TypeScript, files are linked only through imports; in Go,
+Java and Rust, shared names also link files in the same package. The scan is
+local and free: no AI, no project code runs (tests run only when you press Run)
+and no language service is used,
+so it also works in Restricted Mode. While the guide is open, saves, new files and
+deletions trigger an incremental rescan of changed files only.
+
+**AI notes (automatic).** When the guide maps a folder, Yamori asks your selected
+provider, model and effort for a one-line purpose and role per file, plus a project
+glossary: IDs and naming schemes, section and stage names, enum members, meaningful
+constants and domain terms, each with its meaning and defining line. A final request
+writes a short project overview, named file groups and a reading order with a reason
+per step. Notes make everything richer: the reading order explains itself, terms
+become links and hovers, and explanations know each neighbour's purpose.
+- It runs in the background with a status-bar spinner and progress in the guide;
+  **Stop** pauses it and finished files are kept.
+- After a rescan, only new or changed files are noted again. The project overview is
+  rewritten only when new files appear.
+- Projects with more than 120 files without notes ask once first. A failure, such
+  as a signed-out CLI, is shown once and not retried until you press **Write AI notes**.
+- Turn it off with `yamori.autoNotes`; it is always off in Restricted Mode, where the
+  button still works. Files are
+batched (about 40 KB of input per request); large files are sent as an outline.
+Notes run with tools disabled, Stop is always available, finished batches are
+saved, and only changed files are re-noted later. Notes are model-written
+summaries, not guarantees; constants without notes still appear in the glossary
+with their location.
+
+**Better explanations.** Once a folder is mapped, new explanations, block updates
+and refreshes include a bounded project context (about 6,000 characters):
+- the file's purpose, role and reading step
+- what it uses and what uses it, with Yamori's one-line summary of each when available
+- glossary terms that appear in its code
+
+**Yamori lookups.** For mapped files, the AI writing an explanation can also look
+things up itself through Yamori's read-only knowledge server, a local MCP server
+started by the CLI for that one request:
+
+| Lookup | Returns |
+| --- | --- |
+| `project_overview` | Overview, file groups, entry points and reading order. |
+| `list_files` | Files grouped by folder, with purposes. |
+| `file_info` | One file's purpose, terms, definitions, what it uses and what uses it. |
+| `find_symbol` | Where a name is defined and which files use it. |
+| `glossary` | Project terms with meanings and locations. |
+| `get_explanation` | Yamori's Overview or Logic pseudocode for another file. |
+| `read_source` | Up to 200 numbered lines of another mapped file. |
+
+- Lookups only reach files in the map, through real paths inside the mapped
+  folder; nothing is written and no command runs. Built-in CLI tools stay off.
+- Each lookup appears in the activity trail ("Looked up file · models/script.py").
+- The AI decides whether to look anything up; small, well-covered files often need none.
+- Claude Code runs these requests with `--setting-sources ""` (safe mode drops
+  explicitly passed MCP servers) and allows only `mcp__yamori__*`. Codex runs them
+  through `app-server` and approves only Yamori's server.
+- If the CLI cannot start the server, Yamori retries once without lookups.
+- Lookups add model turns and can send more of your project's source to the
+  provider. Turn them off with `yamori.agentTools`. They are always off in Restricted Mode.
+
+Glossary terms in the explanation become dotted links: hover for the meaning, click
+to open the definition. Every explanation is also asked to define IDs, labels and
+section names at first use, with or without a map. Cached explanations keep the
+context they were written with; when the map has newer context for a file, a notice
+suggests **Regenerate**. Opening the cache still uses no AI.
+
+## Run a function with its tests
+
+Reading pseudocode tells you what a function does; seeing it run with real values
+shows its inputs and outputs. In a mapped project, Yamori links unit tests to the
+functions they call: Python `test_*` functions and `test_*` methods of `Test*`
+classes, and JS/TS `it(…)` and `test(…)` calls. A block whose functions have tests
+shows **Run with a test: ▸ test_first_loop**.
+
+**A real run (Python, trusted folders).** Yamori runs that one test with your
+project's interpreter and records how the function ran:
+- the arguments it received (**In**)
+- every executed line, with the variables that line changed (**Steps**); ◀ ▶ or the
+  arrow keys step through, and the current step's pseudocode line is highlighted
+- the return value or exception (**Out** or **Raises**), plus the test's own
+  result (passed, failed with its message, or error)
+
+If the function runs several times, **Call 1 / 2 / 3** picks one. The interpreter is
+`yamori.pythonPath` if set, otherwise the Python extension's interpreter for the
+project, then a `.venv`, then `python3`. pytest runs the test when installed;
+otherwise plain `test_*` functions and `unittest` cases run directly, and a test that
+needs pytest fixtures says so. Runs stop after 60 seconds, and each records at most
+3 calls and 300 steps.
+
+This runs your project's code on your machine. Yamori asks before the first run in
+each folder (**Run**, **Always run tests in this folder**, or **Simulate with AI
+instead**) and never runs anything in Restricted Mode.
+
+**An AI simulation, when a real run isn't possible.** In Restricted Mode, for
+JS/TS tests, or on request (**Simulate with AI**), your selected AI traces the
+function on the test's inputs without running anything. The cell is dashed and
+labelled **Simulated by AI, not a real run**, with any caveats; steps are limited
+to the function's own lines. On a small Python function, Claude and Codex both
+reproduced the real run's exact steps, but simulated values can be wrong.
+
+**Files, images and data as emoji.** Values that stand for files or media get an
+emoji, and hovering explains what they are:
+
+| Emoji | Value | Hover example |
+| --- | --- | --- |
+| 🖼️ | image path or image in memory | size, width × height, and "A path to an image file. Code usually opens it to read its pixels; the path itself is just text." |
+| 📄 | document path or open file | file name, size |
+| 📊 | data file, or a table in memory | rows × columns |
+| 🎵 🎬 🗜️ 📁 | audio, video, archive, other file | file name, size |
+| 📦 | bytes | length |
+| 🔢 | array or tensor | shape and dtype |
+
+Real runs check the file on disk (missing files say "not found on disk"); simulated
+values are recognised from their text.
+
 ## Pixel interface
 
 Click **Theme** beside Refresh, or run **Yamori: Choose Reading Colors**.
@@ -169,6 +369,25 @@ Choose Model** and **Yamori: Choose Effort**.
 - **Codex:** model choices and supported effort levels come from its live catalog.
 - **Claude Code:** choose Sonnet, Opus, Haiku or Fable, or enter an exact model ID. Known model families use their documented effort levels.
 - **Provider default:** lets the CLI choose. Unrecognized custom models offer default effort until their capabilities are known.
+
+Without an effort choice, Yamori asks both Claude and Codex for **low** effort.
+On a dense 162-line file, Opus 5.5 started writing after 2 seconds at low effort
+and finished in 50; at medium it thought for 77 seconds first and took 137. Raise
+the effort per model in **AI ▾ → Effort**, or pick **Provider default** to let the
+CLI decide.
+
+**Quick jobs use a fast model** (`yamori.fastModel`, default `auto`): Claude's
+Haiku, or the model Codex's own catalog describes as fast (for example
+`gpt-6-luna`). They handle:
+- AI notes, three batches at a time (a 4-file batch takes about 10 seconds)
+- the Overview level, and the Overview written alongside each Logic explanation
+  (it runs in parallel and is usually ready first, so the Logic answer is shorter)
+- picking the blocks worth reviewing
+
+Logic explanations, block edits, refreshes and reviews always use your main model.
+Set `yamori.fastModel` to `off` to use your main model everywhere, or to an exact
+model ID. Step links are written as compact `[line, start, end]` triples: as
+objects they made up 35–42% of every answer.
 
 Model choices are remembered per provider; effort choices are remembered per
 provider and model. Choosing either starts no inference. The choice applies to
@@ -231,7 +450,7 @@ first-use welcome screen, and empty activity entries are omitted.
 
 Final text and review metrics are cached locally, separated by refinement setting.
 Cached reads make no model requests. Existing pre-refinement caches stay readable;
-use **Refresh all** to apply the new setting. When a selected block changes, old
+use **Regenerate** to apply the new setting. When a selected block changes, old
 companion views are not silently reused; other detail levels are derived from the
 final explanation when requested.
 
@@ -329,7 +548,7 @@ no AI. Opening a previously cached file after an offline change shows the old
 explanation with a dated warning; it does not silently start generation.
 
 Choose **Refresh block** to update one block from its current code, supporting
-definitions and cached explanation. **Refresh all** updates the cached document
+definitions and cached explanation. **Update from code** updates the cached document
 in context. When only some blocks changed, it requests patches and preserves
 untouched blocks exactly. New, removed or shared code calls for a whole-map
 refresh so the structure can change. Known helper changes flag their callers
@@ -350,8 +569,15 @@ directories with tools disabled. Partial output is never cached, and source
 links activate after final validation. The activity trail shows connection,
 writing and validation phases rather than private reasoning.
 
-Files or selections are limited to 120 KB. Folder discovery is limited to 500
-source files. Each model request allows up to three minutes at Low, five at Medium/default,
+Project guides are stored beside explanations under
+`globalStorage/cowana-ai.yamori/cache/projects/`: the static graph, AI notes,
+folded folders and moved boxes, and an index of Yamori's explanations that the
+lookups read. **Add AI notes** sends the source of the mapped files that
+need notes (outlines for large files) through the selected provider after you
+confirm. The map never reads through symlinks outside the mapped folder.
+
+Files or selections are limited to 120 KB. Folder discovery and project maps are
+limited to 500 source files; map files over 500 KB are skipped. Each model request allows up to three minutes at Low, five at Medium/default,
 and ten at higher effort, with Stop available throughout. Local files and VS Code 1.90+ or a compatible Cursor version are required.
 
 </details>
@@ -374,6 +600,10 @@ the standalone validators before running the checks:
 npm ci
 npm run build:validation
 ```
+
+The tree-sitter runtime and grammars in `grammars/` are copied from the pinned
+`@vscode/tree-sitter-wasm` package. After updating it, run `npm run build:parser`
+and commit `grammars/`. They are about 4.4 MB unpacked; the packaged VSIX grows to about 1 MB.
 
 Only trusted, repository-owned schemas are compiled during the build. The
 extension does not load Ajv or compile schemas at runtime. Commit the generated
@@ -398,11 +628,23 @@ npx @vscode/vsce package --no-dependencies
 | [engine.js](engine.js) | Translation prompts, provider processes and response validation. |
 | [schemas.js](schemas.js) | Shared JSON Schemas and build-time validator generation. |
 | [validation.min.js](validation.min.js) | Standalone Ajv validators used by the extension. |
-| [panel.js](panel.js) | Reading panel, block editing, source navigation and math rendering. |
+| [panel.js](panel.js) | Reading panel, block editing, source navigation, glossary links and math rendering. |
+| [project.js](project.js) | Project scan, import resolution, ranking, reading path, layout and explanation context. |
+| [map.js](map.js) | Project guide: Start here steps and the folder-box map. |
+| [mcp.js](mcp.js) | Read-only Yamori knowledge server (MCP) for the AI's lookups. |
+| [grammars/](grammars/) | Bundled tree-sitter runtime and grammars (generated). |
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 61 automated tests cover strict schema validation, field-path errors,
+**Validation:** 97 automated tests cover the project guide and lookups (tree-sitter extraction for
+every bundled grammar, import resolution per language, entry points and reading
+paths, incremental rescans, deterministic layouts, bounded explanation context,
+note validation, folder reading orders, folder boxes that stay structured at any
+size, Start here and map messages, glossary links, the MCP server over stdio with
+mapped-only and bounded reads, Claude and Codex lookup flags and approvals, the
+no-lookup fallback, unit-test discovery and association, the Python runner on real tests (inputs, every executed line, outputs, failures, unittest, fixtures that need pytest, file and image descriptions), real runs gated by trust and a once-per-folder question, AI simulations limited to the function's lines, the notebook cell with emoji values and step highlighting, fast models for quick jobs (a parallel Overview, compact step links, three note batches at a time, Codex's catalog fast model), automatic AI notes (quiet, changed files only, asks first for large projects, no retry loops, manual in Restricted Mode), the map-first guide with Details on demand, the reader's tour bar and one-step-ahead preparation (only in a tour, only when not cached, off with its setting), project-name links that open the defining block, editor hovers with escaped text and only Yamori's commands trusted, CodeLens that hides on changed code, the plain-language reader controls, the live progress card and its stages (thinking token counts, never thinking text), effort defaults, the folder-grouped file
+picker and an end-to-end guide → notes → explanation flow that rejects symlinked
+files outside the project), strict schema validation, field-path errors,
 cache compatibility, loading without development dependencies or runtime schema
 compilation, evaluator-reference repair, incomplete-review caching/retry, meaningful error states, streaming before review, compact context, early completion/plateau stops, Restricted Mode TypeScript opening,
 user-only CLI settings, blocked definition lookups, first-use provider selection,
@@ -418,15 +660,24 @@ Browser fixture checks cover narrow panels, math, editing/undo, navigation,
 cache warnings and retained drafts. A live Codex check selected an agreement-count
 identity, skipped a seed getter and retained the improved result after one
 refinement step. Live Codex also verified DKDM explanations, model/effort selection
-and block edits. Claude launch/stream/refinement behavior and Windows discovery
-are tested with fixtures; live Claude generation and live Windows sign-in remain
-unverified.
+and block edits. Live Claude Code 2.1.325 (Haiku) and Codex 0.169 runs generated
+explanations with Yamori's lookup server loaded, and forced lookups returned
+glossary data through both; the same Claude check confirmed that `--safe-mode`
+drops the server. Windows discovery is tested with fixtures; live Windows
+sign-in remains unverified.
 
 ## Credits and license
 
 Application code is [MIT licensed](LICENSE). Bundled [KaTeX](https://katex.org/)
 0.19.1 is MIT licensed, with its full notice retained in `katex.min.js`. It runs
 locally to produce MathML without font downloads or network requests.
+
+The bundled [tree-sitter](https://tree-sitter.github.io/) runtime and the Python,
+JavaScript, TypeScript, Go, Java and Rust grammars come from Microsoft's
+[`@vscode/tree-sitter-wasm`](https://github.com/microsoft/vscode-tree-sitter-wasm)
+0.3.1 and are MIT licensed; the notice is in `grammars/LICENSE`. The project map's
+ranking approach follows [Aider's repo map](https://aider.chat/2023/10/22/repomap.html);
+its tag queries were written for Yamori.
 
 Bundled [jsdiff](https://github.com/kpdecker/jsdiff) is BSD-3-Clause licensed, with its notice retained in `diff.min.js`; bounded line alignment runs locally.
 

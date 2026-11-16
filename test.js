@@ -4,6 +4,10 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, schemaFor, lowerView, partialView, streamCodex, editPrompt, revisionPrompt, listModels, listEfforts, findCLI, cliLaunch } = require('./engine');
 const { cleanEmphasis, panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts } = require('./panel');
+// Tests never start a real CLI: choosing the quick-job model is stubbed for the
+// extension; the real chooser is tested against a fixture Codex below.
+const realFastModel = require('./engine').fastModel;
+require('./engine').fastModel = async provider => provider === 'claude' ? { model: 'haiku', effort: 'low' } : { model: 'fast-test', effort: 'low' };
 const source = { uri: 'file:///example.py', name: 'example.py', language: 'python', startLine: 10, text: 'x = 1\nprint(x)' };
 const valid = { title: 'Print a number', summary: 'Sets and prints a number.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Set x to 1\nPrint x' }] };
 const statusItem = () => ({ show() { this.visible = true; }, hide() { this.visible = false; }, dispose() { this.disposed = true; } });
@@ -34,7 +38,7 @@ test('all levels use original selection line numbers and distinct instructions',
 test('cache invalidates for source, location, level, provider and model changes', () => {
   const key = cacheKey(source, 'logic', 'codex');
   for (const changed of [{ ...source, text: 'x = 2' }, { ...source, startLine: 20 }, { ...source, uri: 'file:///other.py' }]) assert.notEqual(cacheKey(changed, 'logic', 'codex'), key);
-  assert.notEqual(cacheKey(source, 'detailed', 'codex'), key);
+  assert.notEqual(cacheKey(source, 'overview', 'codex'), key);
   assert.notEqual(cacheKey(source, 'logic', 'claude'), key);
   assert.notEqual(cacheKey(source, 'logic', 'claude', 'a'), cacheKey(source, 'logic', 'claude', 'b'));
   assert.equal(cacheKey({ ...source }, 'logic', 'codex'), key);
@@ -189,7 +193,7 @@ test('readability instructions require task headings and expanded decisions', ()
 
 test('higher generations prepare lower views in the same request', () => {
   assert.deepEqual(schemaFor('logic').properties.views.required, ['overview']);
-  assert.deepEqual(schemaFor('detailed').properties.views.required, ['overview', 'logic']);
+  assert.deepEqual(Object.keys(LEVELS), ['overview', 'logic'], 'two detail levels');
   assert.deepEqual(schemaFor('overview').properties.views.required, []);
   assert.match(promptFor(source, 'logic'), /4–10 concise action lines/);
 });
@@ -202,7 +206,7 @@ test('validates and preserves step links and companion views across disk seriali
   for (const bad of [{ pseudocodeLine: 5, startLine: 10, endLine: 10 }, { pseudocodeLine: 1, startLine: 1, endLine: 10 }, { pseudocodeLine: 1, startLine: 11, endLine: 10 }]) {
     assert.throws(() => parseResult(JSON.stringify({ ...valid, sections: [{ ...valid.sections[0], lineMap: [bad] }] }), source), /Invalid step/);
   }
-  assert.equal(lowerView(parsed, 'overview', 'detailed'), undefined);
+  assert.equal(lowerView(parsed, 'overview', 'logic'), undefined);
 });
 
 test('Codex receives a schema object and returns companion views through its output file', async () => {
@@ -237,7 +241,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     replaceChildren(...children) { this.children = children; }
     setAttribute(name, value) { (this.attributes ||= {})[name] = value; } addEventListener(type, callback) { (this.events ||= {})[type] = callback; }
   }
-  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files'].map(id => [id, new Element('div')]));
+  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map'].map(id => [id, new Element('div')]));
   let receive;
   const document = { documentElement: { style: {} }, body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
   const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
@@ -406,7 +410,7 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     if (deferred) return new Promise(resolve => { deferred.resolve = resolve; deferred.progress = opts.onProgress; });
     if (opts.edit) return { ...valid, sections: [{ ...opts.edit.section, pseudocode: opts.edit.draft + '\n# Polished', lineMap: [{ pseudocodeLine: 2, startLine: 2, endLine: 2 }] }] };
     const make = name => ({ ...valid, title: name, sections: [{ ...valid.sections[0], pseudocode: opts.revision?.value.sections[0].pseudocode || valid.sections[0].pseudocode, startLine: 1, endLine: 2, lineMap: [{ pseudocodeLine: 2, startLine: 2, endLine: 2 }] }, { title: 'Unchanged neighbor', pseudocode: 'Print result', startLine: 2, endLine: 2 }] });
-    return { ...make(opts.level), requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, views: Object.fromEntries(['overview', 'logic', 'detailed'].slice(0, ['overview', 'logic', 'detailed'].indexOf(opts.level)).map(name => [name, make(name)])) };
+    return { ...make(opts.level), requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, views: Object.fromEntries(['overview', 'logic'].slice(0, ['overview', 'logic'].indexOf(opts.level)).map(name => [name, make(name)])) };
   } };
   const moduleStub = { exports: {} };
   const context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (k, fallback) => state.get(k) ?? fallback, update: async (k, v) => state.set(k, v) }, secrets: { get: async () => undefined } };
@@ -423,9 +427,9 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     assert.equal(messages.at(-1).result.title, 'overview');
     assert.equal(calls, 1, 'downgrade requires no second model request');
     await receive({ type: 'level', level: 'detailed' });
-    assert.equal(messages.at(-1).result.title, 'detailed');
+    assert.equal(messages.at(-1).result.title, 'overview', 'the removed Detailed level is ignored');
     await receive({ type: 'level', level: 'logic' });
-    assert.equal(calls, 2, 'returning to an earlier level uses cache');
+    assert.equal(calls, 1, 'returning to Logic uses cache');
     await receive({ type: 'hoverStep', index: 0, pseudocodeLine: 2 });
     assert.equal(highlights[0].start.line, 1);
     assert.equal(editor.selection.start.line, 0, 'hover must not move the caret');
@@ -443,14 +447,14 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     await moduleStub.exports.activate(context);
     await commands.get('yamori.read')();
     await receive({ type: 'level', level: 'overview' });
-    assert.equal(calls, 2, 'companion views survive extension restart');
+    assert.equal(calls, 1, 'companion views survive extension restart');
     await receive({ type: 'level', level: 'logic' });
     documentText = 'x = 2\nprint(x)'; change({ document: doc });
     assert.equal(messages.at(-1).stale, true);
     await receive({ type: 'hoverStep', index: 0, pseudocodeLine: 2 });
     assert.equal(highlights.length, 0, 'stale source must never highlight');
     await receive({ type: 'refresh' });
-    assert.equal(calls, 3, 'refresh translates edited source');
+    assert.equal(calls, 2, 'refresh translates edited source');
     assert.equal(messages.at(-1).stale, false);
     const beforeEdit = messages.at(-1), neighbor = JSON.stringify(beforeEdit.result.sections[1]);
     await receive({ type: 'copyBlock', index: 0, documentKey: beforeEdit.documentKey });
@@ -460,14 +464,14 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     assert.match(edited, /Polished/);
     assert.equal(JSON.stringify(messages.at(-1).result.sections[1]), neighbor, 'neighboring blocks must remain byte-for-byte unchanged');
     assert.equal(messages.at(-1).result.edited, true);
-    assert.equal(calls, 4);
+    assert.equal(calls, 3);
     await receive({ type: 'level', level: 'overview' });
-    assert.equal(calls, 5, 'a stale lower view is regenerated lazily');
+    assert.equal(calls, 4, 'a stale lower view is regenerated lazily');
     assert.ok(lastRevision?.value.sections[0].pseudocode.includes('$x^2$'));
     await receive({ type: 'level', level: 'logic' });
-    assert.equal(calls, 5);
+    assert.equal(calls, 4);
     assert.equal(messages.at(-1).result.sections[0].pseudocode, edited, 'approved block is preserved exactly');
-    await receive({ type: 'level', level: 'detailed' });
+    await receive({ type: 'level', level: 'overview' });
     await receive({ type: 'level', level: 'logic' });
     assert.equal(messages.at(-1).result.sections[0].pseudocode, edited, 'derived companion views cannot replace the approved edit');
     await Promise.all(context.subscriptions.splice(0).map(d => d?.dispose?.()));
@@ -545,13 +549,13 @@ test('identity migration imports valid preferences once without overwriting newe
   try {
     vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? {} : require(id) });
     const file = path.join(dir, 'migration.json');
-    await fs.writeFile(file, JSON.stringify({ detail: 'detailed', provider: 'gemini' }));
+    await fs.writeFile(file, JSON.stringify({ detail: 'overview', provider: 'gemini' }));
     await stub.exports.migratePreferences(context);
-    assert.equal(state.get('detail'), 'detailed');
+    assert.equal(state.get('detail'), 'overview');
     assert.equal(state.get('provider'), 'codex');
     await assert.rejects(fs.access(file));
     await stub.exports.migratePreferences(context);
-    assert.equal(state.get('detail'), 'detailed');
+    assert.equal(state.get('detail'), 'overview');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
@@ -778,7 +782,7 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
   };
   const valueFor = opts => {
     const make = level => ({ title: opts.source.name + ' ' + level, summary: 'Read the file.', sections: [{ title: 'Print', startLine: 1, endLine: 2, pseudocode: opts.edit?.draft || 'Print ' + opts.source.name, lineMap: [{ pseudocodeLine: 1, startLine: 2, endLine: 2 }] }] });
-    return { ...make(opts.level), requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, views: Object.fromEntries(['overview', 'logic', 'detailed'].slice(0, ['overview', 'logic', 'detailed'].indexOf(opts.level)).map(level => [level, make(level)])) };
+    return { ...make(opts.level), requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, views: Object.fromEntries(['overview', 'logic'].slice(0, ['overview', 'logic'].indexOf(opts.level)).map(level => [level, make(level)])) };
   };
   const engine = { ...require('./engine'), generate: async opts => {
     calls++;
@@ -1268,4 +1272,1177 @@ test('packaged validators work with no Ajv installation, schema compilation or d
     const script=`const Module=require('node:module'),load=Module._load;Module._load=function(id,...args){if(id==='ajv'||id.startsWith('ajv/')||id==='esbuild')throw new Error('Build-only dependency loaded at runtime');return load.call(this,id,...args);};global.Function=function(){throw new Error('Runtime schema compilation is forbidden');};const {parseResult}=require('./engine');const source=${JSON.stringify(source)},value=${JSON.stringify(valid)};if(parseResult(JSON.stringify(value),source).title!==value.title)process.exit(2);process.stdout.write('Standalone validation works');`;
     const output=await runProcess(process.execPath,['-e',script],'',{cwd:root});assert.equal(output,'Standalone validation works');
   }finally{await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('a refined view derived from another level does not invalidate that level again',async()=>{
+  const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const temp=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-pingpong-'));
+  const commands=new Map(),state=new Map(),generated=[];let receive;
+  class Uri{constructor(v){this.value=v;this.scheme='file';this.fsPath=v.replace('file://','');}toString(){return this.value;}static parse(v){return new Uri(v);}}
+  class Range{constructor(a,b,c,d){if(typeof a==='object'){this.start=a;this.end=b;}else{this.start={line:a,character:b};this.end={line:c,character:d};}}}
+  class Selection extends Range{get isEmpty(){return this.start.line===this.end.line&&this.start.character===this.end.character;}}
+  const text='x = 1\nprint(x)',doc={uri:new Uri('file:///sample.py'),languageId:'python',lineCount:2,getText:()=>text,lineAt:i=>({text:text.split('\n')[i]})};
+  const editor={document:doc,selection:new Selection(0,0,0,0),setDecorations(){},revealRange(){}},noop=()=>({dispose(){}});
+  const vscode={Uri,Range,Selection,ThemeColor:class{},StatusBarAlignment:{Right:2},ViewColumn:{One:1,Beside:2},TextEditorRevealType:{InCenterIfOutsideViewport:1},
+    commands:{registerCommand(id,fn){commands.set(id,fn);return noop();}},
+    workspace:{isTrusted:true,textDocuments:[doc],asRelativePath:()=>'sample.py',openTextDocument:async()=>doc,getConfiguration:()=>({get:(_,fallback)=>fallback}),onDidChangeTextDocument(){return noop();}},
+    window:{createStatusBarItem:statusItem,activeTextEditor:editor,visibleTextEditors:[editor],createTextEditorDecorationType:noop,onDidChangeActiveTextEditor:noop,showTextDocument:async()=>editor,showErrorMessage(m){throw new Error(m);},setStatusBarMessage(){},
+      createWebviewPanel:()=>({reveal(){},onDidDispose:noop,webview:{postMessage(){},onDidReceiveMessage(fn){receive=fn;return noop();}}})},
+    env:{clipboard:{writeText:async()=>{}}}};
+  // Every refinement is accepted, so each generation returns a reviewed draft without companion views.
+  const engine={...require('./engine'),generate:async opts=>{generated.push(opts.level+(opts.revision?'<'+opts.revision.level:''));
+    return{title:opts.level,summary:'s',sections:[{title:'Block',startLine:1,endLine:2,pseudocode:opts.level+' text',lineMap:[]}],requestedModel:opts.model,requestedEffort:opts.effort,effort:opts.effort,
+      refinement:{version:1,stepsRequested:2,stepsCompleted:1,acceptedStep:1,lambda:0.5,initialObjective:6,finalObjective:2,entropy:1,readCost:2,faithful:true,history:[],selectedBlocks:[0],status:'reviewed'}};}};
+  const moduleStub={exports:{}},context={subscriptions:[],globalStorageUri:{fsPath:temp},globalState:{get:(k,f)=>state.get(k)??f,update:async(k,v)=>state.set(k,v)},secrets:{}};
+  try{
+    vm.runInNewContext(await fs.readFile(path.join(__dirname,'extension.js'),'utf8'),{require:id=>id==='vscode'?vscode:id==='./engine'?engine:require(id),module:moduleStub,Buffer,AbortController,setTimeout,clearTimeout});
+    await moduleStub.exports.activate(context);await commands.get('yamori.read')();
+    for(const level of ['overview','logic','overview','logic'])await receive({type:'level',level});
+    assert.deepEqual(generated,['logic','overview<logic'],'returning to a refined level uses its cached result');
+  }finally{await Promise.all(context.subscriptions.map(d=>d?.dispose?.()));await fs.rm(temp,{recursive:true,force:true});}
+});
+
+// ---- Project map ---------------------------------------------------------------
+const projectMap = require('./project');
+const videoProject = {
+  'main.py': '"""Generate a video script."""\nfrom pipeline.plan import plan_loops\nfrom pipeline.write import write_blocks\nfrom models.script import Script\n\ndef main(outline):\n    script = Script.from_outline(outline)\n    return write_blocks(script, plan_loops(script.blocks))\n\nif __name__ == "__main__":\n    main("a")\n',
+  'pipeline/__init__.py': '',
+  'models/__init__.py': '',
+  'models/script.py': 'HOOK = "HOOK"\nENDING = "ENDING"\nBRIDGE = "BRIDGE"\n\nclass Script:\n    def __init__(self, blocks):\n        self.blocks = blocks\n\n    @classmethod\n    def from_outline(cls, outline):\n        return cls([HOOK, outline, ENDING])\n',
+  'pipeline/plan.py': 'from models.script import HOOK, ENDING\n\ndef plan_loops(blocks):\n    """Assign loop IDs in opening order."""\n    loops = [{"id": "L1", "open": HOOK, "close": ENDING}]\n    for i, block in enumerate(blocks[1:-1], start=2):\n        loops.append({"id": f"L{i}", "open": block})\n    return loops\n\ndef _loop_hint(loop):\n    return "" if loop["id"] == "L1" else "Open " + loop["id"]\n',
+  'pipeline/write.py': 'from .plan import _loop_hint\nfrom models.script import BRIDGE\n\ndef write_blocks(script, loops):\n    return [_loop_hint(loop) for loop in loops] + [BRIDGE]\n',
+  'tests/test_plan.py': 'from pipeline.plan import plan_loops\n\ndef test_first_loop():\n    assert plan_loops(["HOOK", "x", "ENDING"])[0]["id"] == "L1"\n'
+};
+async function scanFixture(files, previous) {
+  const scanned = await projectMap.scanFiles(Object.entries(files).map(([rel, text]) => ({ rel, read: async () => text })), previous, new projectMap.Indexer());
+  return { ...scanned, graph: projectMap.buildGraph(scanned.records) };
+}
+
+test('project indexer extracts definitions, imports and references with bundled tree-sitter grammars', async () => {
+  const indexer = new projectMap.Indexer();
+  for (const grammar of projectMap.GRAMMARS) {
+    const { patterns } = await indexer.language(grammar);
+    assert.equal(patterns, projectMap.QUERIES[grammar].length, grammar + ' tag queries all compile');
+  }
+  const py = await indexer.extract('pipeline/plan.py', videoProject['pipeline/plan.py']);
+  assert.deepEqual(py.defs.map(def => def.name + ':' + def.kind), ['plan_loops:function', '_loop_hint:function']);
+  assert.deepEqual(py.imports[0], { spec: 'models.script', line: 1, kind: 'module', names: ['HOOK', 'ENDING'] });
+  assert.ok(py.refs.some(([name]) => name === 'HOOK'));
+  const ts = await indexer.extract('src/app.ts', "import { load } from './data.js';\nexport interface Options { size: number }\nexport const LIMIT = 3;\nexport function run(o: Options) { return load(o.size); }\n");
+  assert.deepEqual(ts.defs.map(def => def.name), ['Options', 'LIMIT', 'run']);
+  assert.deepEqual(ts.imports.map(imp => [imp.spec, imp.names]), [['./data.js', ['load']]]);
+  const fallback = projectMap.regexExtract('lib/util.rb', "require_relative 'helpers'\nMAX_ITEMS = 3\ndef total(items)\n  items.sum\nend\n");
+  assert.deepEqual(fallback.defs.map(def => def.name), ['MAX_ITEMS', 'total']);
+  assert.equal(fallback.imports[0].spec, 'helpers');
+});
+
+test('project imports resolve per language without linking packages outside the project', () => {
+  const ctx = projectMap.resolutionContext(['pkg/__init__.py', 'pkg/core.py', 'pkg/sub/__init__.py', 'pkg/sub/tool.py', 'src/app.ts', 'src/data.ts', 'src/lib/index.tsx', 'cmd/main.go', 'internal/plan/plan.go', 'internal/plan/plan_test.go', 'src/main/java/a/c/Thing.java', 'crate/src/main.rs', 'crate/src/plan.rs', 'crate/src/plan/loops.rs'],
+    { 'go.mod': 'module example.com/app\n', 'crate/Cargo.toml': '[package]' });
+  const resolve = (from, imp) => projectMap.resolveImport(from, { kind: 'module', names: [], ...imp }, ctx);
+  assert.deepEqual(resolve('pkg/sub/tool.py', { spec: '..core' }), ['pkg/core.py']);
+  assert.deepEqual(resolve('pkg/sub/tool.py', { spec: 'pkg.core' }), ['pkg/core.py']);
+  assert.deepEqual(resolve('pkg/core.py', { spec: '.sub', names: ['tool'] }).sort(), ['pkg/sub/__init__.py', 'pkg/sub/tool.py']);
+  assert.deepEqual(resolve('pkg/core.py', { spec: 'numpy' }), []);
+  assert.deepEqual(resolve('src/app.ts', { spec: './data.js' }), ['src/data.ts']);
+  assert.deepEqual(resolve('src/app.ts', { spec: './lib' }), ['src/lib/index.tsx']);
+  assert.deepEqual(resolve('src/app.ts', { spec: 'react' }), []);
+  assert.deepEqual(resolve('cmd/main.go', { spec: 'example.com/app/internal/plan' }), ['internal/plan/plan.go']);
+  assert.deepEqual(resolve('src/main/java/a/c/Thing.java', { spec: 'a.c.Thing' }), []);
+  assert.deepEqual(resolve('crate/src/main.rs', { spec: 'plan', kind: 'mod' }), ['crate/src/plan.rs']);
+  assert.deepEqual(resolve('crate/src/main.rs', { spec: 'crate::plan::loops::Loop' }), ['crate/src/plan/loops.rs']);
+  assert.equal(resolve('pkg/core.py', { spec: '....outside' }).length, 0, 'relative imports cannot leave the project');
+});
+
+test('project graph finds the entry point, a top-down reading path and import-backed links', async () => {
+  const { graph, skipped } = await scanFixture(videoProject);
+  assert.equal(skipped, 2, 'empty package markers are not map nodes');
+  assert.deepEqual(graph.entries, ['main.py']);
+  assert.deepEqual(graph.readingPath.map(step => step.id), ['main.py', 'pipeline/plan.py', 'pipeline/write.py', 'models/script.py'], 'stages in the order the entry point imports them');
+  assert.deepEqual(graph.readingPath[1].names, ['plan_loops']);
+  const edge = graph.edges.find(item => item.from === 'pipeline/plan.py' && item.to === 'models/script.py');
+  assert.ok(edge.imported); assert.deepEqual(edge.names.slice(0, 2).sort(), ['ENDING', 'HOOK'], 'explicitly imported names lead');
+  assert.ok(graph.files['tests/test_plan.py'].test && !graph.files['tests/test_plan.py'].entry);
+  assert.ok(!graph.edges.some(item => item.to.startsWith('tests/')), 'tests are never a dependency');
+  assert.ok(Math.abs(Object.values(graph.files).reduce((sum, file) => sum + file.rank, 0) - 1) < 1e-3, 'ranks form a distribution');
+  assert.ok(graph.files['models/script.py'].rank > graph.files['main.py'].rank, 'shared foundations outrank the entry point');
+  // Python files only link through imports; Go packages also link by shared names.
+  const noisy = await scanFixture({ 'a.py': 'def helper_value():\n    return 1\n', 'b.py': 'def use():\n    return helper_value()\n' });
+  assert.equal(noisy.graph.edges.length, 0, 'a shared name without an import is not a Python dependency');
+  const go = await scanFixture({ 'plan/a.go': 'package plan\nfunc OpenLoops() int { return 1 }\n', 'plan/b.go': 'package plan\nfunc Run() int { return OpenLoops() }\n' });
+  assert.deepEqual(go.graph.edges.map(item => [item.from, item.to, item.imported]), [['plan/b.go', 'plan/a.go', false]]);
+});
+
+test('project rescans reuse unchanged files and parse only edited ones', async () => {
+  const first = await scanFixture(videoProject);
+  const second = await scanFixture({ ...videoProject, 'pipeline/write.py': videoProject['pipeline/write.py'] + '\nEXTRA = 1\n' }, first.graph);
+  assert.equal(second.parsed, 1); assert.equal(second.reused, 4);
+  assert.ok(second.graph.files['pipeline/write.py'].defs.some(def => def.name === 'EXTRA'));
+  assert.deepEqual(second.graph.files['main.py'], first.graph.files['main.py'], 'reused records are identical');
+});
+
+test('project map views lay out layers deterministically and respect moved nodes', async () => {
+  const { graph } = await scanFixture(videoProject);
+  const view = projectMap.graphView(graph), layout = projectMap.layoutView(view);
+  assert.deepEqual(projectMap.layoutView(view), layout, 'layout is deterministic');
+  const byId = new Map(layout.nodes.map(node => [node.id, node]));
+  assert.ok(byId.get('main.py').y < byId.get('pipeline/plan.py').y && byId.get('pipeline/plan.py').y < byId.get('models/script.py').y, 'users above what they use');
+  for (const a of layout.nodes) for (const b of layout.nodes) if (a !== b && a.y === b.y) assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x, 'nodes in a layer never overlap');
+  const moved = projectMap.layoutView(view, { 'main.py': { x: 500, y: -40 } });
+  assert.deepEqual([moved.nodes.find(node => node.id === 'main.py').x, moved.nodes.find(node => node.id === 'main.py').y], [500, -40]);
+  const folders = projectMap.graphView(graph, { mode: 'folders' });
+  assert.deepEqual(folders.nodes.map(node => node.id).sort(), ['folder:(root)', 'folder:models', 'folder:pipeline', 'folder:tests']);
+  assert.ok(folders.edges.some(edge => edge.from === 'folder:pipeline' && edge.to === 'folder:models'));
+  const focus = projectMap.graphView(graph, { mode: 'folder', folder: 'pipeline' });
+  assert.deepEqual(focus.nodes.filter(node => !node.external).map(node => node.id).sort(), ['pipeline/plan.py', 'pipeline/write.py']);
+  assert.ok(focus.nodes.some(node => node.external && node.id === 'models/script.py'), 'neighbours outside a folder stay visible');
+});
+
+test('project context gives explanations bounded roles and terms without changing old cache keys', async () => {
+  const { graph } = await scanFixture(videoProject);
+  const notes = { overview: 'Writes retention-focused video scripts.', files: {
+    'pipeline/plan.py': { hash: graph.files['pipeline/plan.py'].hash, purpose: 'Plans open loops for each block.', role: 'loop planning', terms: [{ term: 'L1', aliases: ['L2', 'L<n>'], meaning: 'The first loop: opened by the hook and answered only in the ending.', line: 5 }] },
+    'models/script.py': { hash: 'old', purpose: 'Defines script sections.', role: 'data model', terms: [{ term: 'HOOK', aliases: [], meaning: 'Opening section that raises the main question.', line: 1 }, { term: 'BRIDGE', aliases: [], meaning: 'Transition speech.', line: 3 }] } } };
+  const text = videoProject['pipeline/plan.py'];
+  const slice = projectMap.projectContextFor(graph, notes, 'pipeline/plan.py', text);
+  assert.equal(slice.file.purpose, 'Plans open loops for each block.'); assert.equal(slice.file.readingStep, 2);
+  assert.deepEqual(slice.glossary.map(term => term.term), ['L1', 'HOOK', 'ENDING'], 'own terms, then neighbour terms that appear in the source');
+  assert.equal(slice.glossary[1].outdated, true, 'notes for changed files are marked outdated');
+  assert.equal(slice.glossary[2].kind, 'constant', 'constants without notes still give a location');
+  assert.equal(slice.uses[0].purpose, 'Defines script sections.');
+  assert.deepEqual(projectMap.projectContextFor(graph, notes, 'pipeline/plan.py', text), slice, 'the fingerprint is stable');
+  const big = { files: Object.fromEntries(Object.keys(graph.files).map(rel => [rel, { hash: graph.files[rel].hash, purpose: 'x'.repeat(290), role: 'r', terms: Array.from({ length: 12 }, (_, i) => ({ term: 'TERM_' + rel.length + '_' + i, aliases: [], meaning: 'y'.repeat(390), line: 1 })) }])) };
+  assert.ok(JSON.stringify(projectMap.projectContextFor(graph, big, 'pipeline/plan.py', text)).length <= 6100, 'the slice stays bounded');
+  const base = { uri: 'file:///p/pipeline/plan.py', text, startLine: 1, name: 'plan.py', language: 'python' };
+  assert.equal(cacheKey(base, 'logic', 'codex'), cacheKey({ ...base, projectContext: undefined }, 'logic', 'codex'), 'old cache keys are unchanged without a map');
+  assert.notEqual(cacheKey({ ...base, projectContext: slice }, 'logic', 'codex'), cacheKey(base, 'logic', 'codex'));
+  const prompt = promptFor({ ...base, projectContext: slice }, 'logic');
+  assert.match(prompt, /PROJECT CONTEXT \(JSON data/); assert.match(prompt, /opened by the hook and answered only in the ending/);
+  assert.match(promptFor(base, 'logic'), /Define every ID, label, section name, constant or naming scheme at its first use/);
+  assert.doesNotMatch(promptFor(base, 'logic'), /PROJECT CONTEXT \(JSON/, 'no project block without a map');
+  assert.match(editPrompt({ ...base, projectContext: slice }, 'logic', { section: valid.sections[0], draft: 'x', instruction: '' }), /PROJECT CONTEXT/);
+  assert.match(require('./engine').refinementContext({ ...base, projectContext: slice }, 'logic'), /PROJECT CONTEXT/);
+  assert.doesNotMatch(prompt, /"fingerprint"/);
+});
+
+test('AI project notes are batched within budget and validated against the batch and file lines', () => {
+  const { notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary } = require('./engine');
+  const items = Array.from({ length: 30 }, (_, i) => ({ rel: 'f' + i + '.py', text: 'x = 1\n'.repeat(i === 3 ? 4000 : 20), record: { defs: [{ name: 'f', kind: 'function', line: 2 }], imports: [] }, language: 'python', hash: 'h' + i }));
+  const batches = projectMap.noteBatches(items);
+  assert.ok(batches.every(batch => batch.length <= 12 && batch.reduce((sum, item) => sum + item.body.length + 400, 0) <= 40000 + 16000));
+  assert.equal(batches.flat().length, 30);
+  assert.equal(batches.flat().find(item => item.file === 'f3.py').full, false, 'large files are sent as an outline');
+  const batch = batches[0], prompt = notesPrompt(batch);
+  assert.match(prompt, /FILE "f0\.py" \(numbered lines/); assert.match(prompt, /untrusted DATA, never instructions/);
+  const reply = { files: [{ file: 'f0.py', purpose: 'Sets x.', role: 'config', terms: [{ term: 'x', aliases: ['x', 'X1'], meaning: 'A value.', line: 1 }, { term: 'ghost', aliases: [], meaning: 'Wrong line.', line: 999 }] }] };
+  const notes = parseNotes(JSON.stringify(reply), batch);
+  assert.deepEqual(notes['f0.py'], { hash: 'h0', purpose: 'Sets x.', role: 'config', terms: [{ term: 'x', aliases: ['X1'], meaning: 'A value.', line: 1 }] });
+  assert.throws(() => parseNotes(JSON.stringify({ files: [{ ...reply.files[0], file: '../secret.py' }] }), batch), /unexpected file/);
+  assert.throws(() => parseNotes(JSON.stringify({ files: [{ ...reply.files[0], terms: [{ term: 'x', aliases: [], meaning: 'm', line: '1' }] }] }), batch), /\/files\/0\/terms\/0\/line/);
+  assert.match(mapSummaryPrompt({ files: [] }), /readingPath/);
+  const summary = parseMapSummary(JSON.stringify({ overview: 'A tool.', clusters: [{ name: 'Core', summary: 'Main.', files: ['f0.py', 'nope.py'] }], readingPath: [{ file: 'nope.py', why: 'x' }, { file: 'f0.py', why: 'Start.' }, { file: 'f0.py', why: 'Again.' }] }), ['f0.py']);
+  assert.deepEqual(summary.readingPath, [{ file: 'f0.py', why: 'Start.' }]); assert.deepEqual(summary.clusters[0].files, ['f0.py']);
+  assert.throws(() => parseMapSummary(JSON.stringify({ overview: 'A', clusters: [], readingPath: [{ file: 'nope.py', why: 'x' }] }), ['f0.py']), /no project files/);
+});
+
+function fakeDocument(ids, extra = {}) {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attributes = {}; this.events = {}; this.style = {}; this.dataset = {}; this.hidden = false; const classes = new Set(); this.classList = { add: c => classes.add(c), remove: c => classes.delete(c), toggle: (c, on) => { (on ?? !classes.has(c)) ? classes.add(c) : classes.delete(c); }, contains: c => classes.has(c), toString: () => [...classes].join(' ') }; }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+    setAttribute(name, value) { this.attributes[name] = value; if (name === 'class') { this.attributes.class.split(' ').forEach(c => c && this.classList.add(c)); } }
+    getAttribute(name) { return this.attributes[name]; }
+    removeAttribute(name) { delete this.attributes[name]; }
+    addEventListener(type, callback) { this.events[type] = callback; }
+    focus() { this.focused = true; }
+  }
+  const elements = Object.fromEntries(ids.map(id => [id, new Element('div')]));
+  const document = { documentElement: { style: {} }, body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createElementNS: (_, tag) => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => extra.all || [], querySelector: () => undefined, importNode: node => node, addEventListener() {} };
+  const all = root => { const list = []; const visit = el => { list.push(el); (el.children || []).forEach(visit); }; visit(root); return list; };
+  return { document, elements, all, Element };
+}
+
+test('project guide lists folder reading steps and a folder-box map; drag, fold, click and double-click send safe messages', async () => {
+  const { mapHTML, edgePath, fitTransform, byFolder } = require('./map');
+  const html = mapHTML('paper');
+  assert.doesNotMatch(html, /innerHTML|insertAdjacentHTML|outerHTML|eval\(/);
+  assert.match(html, /script-src 'nonce-/);
+  assert.equal(edgePath({ x: 0, y: 0, w: 100, h: 36 }, { x: 0, y: 104, w: 100, h: 36 }), 'M50 36 C50 70 50 70 50 104');
+  assert.ok(fitTransform([{ x: 0, y: 0, w: 100, h: 40 }, { x: 300, y: 200, w: 100, h: 40 }], 800, 600).k <= 1.4);
+  assert.deepEqual(byFolder(['b/x.py', 'main.py', 'a/y.py', 'a/z.py']), [['a', ['a/y.py', 'a/z.py']], ['b', ['b/x.py']], ['', ['main.py']]]);
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all'];
+  const { document, elements, all } = fakeDocument(ids);
+  const messages = [], sent = { at: i => messages.at(i), get length() { return messages.length; } }; let receive;
+  vm.runInNewContext(html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON });
+  assert.equal(messages[0].type, 'ready');
+  // A real grouped layout from the fixture project.
+  const { graph } = await scanFixture(videoProject);
+  const map = projectMap.layoutGrouped(graph), steps = projectMap.readingPathFor(graph, {}, 'pipeline');
+  receive({ data: { type: 'map', state: { files: 5, links: 6, notes: { done: 0, total: 4 }, folders: projectMap.folderTree(graph), map,
+    guide: { folder: 'pipeline', steps: steps.map(step => ({ id: step.id, why: 'Why ' + step.id, uses: [], usedBy: ['main.py'], explained: step.id === 'pipeline/plan.py' })) },
+    cards: { 'pipeline/plan.py': { purpose: 'Plans open loops.', role: 'loop planning', explained: true, terms: [{ term: 'L1', aliases: [], meaning: 'The first loop.', line: 5 }], defs: ['plan_loops'] } },
+    glossary: [{ term: 'L1', aliases: ['L2'], meaning: 'The first loop.', file: 'pipeline/plan.py', line: 5 }, { term: '<b>HOOK</b>', aliases: [], meaning: '', kind: 'constant', file: 'models/script.py', line: 1 }] } } });
+  // Start here: folders and ordered steps, all text.
+  assert.equal(elements['start-view'].hidden, false); assert.equal(elements['map-view'].hidden, true);
+  const folderButtons = all(elements.folders).filter(el => el.tag === 'button');
+  assert.deepEqual(folderButtons.map(el => el.children[0].textContent), ['Whole project', 'models/', 'pipeline/', 'tests/']);
+  assert.equal(folderButtons[2].attributes['aria-current'], 'true');
+  folderButtons[1].events.click(); assert.deepEqual(sent.at(-1), { type: 'guideFolder', folder: 'models' });
+  assert.equal(elements['steps-title'].textContent, 'Start here in pipeline/');
+  const stepItems = all(elements.steps).filter(el => el.tag === 'li');
+  assert.deepEqual(stepItems.map(el => all(el).find(child => child.className === 'step-file').children.at(-1).textContent), ['write.py', 'plan.py']);
+  assert.ok(all(stepItems[1]).some(el => el.textContent === '✓ explained'));
+  const stepDetails = all(stepItems[0]).find(el => el.tag === 'details');
+  assert.equal(stepDetails.className, 'step-details'); assert.ok(!stepDetails.attributes.open, 'step details start collapsed');
+  assert.ok(all(stepDetails).some(el => el.textContent === 'Used by: main.py'));
+  all(stepItems[0]).find(el => el.textContent === 'Explain').events.click();
+  assert.deepEqual(sent.at(-1), { type: 'openFile', id: 'pipeline/write.py', tour: 'pipeline' }, 'Start here opens files as a tour of the folder');
+  // Map: folders are boxes holding their files, and the map comes first.
+  elements['tab-map'].events.click();
+  assert.equal(elements['map-view'].hidden, false);
+  assert.equal(elements.drawer.hidden, true, 'Details stay closed until a file is picked');
+  const boxes = all(elements.boxes).filter(el => el.attributes['data-folder'] !== undefined);
+  assert.deepEqual(boxes.map(el => el.attributes['data-folder']).sort(), ['(root)', 'models', 'pipeline', 'tests']);
+  const files = all(elements.nodes).filter(el => el.attributes['data-id']);
+  const plan = files.find(el => el.attributes['data-id'] === 'pipeline/plan.py'), box = map.boxes.find(b => b.folder === 'pipeline'), node = map.nodes.find(n => n.id === 'pipeline/plan.py');
+  assert.ok(node.x >= box.x && node.x + node.w <= box.x + box.w && node.y >= box.y && node.y + node.h <= box.y + box.h, 'files sit inside their folder box');
+  // Dragging a file moves its whole folder box and saves the box position.
+  plan.events.pointerdown({ button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+  elements.canvas.events.pointermove({ clientX: 70, clientY: 40 });
+  elements.canvas.events.pointerup({ pointerId: 1 });
+  const saved = sent.at(-1);
+  assert.equal(saved.type, 'saveLayout'); assert.equal(saved.id, 'folder:pipeline'); assert.ok(saved.x > box.x && saved.y > box.y);
+  const pipelineBox = boxes.find(el => el.attributes['data-folder'] === 'pipeline');
+  assert.equal(pipelineBox.attributes.transform, 'translate(' + saved.x + ' ' + saved.y + ')');
+  assert.match(files.find(el => el.attributes['data-id'] === 'pipeline/write.py').attributes.transform, new RegExp('translate\\(' + (map.nodes.find(n => n.id === 'pipeline/write.py').x + saved.x - box.x) + ' '), 'sibling files move with the box');
+  // A click selects and shows the card; double-click explains; a header click folds.
+  assert.equal(elements.drawer.hidden, true, 'dragging does not open Details');
+  plan.events.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 1 }); elements.canvas.events.pointerup({ pointerId: 1 });
+  assert.ok(plan.classList.contains('selected'));
+  assert.equal(elements.drawer.hidden, false, 'clicking a file opens Details');
+  elements['drawer-close'].events.click(); assert.equal(elements.drawer.hidden, true);
+  receive({ data: { type: 'map', state: { files: 5, links: 6, notes: { done: 1, total: 4 }, notesBusy: true, progress: 'Writing AI notes 1/2…', folders: projectMap.folderTree(graph), map, guide: { folder: 'pipeline', steps: [] }, cards: { 'pipeline/plan.py': { purpose: 'Plans open loops.', explained: true, terms: [], defs: [] } },
+    glossary: [{ term: 'L1', aliases: ['L2'], meaning: 'The first loop.', file: 'pipeline/plan.py', line: 5 }, { term: '<b>HOOK</b>', aliases: [], meaning: '', kind: 'constant', file: 'models/script.py', line: 1 }] } } });
+  assert.equal(elements.drawer.hidden, true, 'a redraw while notes stream in does not reopen Details');
+  assert.match(elements.status.textContent, /^Writing AI notes 1\/2…/, 'note progress shows in the status line');
+  elements['drawer-toggle'].events.click(); assert.equal(elements.drawer.hidden, false);
+  const cardText = all(elements.card).map(el => el.textContent).join('|');
+  assert.match(cardText, /Plans open loops\./); assert.match(cardText, /✓ explained/); assert.match(cardText, /pipeline\//, 'card lists are grouped under folder headings');
+  plan.events.dblclick({}); assert.deepEqual(sent.at(-1), { type: 'openFile', id: 'pipeline/plan.py' });
+  const head = all(pipelineBox).find(el => el.attributes.class === 'head');
+  head.events.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 1 }); elements.canvas.events.pointerup({ pointerId: 1 });
+  assert.deepEqual(sent.at(-1), { type: 'toggleFolder', folder: 'pipeline' });
+  elements['collapse-all'].events.click(); assert.deepEqual(sent.at(-1), { type: 'foldAll', collapsed: true });
+  // Glossary rows are grouped by folder and stay text.
+  const glossaryText = all(elements.glossary).map(el => el.textContent).filter(Boolean);
+  assert.ok(glossaryText.includes('models/') && glossaryText.includes('pipeline/'));
+  assert.ok(glossaryText.includes('<b>HOOK</b>'), 'terms are text, never markup');
+  // A folded folder is a single node that unfolds on double-click.
+  receive({ data: { type: 'map', state: { files: 5, links: 6, notes: {}, folders: [], guide: { folder: '', steps: [] }, map: projectMap.layoutGrouped(graph, { collapsed: ['pipeline'] }) } } });
+  const folded = all(elements.nodes).find(el => el.attributes['data-id'] === 'folder:pipeline');
+  folded.events.dblclick({}); assert.deepEqual(sent.at(-1), { type: 'toggleFolder', folder: 'pipeline' });
+});
+
+test('reader explanations turn project terms into text-only links that open their definitions', () => {
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map']);
+  const sent = []; let receive;
+  const record = m => sent.push(JSON.parse(JSON.stringify(m)));
+  vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: record }), katex: { renderToString: () => '<math></math>' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
+  receive({ data: { type: 'state', state: { documentKey: 'doc', providerLabel: 'Codex', level: 'logic', name: 'plan.py', glossary: [{ term: 'L1', aliases: ['L2'], meaning: 'The first loop, opened by the hook.', kind: '', defined: 'pipeline/plan.py:5' }, { term: 'HOOK', aliases: [], meaning: '', kind: 'constant', defined: 'models/script.py:1' }],
+    result: { title: 'Plan loops', summary: 'Plans loops.', sections: [{ title: 'Open loops', startLine: 1, endLine: 2, pseudocode: 'Open L1 in HOOK; then L2.\n# Context: L1 spans the video.' }] } } } });
+  const terms = all(elements.content).filter(el => el.className === 'term');
+  assert.deepEqual(terms.map(el => el.textContent), ['L1', 'HOOK', 'L2', 'L1']);
+  assert.match(terms[0].title, /The first loop, opened by the hook\. · defined in pipeline\/plan\.py:5/);
+  assert.match(terms[1].title, /constant defined elsewhere/);
+  terms[2].events.click({ stopPropagation() {}, preventDefault() {} });
+  assert.deepEqual(sent.at(-1), { type: 'revealTerm', index: 0, documentKey: 'doc' });
+  elements.map.events.click(); assert.equal(sent.at(-1).type, 'map');
+});
+
+test('opening the project map scans locally, AI notes use the estimated requests, and explanations receive the context', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-map-')), root = path.join(temp, 'video'), storage = path.join(temp, 'storage');
+  for (const [rel, text] of Object.entries(videoProject)) { await fs.mkdir(path.dirname(path.join(root, rel)), { recursive: true }); await fs.writeFile(path.join(root, rel), text); }
+  await fs.mkdir(path.join(temp, 'outside')); await fs.writeFile(path.join(temp, 'outside', 'secret.py'), 'TOKEN = "do-not-send"\n');
+  await fs.symlink(path.join(temp, 'outside', 'secret.py'), path.join(root, 'leak.py'));
+  class Uri { constructor(fsPath) { this.fsPath = fsPath; this.scheme = 'file'; } toString() { return 'file://' + this.fsPath; } static file(p) { return new Uri(p); } static parse(v) { return new Uri(decodeURIComponent(v.replace(/^file:\/\//, ''))); } static joinPath(base, ...parts) { return new Uri(path.join(base.fsPath, ...parts)); } }
+  class RelativePattern { constructor(base, pattern) { this.base = base; this.pattern = pattern; } }
+  class Range { constructor(a, b, c, d) { this.start = { line: a, character: b }; this.end = { line: c, character: d }; } }
+  class Selection extends Range { get isEmpty() { return true; } }
+  const commands = new Map(), state = new Map(), panels = [], requests = [], generated = [], shown = [], sentPrompts = [], usedTools = [];
+  const noop = () => ({ dispose() {} });
+  const walk = async dir => (await fs.readdir(dir, { withFileTypes: true })).flatMap(entry => entry.isDirectory() ? [] : [path.join(dir, entry.name)]).concat(...await Promise.all((await fs.readdir(dir, { withFileTypes: true })).filter(entry => entry.isDirectory() && !entry.isSymbolicLink()).map(entry => walk(path.join(dir, entry.name)))));
+  const docFor = uri => fs.readFile(uri.fsPath, 'utf8').then(text => ({ uri, languageId: 'python', isDirty: false, lineCount: text.split('\n').length, getText: () => text, lineAt: i => ({ text: text.split('\n')[i] }) }));
+  const vscode = { Uri, RelativePattern, Range, Selection, ThemeColor: class {}, StatusBarAlignment: { Right: 2 }, ViewColumn: { One: 1, Beside: -2, Active: -1 }, TextEditorRevealType: {},
+    commands: { registerCommand(id, fn) { commands.set(id, fn); return noop(); } },
+    workspace: { isTrusted: true, workspaceFolders: [{ uri: new Uri(root) }], textDocuments: [], getWorkspaceFolder: uri => uri.fsPath.startsWith(root) ? { uri: new Uri(root) } : undefined, asRelativePath: uri => path.relative(root, uri.fsPath), openTextDocument: docFor,
+      findFiles: async pattern => (await walk(root)).filter(file => /package\.json/.test(pattern.pattern) ? /(package\.json|go\.mod|Cargo\.toml)$/.test(file) : /\.py$/.test(file)).map(file => new Uri(file)),
+      createFileSystemWatcher: () => ({ onDidCreate: noop, onDidDelete: noop, onDidChange: noop, dispose() {} }), getConfiguration: () => ({ get: (key, fallback) => key === 'autoNotes' ? false : fallback }), onDidChangeTextDocument: noop },
+    window: { createStatusBarItem: statusItem, activeTextEditor: undefined, visibleTextEditors: [], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showErrorMessage(message) { throw new Error(message); }, showInformationMessage: async () => undefined,
+      showWarningMessage: async (message) => { shown.push(message); return 'Add notes'; }, showTextDocument: async (doc, options) => { shown.push(['open', doc.uri.fsPath, options?.selection?.start.line]); return { document: doc, setDecorations() {}, revealRange() {} }; },
+      createWebviewPanel: type => { const panel = { type, messages: [], reveal() {}, onDidDispose: noop, onDidChangeViewState: noop, webview: { postMessage: m => panel.messages.push(m), onDidReceiveMessage(fn) { panel.receive = fn; return noop(); } } }; panels.push(panel); return panel; } },
+    env: { clipboard: { writeText: async () => {} } } };
+  const engine = { ...require('./engine'),
+    requestStructured: async ({ prompt, schema }) => {
+      sentPrompts.push(prompt);
+      requests.push(schema === require('./engine').NOTES_SCHEMA ? 'notes' : 'summary');
+      if (schema === require('./engine').NOTES_SCHEMA) {
+        const files = [...prompt.matchAll(/FILE "([^"]+)" \(numbered/g)].map(match => match[1]);
+        return { raw: JSON.stringify({ files: files.map(file => ({ file, purpose: 'Purpose of ' + file, role: 'stage', terms: file === 'pipeline/plan.py' ? [{ term: 'L1', aliases: ['L2'], meaning: 'The first loop: opened by the hook, answered in the ending.', line: 5 }] : [] })) }) };
+      }
+      return { raw: JSON.stringify({ overview: 'Writes video scripts.', clusters: [{ name: 'Planning', summary: 'Plans loops.', files: ['pipeline/plan.py'] }], readingPath: [{ file: 'main.py', why: 'Shows the whole flow.' }, { file: 'pipeline/plan.py', why: 'Explains loops.' }] }), actualModel: 'fixture' };
+    },
+    generate: async opts => { generated.push(opts.source.projectContext); usedTools.push(opts.tools); return { ...valid, title: 'Plan', sections: [{ title: 'Plan loops', startLine: 1, endLine: 2, pseudocode: 'Open L1.', lineMap: [] }], requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort }; } };
+  const moduleStub = { exports: {} }, context = { subscriptions: [], globalStorageUri: { fsPath: storage }, globalState: { get: (k, fallback) => state.get(k) ?? fallback, update: async (k, v) => state.set(k, v) }, secrets: {} };
+  state.set('provider', 'codex'); state.set('launcherHintShown', true);
+  try {
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+    await moduleStub.exports.activate(context);
+    await commands.get('yamori.map')(new Uri(root));
+    assert.equal(panels.filter(panel => panel.type === 'yamoriMap').length, 1);
+    const mapPanel = panels.find(panel => panel.type === 'yamoriMap'), last = () => JSON.parse(JSON.stringify(mapPanel.messages.at(-1).state));
+    assert.deepEqual(requests, [], 'opening and scanning the map uses no AI');
+    assert.equal(last().files, 5); assert.deepEqual(last().guide.steps.map(step => step.id), ['main.py', 'pipeline/plan.py', 'pipeline/write.py', 'models/script.py']);
+    assert.equal(last().guide.steps[0].why, 'Entry point: the program starts here.');
+    assert.ok(!last().map.nodes.some(node => node.id === 'leak.py'), 'a symlink to a file outside the project is not read');
+    await mapPanel.receive({ type: 'guideFolder', folder: 'pipeline' });
+    assert.deepEqual(last().guide.steps.map(step => step.id), ['pipeline/write.py', 'pipeline/plan.py']);
+    assert.match(last().guide.steps[0].why, /way into this folder/);
+    await mapPanel.receive({ type: 'guideFolder', folder: '../..' });
+    assert.equal(last().guide.folder, 'pipeline', 'unknown folders are ignored');
+    await mapPanel.receive({ type: 'saveLayout', id: 'folder:pipeline', x: 400, y: -20 });
+    await mapPanel.receive({ type: 'saveLayout', id: 'folder:../../etc', x: 1, y: 1 });
+    await mapPanel.receive({ type: 'toggleFolder', folder: 'models' });
+    await mapPanel.receive({ type: 'toggleFolder', folder: 'nope' });
+    assert.deepEqual(last().map.boxes.find(b => b.folder === 'pipeline').x, 400);
+    assert.ok(last().map.nodes.some(node => node.id === 'folder:models' && node.collapsed), 'a folded folder becomes one node');
+    assert.ok(!last().map.boxes.some(b => b.folder === '../../etc'));
+    await mapPanel.receive({ type: 'focusMap', id: 'models/script.py' });
+    assert.ok(last().map.nodes.some(node => node.id === 'models/script.py'), 'showing a file on the map unfolds its folder');
+    assert.equal(last().view, 'map'); assert.equal(last().focus, 'models/script.py');
+    await mapPanel.receive({ type: 'revealSource', id: '/etc/passwd', line: 1 });
+    await mapPanel.receive({ type: 'revealSource', id: 'pipeline/plan.py', line: 5 });
+    assert.deepEqual(shown.filter(item => Array.isArray(item)), [['open', path.join(root, 'pipeline/plan.py'), 4]], 'only mapped files open');
+    await mapPanel.receive({ type: 'notes' });
+    assert.match(shown.find(item => typeof item === 'string'), /4 files .* about 2 model requests/);
+    assert.deepEqual(requests, ['notes', 'summary']);
+    assert.ok(!sentPrompts.some(prompt => prompt.includes('do-not-send')), 'files outside the project never reach a prompt');
+    await mapPanel.receive({ type: 'guideFolder', folder: '' });
+    assert.equal(last().overview, 'Writes video scripts.'); assert.equal(last().guide.steps[1].id, 'pipeline/plan.py'); assert.equal(last().guide.steps[1].why, 'Explains loops.');
+    assert.deepEqual(last().notes, { total: 4, done: 4, outdated: 0 });
+    assert.ok(last().glossary.some(term => term.term === 'L1' && term.file === 'pipeline/plan.py'));
+    // Reopening a project with notes does not ask again.
+    requests.length = 0; await mapPanel.receive({ type: 'notes' }); assert.deepEqual(requests, []);
+    // An explanation of a mapped file carries the project slice.
+    await mapPanel.receive({ type: 'openFile', id: 'pipeline/plan.py' });
+    assert.equal(generated.length, 1);
+    assert.equal(generated[0].file.purpose, 'Purpose of pipeline/plan.py');
+    assert.ok(generated[0].glossary.some(term => term.term === 'L1' && /opened by the hook/.test(term.meaning)));
+    assert.ok(usedTools[0]?.args[0].endsWith('mcp.js') && usedTools[0].args.includes('--root') && usedTools[0].env.ELECTRON_RUN_AS_NODE === '1', 'a mapped file gets Yamori lookups');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const index = JSON.parse(await fs.readFile(path.join(storage, 'cache', 'projects', require('./engine').hash('file://' + root).slice(0, 32), 'explanations.json'), 'utf8'));
+    assert.deepEqual(Object.keys(index), ['pipeline/plan.py']); assert.equal(index['pipeline/plan.py'].logic.title, 'Plan');
+    assert.ok(last().guide.steps.find(step => step.id === 'pipeline/plan.py').explained, 'explained files are marked in the guide');
+    const server = require('./mcp').createServer({ store: path.dirname(path.join(storage, 'cache', 'projects', require('./engine').hash('file://' + root).slice(0, 32), 'x')), root });
+    assert.match(server.call('get_explanation', { path: 'pipeline/plan.py' }).content[0].text, /"title": "Plan"/, 'the agent can read Yamori explanations of other files');
+    const reader = panels.find(panel => panel.type === 'yamori'), readerState = reader.messages.filter(m => m.type === 'state').at(-1).state;
+    assert.equal(readerState.glossary.find(term => term.term === 'L1').defined, 'pipeline/plan.py:5');
+    shown.length = 0;
+    await reader.receive({ type: 'revealTerm', index: readerState.glossary.findIndex(term => term.term === 'L1'), documentKey: readerState.documentKey });
+    assert.deepEqual(shown, [['open', path.join(root, 'pipeline/plan.py'), 4]]);
+    // Unmapped workspaces add nothing and never trigger a scan.
+    const plain = moduleStub.exports.createProjectMap({ globalStorageUri: { fsPath: path.join(temp, 'empty') }, globalState: context.globalState }, { api: vscode });
+    assert.equal(await plain.contextFor({ uri: 'file://' + path.join(root, 'main.py'), text: 'x' }), undefined);
+  } finally { await Promise.all(context.subscriptions.map(d => d?.dispose?.())); await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+async function mappedFixture(extra = {}) {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-mcp-')), root = path.join(temp, 'video'), store = path.join(temp, 'store');
+  const files = { ...videoProject, 'big.py': Array.from({ length: 500 }, (_, i) => 'V' + i + ' = ' + i).join('\n') + '\n', ...extra };
+  for (const [rel, text] of Object.entries(files)) { await fs.mkdir(path.dirname(path.join(root, rel)), { recursive: true }); await fs.writeFile(path.join(root, rel), text); }
+  await fs.mkdir(path.join(temp, 'outside')); await fs.writeFile(path.join(temp, 'outside', 'secret.py'), 'TOKEN = "do-not-send"\n');
+  await fs.symlink(path.join(temp, 'outside', 'secret.py'), path.join(root, 'leak.py'));
+  const { graph } = await scanFixture(files);
+  graph.files['leak.py'] = { ...graph.files['main.py'], defs: [], refs: [], imports: [] };
+  await fs.mkdir(store);
+  await fs.writeFile(path.join(store, 'graph.json'), JSON.stringify(graph));
+  await fs.writeFile(path.join(store, 'notes.json'), JSON.stringify({ overview: 'Writes video scripts.', files: { 'models/script.py': { hash: graph.files['models/script.py'].hash, purpose: 'Defines script sections.', role: 'data model', terms: [{ term: 'HOOK', aliases: [], meaning: 'Opening section that raises the main question.', line: 1 }] } } }));
+  await fs.writeFile(path.join(store, 'explanations.json'), JSON.stringify({ 'pipeline/write.py': { overview: { title: 'Write blocks', summary: 'Turns loops into hints.', sections: [{ title: 'Write', startLine: 1, endLine: 5, pseudocode: 'Build each hint.' }], hash: graph.files['pipeline/write.py'].hash } } }));
+  return { temp, root, store, graph, cleanup: () => fs.rm(temp, { recursive: true, force: true }) };
+}
+
+test('Yamori MCP server answers over stdio with read-only lookups limited to mapped files', async () => {
+  const path = require('node:path'), fs = require('node:fs/promises');
+  const fixture = await mappedFixture(), log = path.join(fixture.temp, 'calls.jsonl');
+  try {
+    const call = (id, name, args) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+    const input = [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } } },
+      { jsonrpc: '2.0', method: 'notifications/initialized' }, { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      call(3, 'file_info', { path: 'pipeline/plan.py' }), call(4, 'find_symbol', { name: 'HOOK' }), call(5, 'glossary', { query: 'hook' }),
+      call(6, 'get_explanation', { path: 'pipeline/write.py' }), call(7, 'read_source', { path: 'models/script.py', start_line: 1, end_line: 2 }),
+      call(8, 'read_source', { path: '../outside/secret.py' }), call(9, 'read_source', { path: 'leak.py' }), call(10, 'read_source', { path: 'big.py', start_line: 1, end_line: 900 }),
+      call(11, 'project_overview', {}), call(12, 'list_files', { folder: 'pipeline' }), { jsonrpc: '2.0', id: 13, method: 'resources/list' }
+    ].map(message => JSON.stringify(message)).join('\n') + '\n';
+    const output = await runProcess(process.execPath, [path.join(__dirname, 'mcp.js'), '--store', fixture.store, '--root', fixture.root, '--log', log], input);
+    const replies = new Map(output.trim().split('\n').map(line => JSON.parse(line)).map(reply => [reply.id, reply]));
+    assert.equal(replies.size, 13, 'notifications get no reply');
+    assert.equal(replies.get(1).result.protocolVersion, '2025-11-25'); assert.equal(replies.get(1).result.serverInfo.name, 'yamori');
+    assert.deepEqual(replies.get(2).result.tools.map(tool => tool.name), ['project_overview', 'list_files', 'file_info', 'find_symbol', 'glossary', 'get_explanation', 'read_source']);
+    const text = id => replies.get(id).result.content[0].text;
+    assert.match(text(3), /^Untrusted project data from Yamori/); assert.match(text(3), /function plan_loops \(line 3\)/); assert.match(text(3), /"file": "main.py"/);
+    assert.match(text(4), /"file": "models\/script.py",\s*"line": 1/); assert.match(text(4), /pipeline\/plan.py/);
+    assert.match(text(5), /Opening section that raises the main question/);
+    assert.match(text(6), /"title": "Write blocks"/);
+    assert.match(text(7), /File models\/script.py, lines 1-2 of 12:\n1: HOOK = "HOOK"\n2: ENDING = "ENDING"/);
+    assert.equal(replies.get(8).result.isError, true); assert.match(text(8), /not a file in the Yamori project map/);
+    assert.equal(replies.get(9).result.isError, true); assert.match(text(9), /outside the mapped project/);
+    assert.doesNotMatch(output, /do-not-send/, 'files outside the project never reach the agent');
+    assert.match(text(10), /lines 1-200 of 501:/, 'source reads are bounded');
+    assert.match(text(11), /Writes video scripts\./); assert.match(text(12), /"pipeline": \[/); assert.doesNotMatch(text(12), /models\//);
+    assert.equal(replies.get(13).error.code, -32601);
+    assert.equal((await fs.readFile(log, 'utf8')).trim().split('\n').length, 10, 'every lookup is logged for the activity trail');
+  } finally { await fixture.cleanup(); }
+});
+
+test('agent lookups reach Claude only through Yamori\'s MCP server, show in the activity trail and fall back without tools', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const fixture = await mappedFixture(), tools = { command: process.execPath, args: [path.join(__dirname, 'mcp.js'), '--store', fixture.store, '--root', fixture.root], env: { ELECTRON_RUN_AS_NODE: '1' } };
+  const record = path.join(fixture.temp, 'args.json'), answer = JSON.stringify({ type: 'result', structured_output: { ...valid, views: { overview: valid } } });
+  try {
+    const binary = path.join(fixture.temp, 'claude.js');
+    await fs.writeFile(binary, `const fs=require('fs'),a=process.argv.slice(2);if(a.includes('--help')){console.log('--safe-mode --permission-prompts');process.exit(0)}
+fs.writeFileSync(${JSON.stringify(record)},JSON.stringify(a));let prompt='';process.stdin.on('data',d=>prompt+=d).on('end',()=>{
+const config=JSON.parse(a[a.indexOf('--mcp-config')+1]).mcpServers.yamori;
+if(config){const log=config.args[config.args.indexOf('--log')+1];fs.appendFileSync(log,JSON.stringify({tool:'file_info',target:'models/script.py'})+'\\n');if(!prompt.includes('YAMORI TOOLS'))process.exit(4);}
+setTimeout(()=>process.stdout.write(${JSON.stringify(answer)}),config?400:0);});`);
+    const phases = [];
+    const result = await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, tools, onProgress: update => update.phase && phases.push(update.phase) });
+    const args = JSON.parse(await fs.readFile(record, 'utf8'));
+    const server = JSON.parse(args[args.indexOf('--mcp-config') + 1]).mcpServers.yamori;
+    assert.equal(server.type, 'stdio'); assert.equal(server.command, process.execPath); assert.ok(server.args.includes('--log'));
+    assert.equal(args[args.indexOf('--allowedTools') + 1], 'mcp__yamori__*'); assert.equal(args[args.indexOf('--permission-prompts') + 1], 'none');
+    assert.equal(args[args.indexOf('--tools') + 1], '', 'built-in tools stay off');
+    assert.ok(args.includes('--setting-sources') && !args.includes('--safe-mode'), 'safe mode would drop the explicitly passed server');
+    assert.ok(phases.includes('Looked up file · models/script.py')); assert.equal(result.toolCalls, 1);
+    assert.equal(parseResult(JSON.stringify(result), source).toolCalls, 1, 'lookup counts survive the cache');
+    // Without tools nothing about Yamori's server is passed.
+    await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, onProgress() {} });
+    const plain = JSON.parse(await fs.readFile(record, 'utf8'));
+    assert.deepEqual(JSON.parse(plain[plain.indexOf('--mcp-config') + 1]), { mcpServers: {} }); assert.ok(plain.includes('--safe-mode') && !plain.includes('--allowedTools'));
+    // A CLI that cannot start the server still produces an explanation.
+    const broken = path.join(fixture.temp, 'broken.js');
+    await fs.writeFile(broken, `const a=process.argv.slice(2);if(a.includes('--help')){console.log('--safe-mode');process.exit(0)}
+if(JSON.parse(a[a.indexOf('--mcp-config')+1]).mcpServers.yamori){console.error('MCP server failed to start');process.exit(2)}
+process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(${JSON.stringify(answer)}));`);
+    const fallback = [];
+    const recovered = await generate({ source, level: 'logic', provider: 'claude', cliPath: broken, tools, onProgress: update => update.phase && fallback.push(update.phase) });
+    assert.equal(recovered.title, valid.title); assert.ok(fallback.includes('Yamori lookups unavailable; writing without them'));
+  } finally { await fixture.cleanup(); }
+});
+
+test('Codex tool runs load only Yamori\'s server and approve only its requests', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const fixture = await mappedFixture(), tools = { command: process.execPath, args: [path.join(__dirname, 'mcp.js'), '--store', fixture.store, '--root', fixture.root], env: { ELECTRON_RUN_AS_NODE: '1' } };
+  const record = path.join(fixture.temp, 'codex.json'), binary = path.join(fixture.temp, 'codex');
+  await fs.writeFile(binary, `#!${process.execPath}
+const fs=require('fs'),out=e=>process.stdout.write(JSON.stringify(e)+'\\n'),seen={launch:process.argv.slice(2),responses:{}};
+require('readline').createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);
+ if(q.id===1)out({id:1,result:{}});
+ if(q.id===2){seen.thread=q.params;out({id:2,result:{thread:{id:'t'},model:'fixture'}});}
+ if(q.id===3){seen.prompt=q.params.input[0].text;out({id:50,method:'mcpServer/elicitation/request',params:{serverName:'yamori',threadId:'t'}});out({id:51,method:'mcpServer/elicitation/request',params:{serverName:'other',threadId:'t'}});out({id:52,method:'item/commandExecution/requestApproval',params:{command:'rm -rf /'}});}
+ if([50,51,52].includes(q.id)){seen.responses[q.id]=q;if(Object.keys(seen.responses).length===3){fs.writeFileSync(${JSON.stringify(record)},JSON.stringify(seen));out({method:'item/agentMessage/delta',params:{delta:${JSON.stringify(JSON.stringify({ ...valid, views: { overview: valid } }))}}});out({method:'turn/completed',params:{turn:{status:'completed'}}});}}
+});`);
+  await fs.chmod(binary, 0o755);
+  try {
+    const result = await generate({ source, level: 'logic', provider: 'codex', cliPath: binary, tools });
+    assert.equal(result.title, valid.title);
+    const seen = JSON.parse(await fs.readFile(record, 'utf8'));
+    assert.match(seen.launch[seen.launch.indexOf('-c') + 1], /^mcp_servers=\{yamori=\{command=".+",args=\[.*"--log".*\],env=\{ELECTRON_RUN_AS_NODE="1"\},default_tools_approval_mode="approve"/);
+    assert.equal(seen.thread.config.mcp_servers.yamori.command, process.execPath); assert.deepEqual(Object.keys(seen.thread.config.mcp_servers), ['yamori']);
+    assert.match(seen.thread.baseInstructions, /read-only yamori tools; do not use any other tools/);
+    assert.match(seen.prompt, /YAMORI TOOLS/);
+    assert.deepEqual(seen.responses[50].result, { action: 'accept', content: {} });
+    assert.ok(seen.responses[51].error && seen.responses[52].error, 'other servers and commands are refused');
+  } finally { await fixture.cleanup(); }
+});
+
+test('folder reading paths start where a folder is entered, and folder boxes stay structured at any size', async () => {
+  const { graph } = await scanFixture(videoProject);
+  assert.deepEqual(projectMap.folderTree(graph).map(folder => folder.key), ['', 'models', 'pipeline', 'tests']);
+  assert.deepEqual(projectMap.readingPathFor(graph, {}, '').map(step => step.id), graph.readingPath.map(step => step.id));
+  const pipeline = projectMap.readingPathFor(graph, {}, 'pipeline');
+  assert.deepEqual(pipeline.map(step => [step.id, step.via || null, step.usedOutside ?? null]), [['pipeline/write.py', null, 1], ['pipeline/plan.py', 'pipeline/write.py', null]]);
+  assert.deepEqual(projectMap.readingPathFor(graph, { readingPath: [{ file: 'pipeline/plan.py', why: 'Loops first.' }] }, 'pipeline').map(step => step.id), ['pipeline/plan.py', 'pipeline/write.py'], 'AI order leads');
+  assert.deepEqual(projectMap.readingPathFor(graph, {}, 'tests'), [], 'tests are never reading steps');
+  // A larger project: boxes never overlap, files stay inside, and only the entry folder starts open.
+  const files = { 'main.py': 'from pkg0.m0 import f0\nif __name__ == "__main__":\n    f0()\n' };
+  for (let p = 0; p < 9; p++) for (let m = 0; m < 10; m++) files['pkg' + p + '/m' + m + '.py'] = (m ? 'from pkg' + p + '.m' + (m - 1) + ' import f' + (m - 1) + '\n' : '') + (p ? 'from pkg' + (p - 1) + '.m0 import f0\n' : '') + 'def f' + m + '():\n    return ' + m + '\n';
+  const big = (await scanFixture(files)).graph;
+  const collapsed = projectMap.defaultCollapsed(big);
+  assert.equal(collapsed.length, 9); assert.ok(!collapsed.includes('(root)'), 'the entry point\'s folder stays open');
+  const open = projectMap.layoutGrouped(big);
+  for (const a of open.boxes) for (const b of open.boxes) if (a !== b) assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, 'folder boxes never overlap');
+  for (const node of open.nodes) { const box = open.boxes.find(item => item.id === node.group); assert.ok(node.x >= box.x && node.x + node.w <= box.x + box.w && node.y >= box.y && node.y + node.h <= box.y + box.h); }
+  const folded = projectMap.layoutGrouped(big, { collapsed });
+  assert.equal(folded.nodes.filter(node => node.kind === 'folder').length, 9);
+  assert.ok(folded.edges.every(edge => !edge.from.startsWith('pkg') && !edge.to.startsWith('pkg')), 'edges into folded folders point at the folder');
+  const moved = projectMap.layoutGrouped(big, { saved: { 'folder:pkg3': { x: 5000, y: 7 } } });
+  const box = moved.boxes.find(item => item.folder === 'pkg3');
+  assert.deepEqual([box.x, box.y], [5000, 7]); assert.ok(moved.nodes.filter(node => node.group === 'folder:pkg3').every(node => node.x >= 5000), 'files move with their box');
+});
+
+test('the reader header names its actions plainly and the empty state offers the next steps', () => {
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary']);
+  const sent = []; let receive;
+  vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
+  const html = panelHTML();
+  for (const label of ['Switch file…', 'Project guide', 'Overview', 'Logic']) assert.ok(html.includes('>' + label + '<'), label);
+  assert.ok(!/▤|▦|>Detailed</.test(html), 'no cryptic icons or removed levels');
+  receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', requestedModel: 'opus', level: 'logic' } } });
+  assert.equal(elements['ai-summary'].textContent, 'AI: Claude Code · opus ▾');
+  const actions = all(elements.content).filter(el => el.tag === 'button');
+  assert.deepEqual(actions.map(el => el.textContent).slice(0, 3), ['Explain current file', 'Switch file…', 'Open project guide']);
+  actions[1].events.click(); assert.equal(sent.at(-1).type, 'switchFile');
+  actions[2].events.click(); assert.equal(sent.at(-1).type, 'map');
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'pipeline/plan.py · lines 3–9', result: valid } } });
+  assert.deepEqual(elements.source.children.map(el => el.textContent), ['pipeline › ', 'plan.py', ' · lines 3–9']);
+  elements.source.events.click(); assert.equal(sent.at(-1).type, 'showSource');
+  assert.equal(elements.refresh.textContent, 'Regenerate');
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'plan.py', result: valid, stale: true, staleBlocks: [0] } } });
+  assert.equal(elements.refresh.textContent, 'Update from code');
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'plan.py', result: valid, busy: true } } });
+  assert.equal(elements.refresh.textContent, 'Stop');
+});
+
+test('Switch file groups project files by folder, lists open tabs first, and an old Detailed preference reads as Logic', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-picker-'));
+  const commands = new Map(), state = new Map([['detail', 'detailed'], ['provider', 'codex'], ['launcherHintShown', true]]), levels = [];
+  let picked;
+  class Uri { constructor(fsPath) { this.fsPath = fsPath; this.scheme = 'file'; } toString() { return 'file://' + this.fsPath; } static parse(v) { return new Uri(v.replace('file://', '')); } }
+  class Range { constructor(a, b, c, d) { this.start = { line: a, character: b }; this.end = { line: c, character: d }; } }
+  const noop = () => ({ dispose() {} });
+  const uris = ['/p/main.py', '/p/pipeline/plan.py', '/p/pipeline/write.py', '/p/models/script.py'].map(file => new Uri(file));
+  const doc = uri => ({ uri, languageId: 'python', isDirty: false, lineCount: 1, getText: () => 'x = 1', lineAt: () => ({ text: 'x = 1' }) });
+  const vscode = { Uri, Range, Selection: Range, ThemeColor: class {}, StatusBarAlignment: { Right: 2 }, ViewColumn: { One: 1, Beside: -2 }, QuickPickItemKind: { Separator: -1 },
+    commands: { registerCommand(id, fn) { commands.set(id, fn); return noop(); } },
+    workspace: { isTrusted: true, textDocuments: [], findFiles: async () => uris, asRelativePath: uri => uri.fsPath.replace('/p/', ''), openTextDocument: async uri => doc(uri), getConfiguration: () => ({ get: (_, fallback) => fallback }), onDidChangeTextDocument: noop },
+    window: { createStatusBarItem: statusItem, activeTextEditor: undefined, visibleTextEditors: [], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showErrorMessage(message) { throw new Error(message); }, showTextDocument: async () => ({ setDecorations() {}, revealRange() {} }),
+      showQuickPick: async items => { picked = await items; return picked.find(item => item.label === 'write.py'); },
+      createWebviewPanel: () => ({ reveal() {}, onDidDispose: noop, onDidChangeViewState: noop, webview: { postMessage() {}, onDidReceiveMessage: noop } }) },
+    env: { clipboard: { writeText: async () => {} } } };
+  const engine = { ...require('./engine'), generate: async opts => { levels.push(opts.level); return { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 1 }], views: { overview: { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 1 }] } } }; } };
+  const moduleStub = { exports: {} }, context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (k, f) => state.get(k) ?? f, update: async (k, v) => state.set(k, v) }, secrets: {} };
+  try {
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+    await moduleStub.exports.activate(context);
+    await commands.get('yamori.switchFile')();
+    assert.deepEqual(JSON.parse(JSON.stringify(picked.map(item => item.kind === -1 ? '[' + item.label + ']' : item.label))), ['[models/]', 'script.py', '[pipeline/]', 'plan.py', 'write.py', '[Project root]', 'main.py']);
+    assert.deepEqual(JSON.parse(JSON.stringify(levels)), ['logic'], 'a stored Detailed preference opens at Logic');
+    await commands.get('yamori.switchFile')();
+    assert.deepEqual(JSON.parse(JSON.stringify(picked.slice(0, 2).map(item => item.kind === -1 ? '[' + item.label + ']' : item.label))), ['[Open in Yamori]', 'write.py'], 'open files come first');
+    assert.ok(!picked.slice(2).some(item => item.label === 'write.py'), 'an open file is not listed twice');
+  } finally { await Promise.all(context.subscriptions.map(d => d?.dispose?.())); await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+test('Claude and Codex progress becomes visible stages: start, thinking with token counts, writing, review', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-stages-'));
+  try {
+    const answer = JSON.stringify({ ...valid, views: { overview: valid } }), half = Math.floor(answer.length / 2);
+    const events = [{ type: 'system', subtype: 'init', model: 'claude-opus-test' }, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } } },
+      { type: 'system', subtype: 'thinking_tokens', estimated_tokens: 1240, estimated_tokens_delta: 1240 }, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'PRIVATE REASONING' } } },
+      { type: 'stream_event', event: { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', name: 'StructuredOutput' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: answer.slice(0, half) } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: answer.slice(half) } } },
+      { type: 'result', structured_output: JSON.parse(answer), modelUsage: { 'claude-opus-test': {} } }];
+    const binary = path.join(dir, 'claude.js');
+    await fs.writeFile(binary, `const a=process.argv.slice(2);if(a.includes('--help')){console.log('--safe-mode');process.exit(0)}
+process.stdin.resume();process.stdin.on('end',async()=>{for(const e of ${JSON.stringify(events)}){process.stdout.write(JSON.stringify(e)+'\\n');await new Promise(r=>setTimeout(r,150));}});`);
+    const updates = [];
+    await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, effort: 'medium', onProgress: update => updates.push(update) });
+    const stages = updates.map(update => update.stage).filter((value, index, all) => value && value !== all[index - 1]);
+    assert.deepEqual(stages, ['start', 'think', 'write']);
+    assert.ok(updates.some(update => update.model === 'claude-opus-test'));
+    assert.ok(updates.some(update => update.stage === 'think' && update.thinkingTokens === 1240), 'thinking shows as a token estimate');
+    assert.ok(!JSON.stringify(updates).includes('PRIVATE REASONING'), 'thinking text is never shown');
+    assert.ok(updates.some(update => update.stage === 'write' && update.characters > 0));
+    assert.ok(updates.filter(update => update.stage === 'write').every(update => update.characters > 0), 'thinking deltas never count as writing');
+    const firstWrite = updates.findIndex(update => update.stage === 'write');
+    assert.ok(updates.slice(firstWrite).every(update => update.stage !== 'think'), 'once writing starts, the stage does not flip back to thinking');
+    // Codex reports reasoning as an item; it becomes the thinking stage too.
+    const codex = path.join(dir, 'codex');
+    await fs.writeFile(codex, `#!${process.execPath}
+const out=e=>process.stdout.write(JSON.stringify(e)+'\\n');require('readline').createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);
+if(q.id===1)out({id:1,result:{}});if(q.id===2)out({id:2,result:{thread:{id:'t'},model:'codex-test'}});
+if(q.id===3){out({method:'item/started',params:{item:{type:'reasoning',id:'r'}}});out({method:'item/agentMessage/delta',params:{delta:${JSON.stringify(answer)}}});out({method:'turn/completed',params:{turn:{status:'completed'}}});}});`);
+    await fs.chmod(codex, 0o755);
+    const codexUpdates = [];
+    await generate({ source, level: 'logic', provider: 'codex', cliPath: codex, onProgress: update => codexUpdates.push(update) });
+    assert.deepEqual(codexUpdates.map(update => update.stage).filter((value, index, all) => value && value !== all[index - 1]), ['start', 'think', 'write']);
+    assert.ok(codexUpdates.some(update => update.phase === 'Thinking'));
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('refinement reports its review rounds, and the difficulty selector thinks at low effort', async () => {
+  const efforts = [], updates = [];
+  const draft = { ...valid, sections: [{ ...valid.sections[0], lineMap: [] }] };
+  const review = { score: 1, faithful: true, issues: [] };
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-select-effort-'));
+  try {
+    const binary = path.join(dir, 'claude.js');
+    await fs.writeFile(binary, `const a=process.argv.slice(2);if(a.includes('--help')){console.log('--safe-mode');process.exit(0)}
+const schema=JSON.parse(a[a.indexOf('--json-schema')+1]);require('fs').appendFileSync(${JSON.stringify(path.join(dir, 'efforts'))},(schema.properties.blocks?'select:':schema.properties.score?'review:':'write:')+(a.includes('--effort')?a[a.indexOf('--effort')+1]:'none')+'\\n');
+process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(JSON.stringify({type:'result',structured_output:schema.properties.blocks?{blocks:[{index:0,reason:'Hard.'}]}:schema.properties.score?${JSON.stringify(review)}:{...${JSON.stringify(draft)},views:{overview:${JSON.stringify(draft)}}}})));`);
+    await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, effort: 'high', refinementSteps: 1, onProgress: update => updates.push(update) });
+    efforts.push(...(await fs.readFile(path.join(dir, 'efforts'), 'utf8')).trim().split('\n'));
+    assert.deepEqual(efforts.slice(0, 2), ['write:high', 'select:low'], 'only the selector drops to low effort');
+    assert.ok(efforts.slice(2).every(line => line === 'review:high'));
+    const reviews = updates.filter(update => update.stage === 'review');
+    assert.ok(reviews.some(update => /readable now/.test(update.detail)) && reviews.some(update => /reviewers/.test(update.detail)));
+    assert.ok(reviews.at(-1).done, 'the review stage ends explicitly');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('the reader shows who is writing and each stage live, then a finished summary; Claude defaults to medium effort', async () => {
+  const { connectionOptions } = (() => { const stub = { exports: {} }; vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? { workspace: { getConfiguration: () => ({ get: (_, f) => f }) } } : require(id), process, __dirname }); return stub.exports; })();
+  const state = new Map(), globalState = { get: (k, f) => state.get(k) ?? f };
+  const vscodeStub = { workspace: { isTrusted: true, getConfiguration: () => ({ get: (_, f) => f }) } };
+  assert.equal(connectionOptions(globalState, 'claude', vscodeStub).effort, 'low', 'Claude writes at low effort unless told otherwise');
+  assert.equal(connectionOptions(globalState, 'codex', vscodeStub).effort, 'low');
+  state.set('effortChoices', { 'claude:': 'auto' }); assert.equal(connectionOptions(globalState, 'claude', vscodeStub).effort, null, 'an explicit provider default is respected');
+  // Panel: a live card while running, a one-line summary afterwards.
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary']);
+  let receive;
+  vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage() {} }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
+  const now = Date.now(), steps = [{ id: 'context', label: 'Read the code and its context', state: 'done', startedAt: now - 9000, endedAt: now - 9000, detail: '2 called definitions · project guide · lookups on' },
+    { id: 'think', label: 'Think it through', state: 'active', startedAt: now - 8000, detail: '~1,240 thinking tokens · 1 lookup · file · models/script.py' }, { id: 'write', label: 'Write the explanation', state: 'waiting' }, { id: 'review', label: 'Review difficult blocks', state: 'skipped', detail: 'Off (AI ▾ → Refine)' }];
+  receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', level: 'logic', name: 'plan.py', busy: true, run: { state: 'running', title: 'Writing the Logic explanation', provider: 'Claude Code', model: 'claude-opus-5-5', effort: 'medium', lookups: 1, startedAt: now - 9000, steps } } } });
+  const card = all(elements.content).find(el => el.className === 'run live');
+  const text = all(card).map(el => el.textContent).filter(Boolean);
+  assert.ok(text.includes('Think it through'), 'the active stage leads the card');
+  assert.ok(text.includes('Claude Code · claude-opus-5-5 · medium effort · 1 Yamori lookup'), 'provider, actual model and effort are visible');
+  assert.ok(text.includes('~1,240 thinking tokens · 1 lookup · file · models/script.py'));
+  assert.deepEqual(all(card).filter(el => el.className === 'icon').map(el => el.textContent), ['✓', '●', '○', '–']);
+  assert.ok(text.includes('0:09'), 'a running timer is shown');
+  receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', level: 'logic', name: 'plan.py', result: valid, run: { state: 'done', provider: 'Claude Code', model: 'claude-opus-5-5', effort: 'medium', lookups: 1, startedAt: now - 48000, endedAt: now, steps: steps.map(step => ({ ...step, state: step.state === 'skipped' ? 'skipped' : 'done', endedAt: now })) } } } });
+  const summary = all(elements.content).find(el => el.tag === 'summary');
+  assert.equal(summary.textContent, 'Done in 0:48 · Claude Code · claude-opus-5-5 · medium effort · 1 Yamori lookup');
+});
+
+test('the reader tracks a run through every stage and marks it stopped when the user stops it', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-run-'));
+  const commands = new Map(), states = []; let receive, progress, release;
+  class Uri { constructor(v) { this.value = v; this.scheme = 'file'; this.fsPath = v.replace('file://', ''); } toString() { return this.value; } static parse(v) { return new Uri(v); } }
+  class Range { constructor(a, b, c, d) { this.start = { line: a, character: b }; this.end = { line: c, character: d }; } }
+  const text = 'x = 1\nprint(x)', doc = { uri: new Uri('file:///sample.py'), languageId: 'python', lineCount: 2, getText: () => text, lineAt: i => ({ text: text.split('\n')[i] }) };
+  const editor = { document: doc, selection: new Range(0, 0, 0, 0), setDecorations() {}, revealRange() {} }, noop = () => ({ dispose() {} });
+  const vscode = { Uri, Range, Selection: class extends Range { get isEmpty() { return true; } }, ThemeColor: class {}, StatusBarAlignment: { Right: 2 }, ViewColumn: { One: 1, Beside: 2 },
+    commands: { registerCommand(id, fn) { commands.set(id, fn); return noop(); } },
+    workspace: { isTrusted: true, textDocuments: [doc], asRelativePath: () => 'sample.py', openTextDocument: async () => doc, getConfiguration: () => ({ get: (k, f) => k === 'refinementSteps' ? 1 : f }), onDidChangeTextDocument: noop },
+    window: { createStatusBarItem: statusItem, activeTextEditor: editor, visibleTextEditors: [editor], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showTextDocument: async () => editor, showErrorMessage(m) { throw new Error(m); }, setStatusBarMessage() {},
+      createWebviewPanel: () => ({ reveal() {}, onDidDispose: noop, webview: { postMessage: m => m.type === 'state' && states.push(JSON.parse(JSON.stringify(m.state))), onDidReceiveMessage(fn) { receive = fn; return noop(); } } }) },
+    env: { clipboard: { writeText: async () => {} } } };
+  const engine = { ...require('./engine'), generate: opts => new Promise((resolve, reject) => { progress = opts.onProgress; release = () => resolve({ ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 2 }], views: { overview: { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 2 }] } } }); opts.signal.addEventListener('abort', () => reject(new Error('Cancelled.'))); }) };
+  const state = new Map([['provider', 'claude'], ['launcherHintShown', true]]), moduleStub = { exports: {} };
+  const context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (k, f) => state.get(k) ?? f, update: async (k, v) => state.set(k, v) }, secrets: {} };
+  try {
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+    await moduleStub.exports.activate(context);
+    const reading = commands.get('yamori.read')();
+    while (!progress) await new Promise(resolve => setTimeout(resolve, 1));
+    let run = states.at(-1).run;
+    assert.equal(run.state, 'running'); assert.equal(run.provider, 'Claude Code'); assert.equal(run.effort, 'low');
+    assert.deepEqual(run.steps.map(step => step.state), ['done', 'waiting', 'waiting', 'waiting']);
+    assert.match(run.steps[0].detail, /0 called definitions · no project guide yet/);
+    progress({ phase: 'Starting Claude Code', stage: 'start' });
+    progress({ phase: 'Reading the code', stage: 'think', model: 'claude-opus-5-5' });
+    progress({ phase: 'Thinking', stage: 'think', thinkingTokens: 2048 });
+    progress({ phase: 'Looked up file · models/script.py', stage: 'think', lookup: 'Looked up file · models/script.py' });
+    run = states.at(-1).run;
+    assert.equal(run.model, 'claude-opus-5-5'); assert.equal(run.lookups, 1);
+    assert.deepEqual(run.steps.map(step => step.state), ['done', 'active', 'waiting', 'waiting']);
+    assert.equal(run.steps[1].detail, '~2,048 thinking tokens · 1 lookup · file · models/script.py');
+    progress({ phase: 'Writing the explanation', stage: 'write', characters: 1830 });
+    progress({ phase: 'Draft ready', stage: 'review', detail: 'The draft is readable now. Picking blocks worth a second look' });
+    run = states.at(-1).run;
+    assert.deepEqual(run.steps.map(step => step.state), ['done', 'done', 'done', 'active']);
+    assert.equal(run.steps[2].detail, '1,830 characters written');
+    release(); await reading;
+    run = states.at(-1).run;
+    assert.equal(run.state, 'done'); assert.ok(run.steps.every(step => step.state === 'done'));
+    // Stopping a request leaves a stopped summary, not a frozen card.
+    progress = undefined;
+    const again = receive({ type: 'refresh' });
+    while (!progress) await new Promise(resolve => setTimeout(resolve, 1));
+    progress({ phase: 'Thinking', stage: 'think', thinkingTokens: 10 });
+    await receive({ type: 'stop' }); await again;
+    run = states.at(-1).run;
+    assert.equal(run.state, 'stopped'); assert.equal(run.steps[1].state, 'stopped'); assert.equal(states.at(-1).busy, false);
+  } finally { await Promise.all(context.subscriptions.map(d => d?.dispose?.())); await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+test('project links and tours come from the map: names a file uses, the block that explains them, and its reading position', async () => {
+  const { graph } = await scanFixture(videoProject);
+  const explanations = { 'pipeline/plan.py': { logic: { title: 'Plan', summary: 's', sections: [{ title: 'Plan the loops', startLine: 3, endLine: 8, pseudocode: 'x' }, { title: 'Hint', startLine: 10, endLine: 11, pseudocode: 'y' }], hash: 'h' } } };
+  assert.deepEqual(projectMap.blockAt(explanations, 'pipeline/plan.py', 11), { index: 1, level: 'logic', title: 'Hint', hash: 'h' });
+  assert.equal(projectMap.blockAt(explanations, 'pipeline/plan.py', 1), undefined);
+  const links = projectMap.symbolLinks(graph, 'pipeline/write.py', explanations, { files: { 'models/script.py': { purpose: 'Defines script sections.' } } });
+  assert.deepEqual(links.map(link => [link.name, link.file, link.line]), [['BRIDGE', 'models/script.py', 3], ['_loop_hint', 'pipeline/plan.py', 10], ['write_blocks', 'pipeline/write.py', 4]], 'strongest dependencies first, then this file');
+  assert.equal(links[1].block, 'Hint'); assert.equal(links[1].explained, true); assert.equal(links[0].purpose, 'Defines script sections.'); assert.equal(links[0].explained, false);
+  assert.ok(!links.some(link => link.name === 'HOOK'), 'names the file does not use are not links');
+  assert.deepEqual(projectMap.tourStep(graph, {}, 'pipeline/plan.py', 'pipeline'), { folder: 'pipeline', steps: ['pipeline/write.py', 'pipeline/plan.py'], index: 1 });
+  assert.deepEqual(projectMap.tourStep(graph, {}, 'main.py', 'pipeline').folder, '', 'a file outside the tour folder falls back to the project');
+  assert.equal(projectMap.tourStep(graph, {}, 'tests/test_plan.py'), undefined, 'tests have no tour');
+});
+
+async function readerHarness(settings = {}, options = {}) {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-tour-')), root = path.join(temp, 'video'), storage = path.join(temp, 'storage');
+  for (const [rel, text] of Object.entries(videoProject)) { await fs.mkdir(path.dirname(path.join(root, rel)), { recursive: true }); await fs.writeFile(path.join(root, rel), text); }
+  class Uri { constructor(fsPath) { this.fsPath = fsPath; this.scheme = 'file'; } toString() { return 'file://' + this.fsPath; } static file(p) { return new Uri(p); } static parse(v) { const uri = new Uri(decodeURIComponent(v.replace(/^[a-z]+:\/\//, ''))); uri.scheme = v.match(/^([a-z]+):/)?.[1] || 'file'; return uri; } static joinPath(base, ...parts) { return new Uri(path.join(base.fsPath, ...parts)); } }
+  class Range { constructor(a, b, c, d) { this.start = { line: a, character: b }; this.end = { line: c, character: d }; } }
+  class MarkdownString { constructor() { this.parts = []; } appendMarkdown(value) { this.parts.push(['md', value]); return this; } appendText(value) { this.parts.push(['text', value]); return this; } }
+  for (let i = 0; i < (options.extraFiles || 0); i++) { await fs.mkdir(path.join(root, 'extra'), { recursive: true }); await fs.writeFile(path.join(root, 'extra', 'm' + i + '.py'), 'def f' + i + '():\n    return ' + i + '\n'); }
+  const harness = { commands: new Map(), panels: [], generated: [], shown: [], requests: [], prompts: [], warnings: [], answer: undefined, hover: undefined, lens: undefined, root, temp, Uri };
+  const noop = () => ({ dispose() {} });
+  const walk = async dir => (await fs.readdir(dir, { withFileTypes: true })).flatMap(entry => entry.isDirectory() ? [] : [path.join(dir, entry.name)]).concat(...await Promise.all((await fs.readdir(dir, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => walk(path.join(dir, entry.name)))));
+  const slice = (lines, range) => { if (range.start.line === range.end.line) return lines[range.start.line].slice(range.start.character, range.end.character); const out = lines.slice(range.start.line, range.end.line + 1); out[0] = out[0].slice(range.start.character); out[out.length - 1] = out[out.length - 1].slice(0, range.end.character); return out.join('\n'); };
+  const docFor = async uri => { const text = await fs.readFile(uri.fsPath, 'utf8'); const lines = text.split('\n'); return { uri, languageId: 'python', isDirty: false, lineCount: lines.length, getText: range => range ? slice(lines, range) : text, lineAt: i => ({ text: lines[i] }),
+    getWordRangeAtPosition: (position, pattern) => { for (const match of lines[position.line].matchAll(new RegExp(pattern.source, 'g'))) if (position.character >= match.index && position.character <= match.index + match[0].length) return new Range(position.line, match.index, position.line, match.index + match[0].length); } }; };
+  harness.docFor = docFor;
+  const vscode = { Uri, RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } }, Range, Selection: class extends Range { get isEmpty() { return true; } }, ThemeColor: class {}, StatusBarAlignment: { Right: 2 }, ViewColumn: { One: 1, Beside: -2, Active: -1 }, TextEditorRevealType: {},
+    MarkdownString, Hover: class { constructor(contents, range) { this.contents = contents; this.range = range; } }, CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } }, EventEmitter: class { constructor() { this.fired = 0; this.event = () => noop(); } fire() { this.fired++; } dispose() {} },
+    languages: { registerHoverProvider: (_, provider) => { harness.hover = provider; return noop(); }, registerCodeLensProvider: (_, provider) => { harness.lens = provider; return noop(); } },
+    commands: { registerCommand(id, fn) { harness.commands.set(id, fn); return noop(); } },
+    workspace: { isTrusted: options.trusted !== false, workspaceFolders: [{ uri: new Uri(root) }], textDocuments: [], getWorkspaceFolder: uri => uri.fsPath.startsWith(root) ? { uri: new Uri(root) } : undefined, asRelativePath: uri => path.relative(root, uri.fsPath), openTextDocument: docFor,
+      findFiles: async pattern => (await walk(root)).filter(file => /package\.json/.test(pattern.pattern) ? false : /\.py$/.test(file)).map(file => new Uri(file)),
+      createFileSystemWatcher: () => ({ onDidCreate: noop, onDidDelete: noop, onDidChange: noop, dispose() {} }), getConfiguration: () => ({ get: (key, fallback) => key in settings ? settings[key] : fallback, inspect: () => ({}) }), onDidChangeTextDocument: noop },
+    window: { createStatusBarItem: statusItem, activeTextEditor: undefined, visibleTextEditors: [], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showErrorMessage(message) { throw new Error(message); }, showInformationMessage: async () => undefined,
+      showWarningMessage: async message => { harness.warnings.push(message); return harness.answer; },
+      showTextDocument: async (doc, options) => { harness.shown.push([path.relative(root, doc.uri.fsPath), options?.selection?.start.line]); return { document: doc, setDecorations() {}, revealRange() {} }; },
+      createWebviewPanel: type => { const panel = { type, messages: [], reveal() {}, onDidDispose: noop, onDidChangeViewState: noop, webview: { postMessage: m => panel.messages.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage(fn) { panel.receive = fn; return noop(); } } }; harness.panels.push(panel); return panel; } },
+    env: { clipboard: { writeText: async () => {} } } };
+  harness.vscode = vscode;
+  const real = require('./engine');
+  harness.models = []; harness.inFlight = 0; harness.peak = 0;
+  const engine = { ...real, requestStructured: async ({ prompt, schema, model }) => {
+    const kind = schema === real.NOTES_SCHEMA ? 'notes' : schema === real.MAP_SUMMARY_SCHEMA ? 'summary' : 'other';
+    harness.requests.push(kind); harness.prompts.push(prompt); harness.models.push(model);
+    harness.inFlight++; harness.peak = Math.max(harness.peak, harness.inFlight);
+    await new Promise(resolve => setTimeout(resolve, options.noteDelay || 0)); harness.inFlight--;
+    if (options.failNotes) throw new Error('Codex is not signed in.');
+    if (kind === 'notes') return { raw: JSON.stringify({ files: [...prompt.matchAll(/FILE "([^"]+)" \(numbered/g)].map(match => ({ file: match[1], purpose: 'Purpose of ' + match[1], role: 'stage', terms: [] })) }) };
+    if (schema === real.SIMULATION_SCHEMA) { harness.simulations = (harness.simulations || 0) + 1; return { raw: JSON.stringify({ inputs: [{ name: 'blocks', value: "['HOOK', 'x', 'ENDING']" }, { name: 'cover', value: "'assets/cover.png'" }], steps: [{ line: 5, note: 'Start with the hook loop', values: [{ name: 'loops', value: "[{'id': 'L1'}]" }] }, { line: 99, note: 'outside', values: [] }], output: { kind: 'return', value: "[{'id': 'L1'}, {'id': 'L2'}]" }, caveats: 'HOOK and ENDING come from models/script.py.' }), actualModel: 'sim-model' }; }
+    return { raw: JSON.stringify({ overview: 'Writes video scripts.', clusters: [], readingPath: [{ file: 'main.py', why: 'Start.' }] }) };
+  }, generate: async opts => {
+    const rel = path.relative(root, vscode.Uri.parse(opts.source.uri).fsPath), lines = opts.source.text.split('\n').length;
+    harness.generated.push(rel);
+    const view = { title: 'About ' + rel, summary: 'Explains ' + rel + '.', sections: [{ title: 'Block for ' + rel, startLine: 1, endLine: lines, pseudocode: 'Call _loop_hint for each loop, then add BRIDGE in write_blocks.', lineMap: [] }] };
+    return { ...view, views: { overview: view }, requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort };
+  } };
+  const state = new Map([['provider', 'codex'], ['launcherHintShown', true]]), moduleStub = { exports: {} };
+  harness.context = { subscriptions: [], globalStorageUri: { fsPath: storage }, globalState: { get: (k, f) => state.get(k) ?? f, update: async (k, v) => state.set(k, v) }, secrets: {} };
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+  await moduleStub.exports.activate(harness.context);
+  harness.exports = moduleStub.exports;
+  await harness.commands.get('yamori.map')(new Uri(root));
+  harness.guide = harness.panels.find(panel => panel.type === 'yamoriMap');
+  harness.readers = () => harness.panels.filter(panel => panel.type === 'yamori');
+  harness.last = panel => panel.messages.filter(m => m.type === 'state').at(-1).state;
+  harness.guideState = () => harness.guide.messages.filter(m => m.type === 'map').at(-1).state;
+  harness.until = async (check, label) => { for (let i = 0; i < 400 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 5)); assert.ok(check(), label); };
+  harness.close = async () => { await Promise.all(harness.context.subscriptions.map(d => d?.dispose?.())); await fs.rm(temp, { recursive: true, force: true }); };
+  return harness;
+}
+
+test('a guide tour shows where each file sits, prepares only the next step, and Next opens it without waiting', async () => {
+  const h = await readerHarness({ autoNotes: false });
+  try {
+    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py', tour: 'pipeline' });
+    const write = h.readers()[0];
+    await h.until(() => h.generated.includes('pipeline/plan.py'), 'the next step is prepared in the background');
+    await h.until(() => h.last(write).tour?.next?.status === 'ready', 'the tour bar says the next step is ready');
+    let tour = h.last(write).tour;
+    assert.deepEqual([tour.label, tour.index, tour.total, tour.next.id, tour.prev], ['pipeline/', 0, 2, 'pipeline/plan.py', undefined]);
+    assert.deepEqual(tour.usedBy.map(item => item.id), ['main.py']);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.generated)), ['pipeline/write.py', 'pipeline/plan.py'], 'exactly one step ahead');
+    assert.equal(h.readers().length, 1, 'preparing a step opens no tab');
+    await write.receive({ type: 'tourGo', id: '../../etc/passwd' });
+    await write.receive({ type: 'tourGo', id: 'pipeline/plan.py' });
+    assert.equal(h.readers().length, 2);
+    const plan = h.readers()[1];
+    await h.until(() => h.last(plan).tour?.index === 1, 'Next keeps the tour');
+    tour = h.last(plan).tour;
+    assert.equal(tour.prev.id, 'pipeline/write.py'); assert.equal(tour.next, undefined);
+    assert.equal(h.generated.length, 2, 'the prepared step opens without another request');
+  } finally { await h.close(); }
+});
+
+test('files opened outside a tour, or with prefetch off, never prepare other files', async () => {
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false });
+  try {
+    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py', tour: 'pipeline' });
+    await h.until(() => h.last(h.readers()[0]).tour, 'the tour bar still shows');
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.deepEqual(JSON.parse(JSON.stringify(h.generated)), ['pipeline/write.py']);
+    assert.equal(h.last(h.readers()[0]).tour.next.status, 'waiting');
+  } finally { await h.close(); }
+  const casual = await readerHarness({ autoNotes: false });
+  try {
+    await casual.commands.get('yamori.openAt')('file://' + require('node:path').join(casual.root, 'pipeline/write.py'), 4);
+    await casual.until(() => casual.last(casual.readers()[0]).tour, 'a casually opened file still knows its place');
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.deepEqual(JSON.parse(JSON.stringify(casual.generated)), ['pipeline/write.py'], 'no tour, no background requests');
+    assert.equal(casual.last(casual.readers()[0]).focusLine.line, 4, 'openAt focuses the block for that line');
+  } finally { await casual.close(); }
+});
+
+test('project names in pseudocode open the explanation that defines them', async () => {
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false });
+  try {
+    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py', tour: 'pipeline' });
+    const write = h.readers()[0];
+    await h.until(() => h.last(write).symbols?.length, 'links are computed');
+    const state = h.last(write), names = state.symbols.map(link => link.name);
+    assert.deepEqual(JSON.parse(JSON.stringify(names)), ['BRIDGE', '_loop_hint', 'write_blocks']);
+    // A name defined in this file focuses its own block.
+    await write.receive({ type: 'openSymbol', index: names.indexOf('write_blocks'), documentKey: state.documentKey });
+    assert.equal(h.last(write).focusLine.line, 4); assert.equal(h.readers().length, 1);
+    // A name from another file opens that file's explanation at its block.
+    await write.receive({ type: 'openSymbol', index: names.indexOf('BRIDGE'), documentKey: 'stale-key' });
+    assert.equal(h.readers().length, 1, 'links from an older document are ignored');
+    await write.receive({ type: 'openSymbol', index: names.indexOf('BRIDGE'), documentKey: state.documentKey });
+    assert.equal(h.readers().length, 2);
+    await h.until(() => h.last(h.readers()[1]).focusLine?.line === 3, 'the target opens at the defining line');
+    assert.ok(h.generated.includes('models/script.py'), 'an unexplained target is written when its link is clicked');
+  } finally { await h.close(); }
+});
+
+test('editor hovers and CodeLens show what Yamori knows, with escaped text and only Yamori commands', async () => {
+  const path = require('node:path'), fs = require('node:fs/promises');
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false });
+  try {
+    const doc = rel => h.docFor(new h.Uri(path.join(h.root, rel)));
+    const plan = await doc('pipeline/plan.py');
+    const hover = await h.hover.provideHover(plan, { line: 0, character: 30 });
+    assert.ok(hover, 'HOOK has a hover');
+    const md = hover.contents.parts.map(([kind, value]) => kind + ':' + value).join('\n');
+    assert.match(md, /text:HOOK/); assert.match(md, /text:constant in models\/script.py:1/); assert.match(md, /command:yamori\.openAt\?/); assert.match(md, /command:yamori\.showSource\?/);
+    assert.deepEqual(JSON.parse(JSON.stringify(hover.contents.isTrusted)), { enabledCommands: ['yamori.openAt', 'yamori.showSource'] });
+    assert.equal(await h.hover.provideHover(plan, { line: 4, character: 10 }), undefined, 'ordinary local names get no hover');
+    // AI-written text is appended as text, never as markdown that could run commands.
+    const hostile = h.exports.hoverMarkdown({ word: 'x', definitions: [{ kind: 'function', file: 'a.py', line: 1, uri: 'file:///a.py', purpose: '[run](command:workbench.action.terminal.new)' }] }, h.vscode);
+    assert.ok(hostile.parts.some(([kind, value]) => kind === 'text' && value.includes('command:workbench')));
+    assert.ok(!hostile.parts.some(([kind, value]) => kind === 'md' && value.includes('workbench')));
+    // CodeLens: an unexplained mapped file offers one Explain lens with its reading position.
+    const main = await doc('main.py');
+    let lenses = await h.lens.provideCodeLenses(main);
+    assert.deepEqual(JSON.parse(JSON.stringify(lenses.map(lens => [lens.range.start.line, lens.command.title, lens.command.command]))), [[0, 'Yamori · Step 1 of 4 in the project · Explain this file', 'yamori.openAt']]);
+    // After an explanation, its block titles sit above the code they explain.
+    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py' });
+    await h.until(() => h.generated.includes('pipeline/write.py'), 'explained');
+    const write = await doc('pipeline/write.py');
+    await h.until(() => true);
+    lenses = await h.lens.provideCodeLenses(write);
+    assert.deepEqual(JSON.parse(JSON.stringify(lenses.map(lens => [lens.range.start.line, lens.command.title, lens.command.arguments[1]]))), [[0, 'Yamori · Block for pipeline/write.py', 1]]);
+    const edited = { ...write, getText: () => write.getText() + '\n# edited' };
+    lenses = await h.lens.provideCodeLenses(edited);
+    assert.equal(lenses[0].command.title, 'Yamori · The code changed since its explanation · Open', 'block titles are never shown against changed code');
+    await h.commands.get('yamori.showSource')(write.uri.toString(), 10);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.shown.at(-1))), ['pipeline/write.py', 5], 'source lines are clamped to the file');
+    await h.commands.get('yamori.openAt')('https://example.com/x.py', 1);
+    assert.ok(!h.readers().some(panel => !panel.messages.length), 'non-file targets are ignored');
+  } finally { await h.close(); }
+  const off = await readerHarness({ prefetchNext: false, codeLens: false, autoNotes: false });
+  try { assert.equal((await off.lens.provideCodeLenses(await off.docFor(new off.Uri(require('node:path').join(off.root, 'main.py'))))).length, 0, 'yamori.codeLens: false shows no lenses'); }
+  finally { await off.close(); }
+});
+
+test('the reader shows a tour bar, project-name links and jumps to a requested block', () => {
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary']);
+  const sent = []; let receive;
+  vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
+  const result = { title: 'Write blocks', summary: 's', sections: [{ title: 'First', startLine: 1, endLine: 3, pseudocode: 'Use _loop_hint on each loop.' }, { title: 'Second', startLine: 4, endLine: 6, pseudocode: 'Add <b>BRIDGE</b> text in write_blocks.' }] };
+  const symbols = [{ name: '_loop_hint', file: 'pipeline/plan.py', line: 11, kind: 'function', block: 'Hint', purpose: 'Plans loops.', explained: true }, { name: 'BRIDGE', file: 'models/script.py', line: 3, kind: 'constant', explained: false }, { name: 'write_blocks', file: 'pipeline/write.py', line: 4, kind: 'function', explained: true }];
+  const tour = { folder: 'pipeline', label: 'pipeline/', index: 0, total: 2, next: { id: 'pipeline/plan.py', label: 'plan.py', status: 'preparing' }, usedBy: [{ id: 'main.py', label: 'main.py' }], uses: [] };
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'pipeline/write.py', documentKey: 'doc', result, symbols, tour, focusLine: { line: 5, token: 1 } } } });
+  const bar = all(elements.content).find(el => el.className === 'tour');
+  const barText = all(bar).map(el => el.textContent).filter(Boolean);
+  assert.ok(barText.includes('pipeline/ · Step 1 of 2') && barText.includes('Next: plan.py →') && barText.includes('preparing…'));
+  all(bar).find(el => el.textContent === 'Next: plan.py →').events.click(); assert.deepEqual(sent.at(-1), { type: 'tourGo', id: 'pipeline/plan.py' });
+  all(bar).find(el => el.textContent === 'main.py').events.click(); assert.deepEqual(sent.at(-1), { type: 'tourGo', id: 'main.py' });
+  // The requested line opened the second block, whose names are links.
+  const links = all(elements.content).filter(el => el.className === 'symbol');
+  assert.deepEqual(links.map(el => el.textContent), ['BRIDGE', 'write_blocks'], 'the focused (second) block is shown, with its names linked');
+  assert.ok(all(elements.content).some(el => el.textContent === 'Add <b>') && !all(elements.content).some(el => el.tag === 'b'), 'markup in pseudocode stays text');
+  assert.match(links[0].title, /not explained yet; click to explain it/); assert.match(links[1].title, /click to show its block/);
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'pipeline/write.py', documentKey: 'doc', result: { ...result, sections: [result.sections[0]] }, symbols, tour } } });
+  const first = all(elements.content).find(el => el.className === 'symbol');
+  assert.equal(first.textContent, '_loop_hint'); assert.match(first.title, /function in pipeline\/plan.py:11 · "Hint" · Plans loops\. · click to open its explanation/);
+  first.events.click({ stopPropagation() {}, preventDefault() {} }); assert.deepEqual(sent.at(-1), { type: 'openSymbol', index: 0, documentKey: 'doc' });
+});
+
+test('AI notes are written automatically when the guide maps a project: quietly, once per change, and never in a loop', async () => {
+  const path = require('node:path'), fs = require('node:fs/promises');
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const h = await readerHarness({ prefetchNext: false });
+  try {
+    await h.until(() => h.requests.length >= 2 && !h.guideState().notesBusy, 'notes and the project summary are written without asking');
+    assert.deepEqual(JSON.parse(JSON.stringify(h.requests)), ['notes', 'summary']); assert.equal(h.warnings.length, 0, 'no dialog for a normal project');
+    assert.deepEqual(h.guideState().notes, { total: 4, done: 4, outdated: 0 }); assert.equal(h.guideState().overview, 'Writes video scripts.');
+    assert.ok(h.guideState().autoNotes);
+    await h.guide.receive({ type: 'rescan' }); await pause(1700);
+    assert.equal(h.requests.length, 2, 'an unchanged project writes nothing more');
+    await fs.appendFile(path.join(h.root, 'pipeline/plan.py'), '\nEXTRA = 1\n');
+    await h.guide.receive({ type: 'rescan' });
+    await h.until(() => h.requests.length === 3 && !h.guideState().notesBusy, 'a changed file is noted again');
+    await pause(50);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.requests.slice(2))), ['notes'], 'only the changed file, without a new summary');
+    assert.match(h.prompts.at(-1), /FILE "pipeline\/plan.py"/); assert.doesNotMatch(h.prompts.at(-1), /FILE "main.py"/);
+  } finally { await h.close(); }
+  const failing = await readerHarness({ prefetchNext: false }, { failNotes: true });
+  try {
+    await failing.until(() => /could not be written automatically: Codex is not signed in\. Press Write AI notes to retry\./.test(failing.guideState().error || ''), 'a failure is explained once');
+    await failing.guide.receive({ type: 'rescan' }); await pause(1700);
+    assert.equal(failing.requests.length, 1, 'no automatic retries after a failure');
+  } finally { await failing.close(); }
+  const big = await readerHarness({ prefetchNext: false }, { extraFiles: 125 });
+  try {
+    await big.until(() => big.warnings.length === 1, 'large projects ask first');
+    assert.match(big.warnings[0], /^This project has 129 files without AI notes\. Write AI notes for 129 files/);
+    await big.until(() => /paused/.test(big.guideState().error || ''), 'declining pauses automatic notes');
+    await big.guide.receive({ type: 'rescan' }); await pause(1700);
+    assert.equal(big.requests.length, 0); assert.equal(big.warnings.length, 1, 'it asks only once');
+  } finally { await big.close(); }
+  for (const [settings, options, label] of [[{ autoNotes: false }, {}, 'the setting'], [{}, { trusted: false }, 'Restricted Mode']]) {
+    const quiet = await readerHarness({ prefetchNext: false, ...settings }, options);
+    try { await pause(1700); assert.equal(quiet.requests.length, 0, label + ' keeps notes manual'); }
+    finally { await quiet.close(); }
+  }
+});
+
+test('quick jobs use a fast model: the Overview is written in parallel, Logic answers carry no companion, and line maps are compact', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-fast-'));
+  try {
+    const log = path.join(dir, 'requests.jsonl'), binary = path.join(dir, 'claude.js');
+    const logic = { ...valid, sections: [{ ...valid.sections[0], lineMap: [[1, 10, 10], [2, 11, 11]] }] };
+    const overview = { title: 'Overview', summary: 'Short.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Print a number', lineMap: [[1, 11, 11], [7, 10, 10]] }] };
+    await fs.writeFile(binary, `const a=process.argv.slice(2),fs=require('fs');if(a.includes('--help')){console.log('--safe-mode');process.exit(0)}
+let prompt='';process.stdin.on('data',d=>prompt+=d).on('end',()=>{const schema=JSON.parse(a[a.indexOf('--json-schema')+1]),model=a.includes('--model')?a[a.indexOf('--model')+1]:'';
+const kind=schema.properties.blocks?'select':schema.properties.score?'review':/Detail: overview\\./.test(prompt)?'overview':'logic';
+fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({kind,model,effort:a.includes('--effort')?a[a.indexOf('--effort')+1]:null,views:!!schema.properties.views,link:schema.properties.sections?.items?.properties?.lineMap?.items,companions:/LOWER DETAIL VIEWS/.test(prompt),triple:/\\[pseudocodeLine, startLine, endLine\\] triple/.test(prompt)})+'\\n');
+const out=kind==='select'?{blocks:[]}:kind==='review'?{score:1,faithful:true,issues:[]}:kind==='overview'?{...${JSON.stringify(overview)},views:{}}:${JSON.stringify(logic)};
+setTimeout(()=>process.stdout.write(JSON.stringify({type:'result',structured_output:out,modelUsage:{[model||'claude-opus-test']:{}}})),kind==='logic'?300:50);});`);
+    const read = async () => (await fs.readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const fast = { model: 'haiku', effort: 'low' };
+    const result = await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'medium', fast, refinementSteps: 1 });
+    let calls = await read();
+    const main = calls.find(call => call.kind === 'logic'), side = calls.find(call => call.kind === 'overview');
+    assert.deepEqual([main.model, main.effort, main.views, main.companions], ['opus', 'medium', false, false], 'the Logic answer carries no companion view');
+    assert.deepEqual([side.model, side.effort], ['haiku', 'low'], 'the Overview is written by the fast model');
+    assert.deepEqual(main.link, { type: 'array', items: { type: 'integer' }, minItems: 3, maxItems: 3 }); assert.ok(main.triple, 'the prompt asks for compact triples');
+    assert.deepEqual(calls.find(call => call.kind === 'select').model, 'haiku', 'picking blocks is a quick job');
+    assert.equal(result.views.overview.title, 'Overview'); assert.equal(result.views.overview.model, 'haiku');
+    assert.deepEqual(result.views.overview.sections[0].lineMap, [{ pseudocodeLine: 1, startLine: 11, endLine: 11 }], 'a fast model\'s one bad link is dropped, not the whole Overview');
+    assert.equal(result.views.overview.requestedModel, 'opus', 'the companion is cached under the reader\'s own settings');
+    assert.deepEqual(result.sections[0].lineMap, [{ pseudocodeLine: 1, startLine: 10, endLine: 10 }, { pseudocodeLine: 2, startLine: 11, endLine: 11 }], 'triples are stored as readable objects');
+    await fs.writeFile(log, '');
+    await generate({ source, level: 'overview', provider: 'claude', cliPath: binary, model: 'opus', effort: 'medium', fast });
+    calls = await read();
+    assert.deepEqual(calls.map(call => [call.kind, call.model]), [['overview', 'haiku']], 'an Overview-level explanation is a single quick job');
+    await fs.writeFile(log, '');
+    await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', fast, edit: { section: valid.sections[0], draft: 'x', instruction: '' } });
+    calls = await read();
+    assert.deepEqual(calls.map(call => [call.kind, call.model]), [['logic', 'opus']], 'edits are not quick jobs and need no parallel Overview');
+    await fs.writeFile(log, '');
+    await generate({ source, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus' });
+    calls = await read();
+    assert.deepEqual(calls.map(call => [call.kind, call.views, call.companions]), [['logic', true, true]], 'without a fast model the companion stays in the same answer');
+    // Codex: the fast model comes from its own catalog.
+    const codex = path.join(dir, 'codex');
+    await fs.writeFile(codex, `#!${process.execPath}
+const out=e=>process.stdout.write(JSON.stringify(e)+'\\n');require('readline').createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);
+if(q.id===1)out({id:1,result:{}});if(q.id===4)out({id:4,result:{data:[{model:'big',displayName:'Big',description:'Frontier intelligence.',supportedReasoningEfforts:[{reasoningEffort:'low'}]},{model:'quick',displayName:'Quick',description:'Fast and affordable model for easier tasks.',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}]}]}});});`);
+    await fs.chmod(codex, 0o755);
+    assert.deepEqual(await realFastModel('codex', codex), { model: 'quick', effort: 'low' });
+    assert.deepEqual(await realFastModel('claude'), { model: 'haiku', effort: 'low' });
+    assert.equal(await realFastModel('claude', '', 'off'), undefined, 'off keeps every job on the main model');
+    assert.deepEqual(await realFastModel('claude', '', 'sonnet'), { model: 'sonnet', effort: 'low' });
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('AI notes use the fast model and run three batches at a time', async () => {
+  const h = await readerHarness({ prefetchNext: false }, { extraFiles: 60, noteDelay: 80 });
+  try {
+    await h.until(() => h.requests.includes('summary') && !h.guideState().notesBusy, 'notes finish');
+    const notes = h.requests.filter(kind => kind === 'notes').length;
+    assert.ok(notes >= 3, 'the project needs several batches');
+    assert.equal(h.peak, 3, 'three batches run at once');
+    assert.ok(h.models.every(model => model === 'fast-test'), 'every note request uses the fast model');
+    assert.equal(h.guideState().notes.done, h.guideState().notes.total);
+  } finally { await h.close(); }
+});
+
+test('main-model answers keep strict step links; fast-model answers drop only the bad link', () => {
+  const answer = { title: 't', summary: 's', sections: [{ title: 'a', startLine: 10, endLine: 11, pseudocode: 'Set x\n\nPrint x', lineMap: [[1, 10, 10], [2, 10, 10], [3, 11, 11], [3, 10, 10], [9, 10, 10]] }] };
+  assert.throws(() => parseResult(JSON.stringify(answer), source), /Invalid step source references/, 'the main model gets no silent repairs');
+  const lenient = parseResult(JSON.stringify(answer), source, { dropInvalidLinks: true });
+  assert.deepEqual(lenient.sections[0].lineMap.map(link => link.pseudocodeLine), [1, 3], 'blank, duplicate and out-of-range links are dropped');
+  assert.throws(() => parseResult(JSON.stringify({ ...answer, sections: [{ ...answer.sections[0], startLine: 1 }] }), source, { dropInvalidLinks: true }), /invalid source references/, 'block ranges stay strict');
+});
+
+const pythonAvailable = (() => { try { require('node:child_process').execFileSync('python3', ['-c', 'import sys'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+const pillowAvailable = pythonAvailable && (() => { try { require('node:child_process').execFileSync('python3', ['-c', 'import PIL'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+
+test('unit tests are found in Python and JS files and linked to the functions they call', async () => {
+  const indexer = new projectMap.Indexer();
+  const py = await indexer.extract('tests/test_plan.py', 'import unittest\nfrom pipeline.plan import plan_loops, _loop_hint\n\ndef test_first_loop():\n    assert plan_loops(["HOOK", "x", "ENDING"])[0]["id"] == "L1"\n\nclass TestHint(unittest.TestCase):\n    def test_skip(self):\n        self.assertEqual(_loop_hint({"id": "L1"}), "")\n\nclass Helper:\n    def test_not_a_test(self):\n        pass\n');
+  assert.deepEqual(py.tests.map(test => [test.name, test.line, test.end]), [['test_first_loop', 4, 5], ['TestHint::test_skip', 8, 9]]);
+  assert.ok(py.tests[0].calls.includes('plan_loops') && py.tests[1].calls.includes('_loop_hint'));
+  const js = await indexer.extract('src/math.test.ts', "import { square } from './math';\nit('squares', () => { expect(square(3)).toBe(9); });\ntest('squares zero', () => { expect(square(0)).toBe(0); });\n");
+  assert.deepEqual(js.tests.map(test => test.name), ['squares', 'squares zero']); assert.ok(js.tests[0].calls.includes('square'));
+  const { graph } = await scanFixture(videoProject);
+  assert.equal(graph.version, projectMap.GRAPH_VERSION);
+  const found = projectMap.testsFor(graph, 'pipeline/plan.py', 1, 12);
+  assert.deepEqual(found.map(test => [test.id, test.function, test.functionLine, test.functionEnd]), [['tests/test_plan.py::test_first_loop', 'plan_loops', 3, 8]]);
+  assert.deepEqual(projectMap.testsFor(graph, 'pipeline/plan.py', 10, 12), [], '_loop_hint has no test');
+  assert.deepEqual(projectMap.testsFor(graph, 'tests/test_plan.py', 1, 5), [], 'tests are not tested');
+  assert.equal(projectMap.valueKind("'assets/cat.PNG'"), 'image'); assert.equal(projectMap.valueKind('"report.pdf"'), 'document'); assert.equal(projectMap.valueKind("b'\\x89PNG'"), 'bytes'); assert.equal(projectMap.valueKind('42'), undefined);
+});
+
+test('the Python runner records a function\'s real inputs, steps and output under one test', { skip: !pythonAvailable && 'python3 is not installed' }, async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-runner-'));
+  try {
+    await fs.mkdir(path.join(root, 'pkg')); await fs.mkdir(path.join(root, 'tests')); await fs.mkdir(path.join(root, 'assets'));
+    await fs.writeFile(path.join(root, 'pkg', '__init__.py'), '');
+    await fs.writeFile(path.join(root, 'pkg', 'work.py'), 'def total(items, path):\n    acc = 0\n    for item in items:\n        acc += item\n    return {"total": acc, "file": path}\n\n\ndef load(path, data):\n    if not data:\n        raise ValueError("empty")\n    return len(data)\n');
+    await fs.writeFile(path.join(root, 'tests', 'test_work.py'), 'import unittest\nfrom pkg.work import total, load\n\ndef test_total():\n    assert total([1, 2], "assets/cover.png")["total"] == 3\n\ndef test_wrong():\n    assert total([1], "x.pdf")["total"] == 2, "expected 2"\n\ndef test_needs_fixture(tmp_path):\n    pass\n\nclass TestLoad(unittest.TestCase):\n    def test_empty(self):\n        with self.assertRaises(ValueError):\n            load("notes.txt", b"")\n');
+    if (pillowAvailable) require('node:child_process').execFileSync('python3', ['-c', `from PIL import Image; Image.new('RGB', (32, 16)).save(${JSON.stringify(path.join(root, 'assets', 'cover.png'))})`]);
+    const run = async (testName, fn, line, end) => {
+      const request = path.join(root, 'request.json'), output = path.join(root, 'result.json');
+      await fs.writeFile(request, JSON.stringify({ root, testFile: path.join(root, 'tests', 'test_work.py'), testName, target: { file: path.join(root, 'pkg', 'work.py'), function: fn, line, end } }));
+      await runProcess('python3', [path.join(__dirname, 'runner', 'trace.py'), request, output], '', { cwd: root, timeout: 30000 });
+      return JSON.parse(await fs.readFile(output, 'utf8'));
+    };
+    const ok = await run('test_total', 'total', 1, 5);
+    assert.equal(ok.outcome, 'passed'); assert.equal(ok.calls.length, 1);
+    const call = ok.calls[0];
+    assert.deepEqual(call.inputs.map(value => [value.name, value.repr]), [['items', '[1, 2]'], ['path', "'assets/cover.png'"]]);
+    assert.equal(call.inputs[1].kind, 'image');
+    if (pillowAvailable) assert.match(call.inputs[1].detail, /cover\.png · \d+ bytes · 32×16 PNG/);
+    assert.deepEqual(call.steps.map(step => step.line), [2, 3, 4, 3, 4, 3, 5], 'every executed line, loops included');
+    assert.deepEqual(call.steps[0].changed.map(value => [value.name, value.repr]), [['acc', '0']], 'a line is credited with the changes it made');
+    assert.deepEqual(call.steps[2].changed.map(value => value.repr), ['1']);
+    assert.equal(call.output.repr, "{'total': 3, 'file': 'assets/cover.png'}");
+    const wrong = await run('test_wrong', 'total', 1, 5);
+    assert.equal(wrong.outcome, 'failed'); assert.match(wrong.message, /expected 2/); assert.equal(wrong.calls[0].inputs[1].kind, 'document');
+    const fixture = await run('test_needs_fixture', 'total', 1, 5);
+    if (fixture.runner === 'plain') assert.match(fixture.message, /needs pytest fixtures \(tmp_path\)/);
+    const unit = await run('TestLoad::test_empty', 'load', 8, 11);
+    assert.equal(unit.outcome, 'passed'); assert.equal(unit.calls[0].error.type, 'ValueError'); assert.equal(unit.calls[0].inputs[1].kind, 'bytes');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('a block runs its unit test for real once allowed, and simulates in Restricted Mode', { skip: !pythonAvailable && 'python3 is not installed' }, async () => {
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false, pythonPath: 'python3' });
+  try {
+    await h.guide.receive({ type: 'openFile', id: 'pipeline/plan.py' });
+    const reader = h.readers()[0];
+    await h.until(() => Object.keys(h.last(reader).blockTests || {}).length, 'the block knows its tests');
+    let state = h.last(reader);
+    assert.deepEqual(JSON.parse(JSON.stringify(state.blockTests[0])), [{ id: 'tests/test_plan.py::test_first_loop', name: 'test_first_loop', function: 'plan_loops', file: 'tests/test_plan.py', language: 'python' }]);
+    assert.equal(state.canRunTests, true);
+    await reader.receive({ type: 'runTest', index: 0, id: 'tests/../../etc::x', documentKey: state.documentKey });
+    assert.equal(h.warnings.length, 0, 'unknown tests are ignored');
+    h.answer = 'Always run tests in this folder';
+    await reader.receive({ type: 'runTest', index: 0, id: 'tests/test_plan.py::test_first_loop', documentKey: state.documentKey });
+    assert.equal(h.warnings.length, 1); assert.match(h.warnings[0], /^Run the unit test test_first_loop\? Yamori will run your project's test code with python3/);
+    let run = h.last(reader).runs[0];
+    assert.equal(run.mode, 'real'); assert.equal(run.outcome, 'passed', run.message);
+    assert.deepEqual(run.calls[0].inputs.map(value => [value.name, value.repr]), [['blocks', "['HOOK', 'x', 'ENDING']"]]);
+    assert.ok(run.calls[0].steps.length >= 3); assert.match(run.calls[0].output.repr, /'id': 'L1'/);
+    await reader.receive({ type: 'runTest', index: 0, id: 'tests/test_plan.py::test_first_loop', documentKey: state.documentKey });
+    assert.equal(h.warnings.length, 1, '"Always" is remembered for the folder');
+    await reader.receive({ type: 'runTest', index: 0, id: 'tests/test_plan.py::test_first_loop', documentKey: state.documentKey, simulate: true });
+    run = h.last(reader).runs[0];
+    assert.equal(run.mode, 'simulated'); assert.equal(run.reason, 'You asked for a simulation.');
+    assert.deepEqual(run.calls[0].steps.map(step => step.line), [5], 'simulated steps stay inside the function');
+    assert.equal(run.calls[0].inputs[1].emoji, '🖼️'); assert.match(run.calls[0].inputs[1].guidance, /path to an image file/);
+    await reader.receive({ type: 'closeRun', index: 0 });
+    assert.equal(h.last(reader).runs[0], undefined);
+  } finally { await h.close(); }
+  const restricted = await readerHarness({ prefetchNext: false, autoNotes: false }, { trusted: false });
+  try {
+    await restricted.guide.receive({ type: 'openFile', id: 'pipeline/plan.py' });
+    const reader = restricted.readers()[0];
+    await restricted.until(() => Object.keys(restricted.last(reader).blockTests || {}).length, 'tests are listed in Restricted Mode');
+    const state = restricted.last(reader);
+    assert.equal(state.canRunTests, false);
+    await reader.receive({ type: 'runTest', index: 0, id: 'tests/test_plan.py::test_first_loop', documentKey: state.documentKey });
+    const run = restricted.last(reader).runs[0];
+    assert.equal(run.mode, 'simulated'); assert.match(run.reason, /Restricted Mode/); assert.equal(restricted.warnings.length, 0, 'no code runs and nothing is asked');
+  } finally { await restricted.close(); }
+});
+
+test('the run cell shows In, Out and steps that highlight the pseudocode, with file values as emoji', () => {
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary']);
+  const sent = []; let receive;
+  vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
+  const result = { title: 'Totals', summary: 's', sections: [{ title: 'Add the items', startLine: 1, endLine: 5, pseudocode: 'Start the total at 0.\nFor each item:\n    Add it to the total.\nReturn the total with the file.', lineMap: [{ pseudocodeLine: 1, startLine: 2, endLine: 2 }, { pseudocodeLine: 2, startLine: 3, endLine: 3 }, { pseudocodeLine: 3, startLine: 4, endLine: 4 }, { pseudocodeLine: 4, startLine: 5, endLine: 5 }] }] };
+  const image = { name: 'path', repr: "'assets/cover.png'", type: 'str', kind: 'image', detail: 'cover.png · 157 bytes · 32×16 PNG', emoji: '🖼️', kindLabel: 'Image', guidance: 'A path to an image file.' };
+  const runs = { 0: { id: 't::test_total', name: 'test_total', function: 'total', state: 'done', mode: 'real', outcome: 'passed', durationMs: 12, python: '3.14.4', calls: [{ inputs: [{ name: 'items', repr: '[1, 2]', type: 'list', size: 2 }, image], steps: [{ line: 2, changed: [{ name: 'acc', repr: '0', type: 'int' }] }, { line: 3, changed: [{ name: 'item', repr: '<b>1</b>', type: 'int' }] }, { line: 4, changed: [{ name: 'acc', repr: '1', type: 'int' }] }], output: { name: 'return', repr: "{'total': 3}", type: 'dict' } }] } };
+  const state = { providerLabel: 'Codex', level: 'logic', name: 'pkg/work.py', documentKey: 'doc', canRunTests: true, result, blockTests: { 0: [{ id: 't::test_total', name: 'test_total', function: 'total', file: 'tests/test_work.py', language: 'python' }] }, runs };
+  receive({ data: { type: 'state', state } });
+  const chip = all(elements.content).find(el => el.className === 'test-chip');
+  assert.equal(chip.textContent, '▸ test_total'); assert.equal(chip.title, 'Run test_total from tests/test_work.py and watch total step by step');
+  chip.events.click(); assert.deepEqual(sent.at(-1), { type: 'runTest', index: 0, id: 't::test_total', documentKey: 'doc' });
+  const cell = all(elements.content).find(el => el.className === 'run-cell');
+  const text = all(cell).map(el => el.textContent).filter(Boolean);
+  assert.ok(text.includes('Real run') && text.includes('passed · 12 ms · Python 3.14.4'));
+  assert.ok(text.includes("{'total': 3}"), 'Out shows the return value');
+  const file = all(cell).find(el => el.className === 'value file');
+  assert.equal(all(file).find(el => el.className === 'value-emoji').textContent, '🖼️');
+  assert.match(file.title, /Image\n'assets\/cover.png'\ncover.png · 157 bytes · 32×16 PNG\nA path to an image file\./);
+  assert.ok(text.includes('Step 1 / 3 · source line 2'));
+  let rows = all(elements.content).filter(el => /code-line/.test(el.className));
+  assert.ok(/run-current/.test(rows[0].className) && !/run-current/.test(rows[1].className), 'step 1 highlights the pseudocode line linked to source line 2');
+  cell.events.keydown({ key: 'ArrowRight', preventDefault() {} });
+  const after = all(elements.content);
+  rows = after.filter(el => /code-line/.test(el.className));
+  assert.ok(/run-current/.test(rows[1].className), 'the next step moves the highlight');
+  assert.ok(after.some(el => el.textContent === '<b>1</b>') && !after.some(el => el.tag === 'b'), 'values are text, never markup');
+  receive({ data: { type: 'state', state: { ...state, canRunTests: false, runs: { 0: { ...runs[0], mode: 'simulated', outcome: 'simulated', caveats: 'Unknown helper.', calls: [{ ...runs[0].calls[0], steps: [{ line: 3, note: 'Loop over items', changed: [] }] }] } } } } });
+  const simulated = all(elements.content).find(el => /run-cell simulated/.test(el.className));
+  const simText = all(simulated).map(el => el.textContent).filter(Boolean);
+  assert.ok(simText.includes('Simulated by AI, not a real run') && simText.includes('Caveats: Unknown helper.') && simText.includes('Loop over items'));
+  assert.match(all(elements.content).find(el => el.className === 'test-chip').title, /simulated by AI/);
+});
+
+test('monorepo sub-projects resolve `src.` imports and run tests from their own folder and .venv', { skip: !pythonAvailable && 'python3 is not installed' }, async () => {
+  const ctx = projectMap.resolutionContext(['research/agent/mcp_server/src/app/decisions_handler.py', 'research/agent/mcp_server/src/config/constants.py', 'research/agent/mcp_server/tests/test_decisions.py', 'tools/utils.py', 'tools/run.py']);
+  const resolve = (from, spec, names = []) => projectMap.resolveImport(from, { kind: 'module', spec, names }, ctx);
+  assert.deepEqual(resolve('research/agent/mcp_server/tests/test_decisions.py', 'src.app.decisions_handler'), ['research/agent/mcp_server/src/app/decisions_handler.py'], 'tests import from their sub-project root');
+  assert.deepEqual(resolve('research/agent/mcp_server/src/app/decisions_handler.py', 'src.config.constants'), ['research/agent/mcp_server/src/config/constants.py']);
+  assert.deepEqual(resolve('tools/run.py', 'utils'), ['tools/utils.py'], 'a script\'s sibling module comes first');
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false });
+  try {
+    const python = require('node:child_process').execFileSync('python3', ['-c', 'import sys; print(sys.executable)']).toString().trim();
+    await fs.writeFile(path.join(h.root, 'pyproject.toml'), '[project]\nname = "video"\n');
+    await fs.mkdir(path.join(h.root, '.venv', 'bin'), { recursive: true }); await fs.symlink(python, path.join(h.root, '.venv', 'bin', 'python'));
+    await h.guide.receive({ type: 'openFile', id: 'pipeline/plan.py' });
+    const reader = h.readers()[0];
+    await h.until(() => Object.keys(h.last(reader).blockTests || {}).length, 'tests listed');
+    h.answer = 'Run';
+    await reader.receive({ type: 'runTest', index: 0, id: 'tests/test_plan.py::test_first_loop', documentKey: h.last(reader).documentKey });
+    assert.ok(h.warnings[0].includes(path.join(h.root, '.venv', 'bin', 'python')), 'the project\'s own .venv runs the test');
+    assert.equal(h.last(reader).runs[0].outcome, 'passed', h.last(reader).runs[0].message);
+  } finally { await h.close(); }
 });

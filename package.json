@@ -1,8 +1,8 @@
 {
   "name": "yamori",
   "displayName": "Yamori",
-  "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code.",
-  "version": "0.19.4",
+  "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code, with a project map that shows where to start.",
+  "version": "0.20.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -23,7 +23,10 @@
       "restrictedConfigurations": [
         "yamori.codexPath",
         "yamori.claudePath",
-        "yamori.refinementSteps"
+        "yamori.refinementSteps",
+        "yamori.agentTools",
+        "yamori.autoNotes",
+        "yamori.pythonPath"
       ]
     }
   },
@@ -41,6 +44,10 @@
       {
         "command": "yamori.project",
         "title": "Yamori: Read a Folder or Project"
+      },
+      {
+        "command": "yamori.map",
+        "title": "Yamori: Open Project Guide"
       },
       {
         "command": "yamori.provider",
@@ -74,6 +81,14 @@
       {
         "command": "yamori.refinement",
         "title": "Yamori: Choose Refinement Steps"
+      },
+      {
+        "command": "yamori.openAt",
+        "title": "Yamori: Open Explanation at Line"
+      },
+      {
+        "command": "yamori.showSource",
+        "title": "Yamori: Show Source Line"
       }
     ],
     "menus": {
@@ -101,6 +116,21 @@
           "command": "yamori.project",
           "when": "explorerResourceIsFolder",
           "group": "yamori"
+        },
+        {
+          "command": "yamori.map",
+          "when": "explorerResourceIsFolder",
+          "group": "yamori"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "yamori.openAt",
+          "when": "false"
+        },
+        {
+          "command": "yamori.showSource",
+          "when": "false"
         }
       ]
     },
@@ -133,6 +163,37 @@
           "minimum": 0,
           "maximum": 5,
           "description": "Maximum refinement steps for difficult blocks. A selector skips straightforward functions; two parallel evaluators check uncertainty and reading cost. Up to 3N+4 model requests per new explanation, or 2 if no hard blocks. 0 skips selection and refinement. Cached reads use no AI."
+        },
+        "yamori.agentTools": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let Codex or Claude Code use Yamori's read-only project knowledge while writing explanations: the project map, AI notes, glossary, Yamori's pseudocode for other files and source lines of mapped files. Used only after a folder is mapped; off in Restricted Mode. Lookups add model turns and can send more of your project's source to the provider."
+        },
+        "yamori.prefetchNext": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you read files from the Project guide (Start here, or Next in the tour bar), prepare the next file in the background so it opens without waiting. Uses your AI settings; only one file ahead."
+        },
+        "yamori.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Yamori's block titles above the code they explain (and an Explain link in mapped files that have no explanation yet). No AI is used."
+        },
+        "yamori.autoNotes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Write AI notes (file purposes, project terms and a project overview) automatically when the Project guide maps a folder, and re-note changed files after rescans. Uses your AI settings; asks first for projects with more than 120 files. Off in Restricted Mode."
+        },
+        "yamori.fastModel": {
+          "type": "string",
+          "default": "auto",
+          "description": "Model for quick jobs: AI notes, the Overview level (and the Overview written alongside Logic) and picking blocks to review. auto uses Claude Haiku, or the fast model in Codex's catalog; off uses your main model for everything; or enter an exact model ID. Logic explanations and reviews always use your main model."
+        },
+        "yamori.pythonPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Python interpreter for running a function's unit tests in the explanation (Run with a test). Empty uses the Python extension's interpreter for the project, then a .venv, then python3. Real runs execute your project's test code; Yamori asks once per folder and never runs code in Restricted Mode."
         }
       }
     },
@@ -148,8 +209,9 @@
   },
   "scripts": {
     "test": "node --test test.js",
-    "check": "node --check extension.js && node --check engine.js && node --check panel.js && node --check cache.js && node --check schemas.js && node --check validation.min.js",
-    "build:validation": "node schemas.js"
+    "check": "node --check extension.js && node --check engine.js && node --check panel.js && node --check cache.js && node --check schemas.js && node --check validation.min.js && node --check project.js && node --check map.js && node --check mcp.js",
+    "build:validation": "node schemas.js",
+    "build:parser": "node project.js"
   },
   "files": [
     "extension.js",
@@ -165,7 +227,12 @@
     "cache.js",
     "diff.min.js",
     "schemas.js",
-    "validation.min.js"
+    "validation.min.js",
+    "project.js",
+    "map.js",
+    "grammars/",
+    "mcp.js",
+    "runner/"
   ],
   "icon": "yamori.png",
   "repository": {
@@ -184,6 +251,7 @@
     "claude"
   ],
   "devDependencies": {
+    "@vscode/tree-sitter-wasm": "0.3.1",
     "ajv": "8.20.0",
     "esbuild": "0.28.2"
   }
