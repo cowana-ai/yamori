@@ -8,7 +8,7 @@ const { SCHEMA, REVIEW_SCHEMA, SELECTION_SCHEMA, NOTES_SCHEMA, MAP_SUMMARY_SCHEM
 const validators = require('./validation.min');
 
 // package.json ships in every VSIX; the reported client version follows it.
-const VERSION = (() => { try { return require('./package.json').version; } catch { return 'unknown'; } })();
+const VERSION = (() => { try { return require('../../package.json').version; } catch { return 'unknown'; } })();
 const LEVELS = {
   overview: { label: 'Overview', hint: 'The goal and main ideas', instruction: 'Give the goal and 3–6 main ideas, normally under 160 words. Group routine setup, logging and cleanup. Keep the core decisions and insights needed to understand the workflow.' },
   logic: { label: 'Logic', hint: 'Readable steps and important decisions', instruction: 'Write a friendly walkthrough with 4–10 concise action lines per idea where useful. Keep exact constants, boundaries, exceptions and side effects when they change behavior. Group by purpose, not one block per method. Use short sentences, explicit decisions, indentation and useful mathematics. Preserve meaningful branches, state changes and the order of effects; break a complicated idea into smaller named parts. Avoid academic algorithm notation, input/output declarations, unsolicited worked examples and tutorial paragraphs. A short derivation that explains the actual computation is part of the logic, not an optional tutorial.' },

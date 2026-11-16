@@ -8,7 +8,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const GRAMMAR_DIR = path.join(__dirname, 'grammars');
+const GRAMMAR_DIR = path.join(__dirname, '..', '..', 'vendor', 'tree-sitter');
 const GRAMMARS = ['python', 'javascript', 'tsx', 'go', 'java', 'rust'];
 // TypeScript files use the TSX grammar: one 1.4 MB grammar instead of two.
 const GRAMMAR_FOR = { '.py': 'python', '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.ts': 'tsx', '.tsx': 'tsx', '.mts': 'tsx', '.cts': 'tsx', '.go': 'go', '.java': 'java', '.rs': 'rust' };
@@ -986,6 +986,6 @@ if (require.main === module) {
     const license = await fs.readFile(path.join(source, '..', 'LICENSE'), 'utf8');
     const manifest = JSON.parse(await fs.readFile(path.join(source, '..', 'package.json'), 'utf8'));
     await fs.writeFile(path.join(GRAMMAR_DIR, 'LICENSE'), `Tree-sitter runtime and grammars from ${manifest.name} ${manifest.version} (MIT).\nGrammar sources: tree-sitter-python, tree-sitter-javascript, tree-sitter-typescript, tree-sitter-go, tree-sitter-java and tree-sitter-rust, each MIT licensed.\n\n${license}`);
-    process.stdout.write('Copied ' + names.length + ' files to grammars/\n');
+    process.stdout.write('Copied ' + names.length + ' files to vendor/tree-sitter/\n');
   })().catch(error => { console.error(error); process.exit(1); });
 }

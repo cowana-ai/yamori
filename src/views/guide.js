@@ -4,7 +4,7 @@
 // boxes: drag a box to move it, click its header to fold it, click a file for
 // details, double-click to explain it. Text is always inserted with textContent.
 const { randomBytes } = require('node:crypto');
-const { BASE_STYLES, LOGO, READING_STYLES, pseudocodeLines, emphasisParts, mathParts, tokenize } = require('./panel');
+const { BASE_STYLES, LOGO, READING_STYLES, pseudocodeLines, emphasisParts, mathParts, tokenize } = require('./reader');
 
 // Pure helpers run in Node tests and are inserted into the webview script.
 function edgePath(a, b) {
@@ -209,7 +209,7 @@ aside .flow-reading pre { font-size: 14px; padding: 12px 8px 14px; }
 <g id="viewport"><g id="boxes"></g><g id="edges"></g><g id="nodes"></g></g></svg>
 <aside id="search-panel" aria-label="Search results" hidden></aside>
 <aside id="drawer" aria-label="Details" hidden><div class="drawer-head"><span class="eyebrow">Details</span><button id="drawer-close" title="Close details" aria-label="Close details">Close ×</button></div><section id="card"></section><section id="glossary"></section></aside></div></section>
-<script nonce="${nonce}">${require('node:fs').readFileSync(require('node:path').join(__dirname, 'katex.min.js'), 'utf8')}</script>
+<script nonce="${nonce}">${require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'vendor', 'katex.min.js'), 'utf8')}</script>
 <script nonce="${nonce}">
 const edgePath = ${edgePath.toString()};
 const fitTransform = ${fitTransform.toString()};

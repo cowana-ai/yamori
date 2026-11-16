@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/cowana-ai/yamori/tree/main/docs
+    about: How to set up an AI, read code, use the project guide and run tests.
+  - name: Report a security problem
+    url: https://github.com/cowana-ai/yamori/security/advisories/new
+    about: Please report vulnerabilities privately.

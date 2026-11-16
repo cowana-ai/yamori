@@ -4,7 +4,7 @@
 // only renders it with textContent and sends back action names. Every CLI
 // path and terminal command is built by the extension.
 const { randomBytes } = require('node:crypto');
-const { BASE_STYLES, LOGO } = require('./panel');
+const { BASE_STYLES, LOGO } = require('./reader');
 
 function setupHTML(initialPalette = 'auto') {
   const nonce = randomBytes(18).toString('base64');

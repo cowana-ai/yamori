@@ -1,17 +1,19 @@
 'use strict';
+// Sandboxed extension code resolves its own requires from src/, as it does when installed.
+const srcRequire = require('node:module').createRequire(require('node:path').join(__dirname, '..', 'src', 'extension.js'));
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, schemaFor, lowerView, partialView, streamCodex, editPrompt, revisionPrompt, listModels, listEfforts, findCLI, cliLaunch } = require('./engine');
-const { cleanEmphasis, panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts } = require('./panel');
+const { LEVELS, SCHEMA, cacheKey, promptFor, parseResult, generate, runProcess, schemaFor, lowerView, partialView, streamCodex, editPrompt, revisionPrompt, listModels, listEfforts, findCLI, cliLaunch } = require('../src/ai/engine');
+const { cleanEmphasis, panelHTML, tokenize, pseudocodeLines, mathParts, emphasisParts } = require('../src/views/reader');
 // Tests never start a real CLI: choosing the quick-job model is stubbed for the
 // extension; the real chooser is tested against a fixture Codex below.
-const realFastModel = require('./engine').fastModel;
+const realFastModel = require('../src/ai/engine').fastModel;
 // Tests never ask the real CLIs whether they are signed in; a test can set
 // testStatus[provider] to simulate a missing or signed-out AI.
-const realProviderStatus = require('./engine').providerStatus, testStatus = {};
-require('./engine').providerStatus = async provider => testStatus[provider] || { provider, installed: true, signedIn: true, ready: true, source: 'Command line', account: 'reader@example.com · pro plan', path: '/usr/local/bin/' + provider };
-require('./engine').fastModel = async provider => provider === 'claude' ? { model: 'haiku', effort: 'low' } : { model: 'fast-test', effort: 'low' };
+const realProviderStatus = require('../src/ai/engine').providerStatus, testStatus = {};
+require('../src/ai/engine').providerStatus = async provider => testStatus[provider] || { provider, installed: true, signedIn: true, ready: true, source: 'Command line', account: 'reader@example.com · pro plan', path: '/usr/local/bin/' + provider };
+require('../src/ai/engine').fastModel = async provider => provider === 'claude' ? { model: 'haiku', effort: 'low' } : { model: 'fast-test', effort: 'low' };
 const source = { uri: 'file:///example.py', name: 'example.py', language: 'python', startLine: 10, text: 'x = 1\nprint(x)' };
 const valid = { title: 'Print a number', summary: 'Sets and prints a number.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Set x to 1\nPrint x' }] };
 const statusItem = () => ({ show() { this.visible = true; }, hide() { this.visible = false; }, dispose() { this.disposed = true; } });
@@ -19,7 +21,7 @@ const statusItem = () => ({ show() { this.visible = true; }, hide() { this.visib
 test('real CodeMirror transactions keep ordinary edits free of orphan formatting markers', () => {
   const fs = require('node:fs'), path = require('node:path');
   const sandbox = { document: { documentElement: { style: {} } }, window: {} };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'editor.min.js'), 'utf8'), sandbox);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'vendor', 'editor.min.js'), 'utf8'), sandbox);
   const { EditorState } = sandbox.YamoriCodeMirror;
   const edit = (doc, changes) => EditorState.create({ doc, extensions: [EditorState.transactionFilter.of(cleanEmphasis)] }).update({ changes }).state.doc.toString();
   assert.equal(edit('**pool**.', { from: 5, to: 6 }), '**poo**.', 'deleting a letter preserves emphasis');
@@ -123,7 +125,7 @@ test('setup terminals: sign-in runs the CLI itself, installs are visible and wai
   const api = { workspace: { getConfiguration: () => ({ get: () => '' }) }, Uri: { parse: value => value },
     window: { createTerminal(options) { const t = { options, show() { t.visible = true; }, dispose() {} }; terminals.push(t); return t; } } };
   const stub = { exports: {} };
-  vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : require(id), Buffer, AbortController, setTimeout, clearTimeout, process });
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout, process });
   const { setupTerminal } = stub.exports, context = { subscriptions: [] }, native = 'C:\\Users\\A Person\\.local\\bin\\claude.exe';
   setupTerminal(context, api, 'claude', 'signIn', native, windowsFixture());
   assert.equal(terminals[0].options.shellPath, native); assert.deepEqual([...terminals[0].options.shellArgs], ['auth', 'login']); assert.equal(terminals[0].visible, true);
@@ -142,7 +144,7 @@ test('setup terminals: sign-in runs the CLI itself, installs are visible and wai
   assert.equal(context.subscriptions.length, terminals.length);
 });
 test('Claude Desktop’s own Claude Code is found, newest first, and status checks read sign-in without a model request', async () => {
-  const { readStatus, cliSource, isSetupProblem } = require('./engine');
+  const { readStatus, cliSource, isSetupProblem } = require('../src/ai/engine');
   const home = '/Users/a', base = home + '/Library/Application Support/Claude/claude-code';
   const tree = { [base]: ['2.1.9', '2.1.325', 'notes.txt'], [base + '/2.1.325']: ['485fdac4332e'], [base + '/2.1.325/485fdac4332e']: ['claude.app', '.verified'], [base + '/2.1.325/485fdac4332e/claude.app']: ['Contents'],
     [base + '/2.1.325/485fdac4332e/claude.app/Contents']: ['MacOS'], [base + '/2.1.325/485fdac4332e/claude.app/Contents/MacOS']: ['claude'], [base + '/2.1.9']: ['claude'] };
@@ -498,7 +500,7 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
       createWebviewPanel: () => ({ reveal() {}, onDidDispose: noop, webview: { postMessage: m => messages.push(structuredClone(m.state)), onDidReceiveMessage(fn) { receive = fn; return noop(); } } }) },
     env: { clipboard: { writeText: async text => { copied = text; } } }
   };
-  const engine = { ...require('./engine'), listModels: async () => [{ id: 'test-choice', label: 'Test model', effort: 'high' }], listEfforts: async () => [{ id: 'low', description: 'Quick' }, { id: 'medium', description: 'Balanced' }, { id: 'high', description: 'Deep' }], generate: async opts => {
+  const engine = { ...require('../src/ai/engine'), listModels: async () => [{ id: 'test-choice', label: 'Test model', effort: 'high' }], listEfforts: async () => [{ id: 'low', description: 'Quick' }, { id: 'medium', description: 'Balanced' }, { id: 'high', description: 'Deep' }], generate: async opts => {
     calls++;
     lastRevision = opts.revision; lastModel = opts.model; lastEffort = opts.effort;
     if (deferred) return new Promise(resolve => { deferred.resolve = resolve; deferred.progress = opts.onProgress; });
@@ -509,8 +511,8 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
   const moduleStub = { exports: {} };
   const context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (k, fallback) => state.get(k) ?? fallback, update: async (k, v) => state.set(k, v) }, secrets: { get: async () => undefined } };
   try {
-    const code = await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8');
-    vm.runInNewContext(code, { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout });
+    const code = await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8');
+    vm.runInNewContext(code, { require: id => id === 'vscode' ? vscode : id === './ai/engine' ? engine : srcRequire(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout });
     await moduleStub.exports.activate(context);
     await commands.get('yamori.read')();
     assert.equal(messages.at(-1).result.title, 'logic');
@@ -641,7 +643,7 @@ test('identity migration imports valid preferences once without overwriting newe
   const context = { globalStorageUri: { fsPath: dir }, globalState: { get: k => state.get(k), update: async (k, v) => state.set(k, v) } };
   const stub = { exports: {} };
   try {
-    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? {} : require(id) });
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? {} : srcRequire(id) });
     const file = path.join(dir, 'migration.json');
     await fs.writeFile(file, JSON.stringify({ detail: 'overview', provider: 'gemini' }));
     await stub.exports.migratePreferences(context);
@@ -711,7 +713,7 @@ test('math delimiters preserve prose and typeset subscripts, sums and fractions'
   const parts = mathParts(line);
   assert.equal(parts.map(p => p.text).join(''), line);
   assert.equal(parts.length, 3);
-  const katex = require('./katex.min');
+  const katex = require('../vendor/katex.min');
   const markup = katex.renderToString(parts[1].tex, { output: 'mathml', trust: false });
   assert.match(markup, /<msub>/); assert.match(markup, /<mfrac>/);
   assert.match(markup, /<math/);
@@ -733,9 +735,9 @@ test('custom calls use bounded workspace definitions and callable model forward 
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-context-'));
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-outside-'));
   class Uri { constructor(file) { this.fsPath = file; this.scheme = 'file'; } toString() { return 'file://' + this.fsPath; } static parse(value) { return new Uri(value.replace('file://', '')); } }
-  const code = await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8');
+  const code = await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8');
   const moduleStub = { exports: {} };
-  vm.runInNewContext(code, { require: id => id === 'vscode' ? {} : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout });
+  vm.runInNewContext(code, { require: id => id === 'vscode' ? {} : srcRequire(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout });
   const collect = moduleStub.exports.collectCallContext;
   try {
     const body = ['class Student:', '    def __init__(self):', ...Array.from({ length: 85 }, (_, i) => '        self.layer_' + i + ' = None'), '    def forward(self, inputs, times, labels):', '        return inputs * 2', '', 'def unrelated():', '    return 5'].join('\n');
@@ -878,7 +880,7 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
     const make = level => ({ title: opts.source.name + ' ' + level, summary: 'Read the file.', sections: [{ title: 'Print', startLine: 1, endLine: 2, pseudocode: opts.edit?.draft || 'Print ' + opts.source.name, lineMap: [{ pseudocodeLine: 1, startLine: 2, endLine: 2 }] }] });
     return { ...make(opts.level), requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, views: Object.fromEntries(['overview', 'logic'].slice(0, ['overview', 'logic'].indexOf(opts.level)).map(level => [level, make(level)])) };
   };
-  const engine = { ...require('./engine'), generate: async opts => {
+  const engine = { ...require('../src/ai/engine'), generate: async opts => {
     calls++;
     if (holdA && opts.source.name === 'first.py') { startA(); return new Promise(resolve => { pendingA = { resolve: () => resolve(valueFor(opts)), signal: opts.signal }; }); }
     if (holdB && opts.source.name === 'second.py') { startB(); return new Promise(resolve => { pendingB = { resolve: () => resolve(valueFor(opts)), signal: opts.signal }; }); }
@@ -886,7 +888,7 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
   } };
   const stub = { exports: {} }, context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (key, fallback) => settings.get(key) ?? fallback, update: async (key, value) => settings.set(key, value) }, secrets: {} };
   try {
-    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), Buffer, AbortController, setTimeout, clearTimeout });
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? vscode : id === './ai/engine' ? engine : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout });
     await stub.exports.activate(context);
     assert.equal(calls, 0, 'startup creates the launcher without inference');
     assert.equal(launchers[0].visible, true); assert.equal(launchers[0].text, '$(yamori-gecko) Yamori');
@@ -951,7 +953,7 @@ test('file tabs reuse one reader column and isolate generation, detail, edits, c
 });
 
 test('source alignment rebases unchanged links and identifies helper callers conservatively', () => {
-  const { analyzeSource, currentSnapshot, linePlan, dependencyBlocks } = require('./cache');
+  const { analyzeSource, currentSnapshot, linePlan, dependencyBlocks } = require('../src/storage/cache');
   const text = 'def a():\n    return 1\n\ndef b():\n    return 2\n';
   const old = { uri: 'file:///a.py', text, fullText: text, fullHash: 'old', startLine: 1, endLine: 6, selected: false };
   const value = { title: 'Two functions', summary: '', sections: [
@@ -980,12 +982,12 @@ test('source alignment rebases unchanged links and identifies helper callers con
 
 test('local cache retains every version, provenance and drafts with atomic latest pointers', async () => {
   const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
-  const { LocalCache } = require('./cache');
+  const { LocalCache } = require('../src/storage/cache');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-durable-cache-'));
   try {
     const store = new LocalCache(root), opts = { provider: 'codex', level: 'logic', model: '', effort: 'low' };
     const snapshots = Array.from({ length: 105 }, (_, index) => ({ ...source, text: 'x = ' + index + '\nprint(x)', fullHash: 'source-' + index, fullText: 'x = ' + index + '\nprint(x)', stamp: { modifiedAt: index, size: 20 } }));
-    await Promise.all(snapshots.map((snapshot, index) => store.save(snapshot, opts, valid, require('./engine').hash('version-' + index), { staleBlocks: index === 104 ? [0] : [] })));
+    await Promise.all(snapshots.map((snapshot, index) => store.save(snapshot, opts, valid, require('../src/ai/engine').hash('version-' + index), { staleBlocks: index === 104 ? [0] : [] })));
     const records = (await fs.readdir(root)).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
     assert.equal(records.length, 105, 'old explanations are not automatically pruned');
     const latest = await new LocalCache(root).latest(snapshots.at(-1), opts);
@@ -1001,7 +1003,7 @@ test('local cache retains every version, provenance and drafts with atomic lates
 test('CodeMirror text, selection and undo history survive a local JSON round trip', () => {
   const fs = require('node:fs'), path = require('node:path');
   const sandbox = { document: { documentElement: { style: {} } }, window: {} };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'editor.min.js'), 'utf8'), sandbox);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'vendor', 'editor.min.js'), 'utf8'), sandbox);
   const cm = sandbox.YamoriCodeMirror;
   const extensions = [cm.history(), cm.EditorState.transactionFilter.of(cleanEmphasis)];
   let current = cm.EditorState.create({ doc: 'Return the count.', extensions });
@@ -1015,7 +1017,7 @@ test('CodeMirror text, selection and undo history survive a local JSON round tri
 });
 
 test('source refresh prompt updates the cached explanation and treats new source as authoritative', () => {
-  const { refreshPrompt } = require('./engine');
+  const { refreshPrompt } = require('../src/ai/engine');
   const prompt = refreshPrompt(source, 'logic', { previous: valid, index: 0, staleBlocks: [0], changedRanges: [{ oldStart: 10, newStart: 10 }] });
   assert.match(prompt, /INCREMENTAL SOURCE REFRESH/); assert.match(prompt, /Current source is authoritative/);
   assert.match(prompt, /Do not rewrite neighboring blocks/); assert.ok(prompt.includes(valid.sections[0].pseudocode.replace(/\n/g, '\\n')));
@@ -1040,7 +1042,7 @@ test('disk changes, selective refresh, durable drafts and offline restarts reuse
       createFileSystemWatcher(pattern) { const watcher={pattern,onDidChange(fn){watcher.change=fn;return noop();},onDidCreate(fn){watcher.create=fn;return noop();},onDidDelete(fn){watcher.delete=fn;return noop();},dispose(){watcher.disposed=true;}};watchers.push(watcher);return watcher; } },
     window: { activeTextEditor:editor,visibleTextEditors:[editor],createStatusBarItem:statusItem,createTextEditorDecorationType:noop,onDidChangeActiveTextEditor:noop,showTextDocument:async()=>editor,showErrorMessage(message){throw new Error(message);},setStatusBarMessage(){},
       createWebviewPanel(){const panel={messages:[],reveal(){},onDidDispose(fn){panel.closed=fn;return noop();},dispose(){if(!panel.disposed){panel.disposed=true;panel.closed?.();}},webview:{postMessage(message){panel.messages.push(structuredClone(message));},onDidReceiveMessage(fn){panel.receive=fn;return noop();}}};panels.push(panel);return panel;} },env:{clipboard:{writeText:async()=>{}}} };
-  const engine = { ...require('./engine'), generate: async opts => {
+  const engine = { ...require('../src/ai/engine'), generate: async opts => {
     requests.push(opts);
     if (deferGeneration) await new Promise(resolve => { releaseGeneration = resolve; generationStarted = true; });
     const make = () => ({title:'Two ideas',summary:'Read two return values.',sections:[
@@ -1057,7 +1059,7 @@ test('disk changes, selective refresh, durable drafts and offline restarts reuse
   const state = () => panels.at(-1).messages.filter(message=>message.type==='state').at(-1).state;
   const stop = async () => { await Promise.all(context.subscriptions.splice(0).map(item=>item.dispose?.())); };
   try {
-    vm.runInNewContext(await fs.readFile(path.join(__dirname,'extension.js'),'utf8'),{module:stub,require:id=>id==='vscode'?api:id==='./engine'?engine:require(id),Buffer,AbortController,setTimeout,clearTimeout});
+    vm.runInNewContext(await fs.readFile(path.join(__dirname,'..','src','extension.js'),'utf8'),{module:stub,require:id=>id==='vscode'?api:id === './ai/engine'?engine:srcRequire(id),Buffer,AbortController,setTimeout,clearTimeout});
     await stub.exports.activate(context); await commands.get('yamori.read')();
     assert.equal(requests.length,1); assert.ok(state().cacheSavedAt); assert.ok(watchers.length);
     assert.equal(typeof state().draftScope,'string');
@@ -1131,20 +1133,20 @@ test('a batched source refresh returns only changed blocks and merges untouched 
 });
 
  test('deleted selections are not silently remapped to unrelated code', () => {
-  const { currentSnapshot } = require('./cache');
+  const { currentSnapshot } = require('../src/storage/cache');
   const previous={selected:true,startLine:1,endLine:2,text:'def gone():\n    return 1',fullText:'def gone():\n    return 1\n\ndef keep():\n    return 2'};
   assert.equal(currentSnapshot(previous,'\ndef keep():\n    return 2').selectionMappingUnknown,true);
 });
 
 test('difficulty selection validates scope and allows skipping straightforward code', () => {
-  const { parseSelection, selectionPrompt } = require('./engine');
+  const { parseSelection, selectionPrompt } = require('../src/ai/engine');
   assert.deepEqual(parseSelection('{"blocks":[]}', valid, [0]), []);
   assert.deepEqual(parseSelection('{"blocks":[{"index":0,"reason":"A non-obvious identity."}]}',valid,[0]),[0]);
   for (const blocks of [[{index:1,reason:'Outside scope'}],[{index:0,reason:'A'},{index:0,reason:'B'}],[{index:0,reason:''}]]) assert.throws(()=>parseSelection(JSON.stringify({blocks}),valid,[0]));
   assert.match(selectionPrompt('task',valid,[0]),/Short code can still have a difficult mathematical idea/);
 });
 test('two independent reviewers run concurrently and refinement keeps the lowest faithful objective', async () => {
-  const { refineExplanation, parseResult } = require('./engine');
+  const { refineExplanation, parseResult } = require('../src/ai/engine');
   let active=0, peak=0; const revised=[];
   const result=await refineExplanation({initial:{...valid,round:0},steps:2,
     evaluate:async(candidate,role)=>{active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,3));active--;return {score:candidate.round===0?6:candidate.round===1?2:0,faithful:candidate.round!==2,issues:candidate.round===1?[{problem:'Still worth checking.'}]:[]};},
@@ -1157,13 +1159,13 @@ test('two independent reviewers run concurrently and refinement keeps the lowest
   assert.deepEqual(parseResult(JSON.stringify(result),source).refinement,result.refinement,'public audit metrics survive cache parsing');
 });
 test('fidelity repairs take priority over cheap scores and unresolved errors are withheld',async()=>{
-  const { refineExplanation }=require('./engine');
+  const { refineExplanation }=require('../src/ai/engine');
   const options={initial:{...valid,fixed:false},steps:1,evaluate:async value=>({score:value.fixed?7:0,faithful:value.fixed,issues:[]}),revise:async value=>({...value,fixed:true})};
   const result=await refineExplanation(options);assert.equal(result.fixed,true);
   await assert.rejects(refineExplanation({...options,revise:async value=>value}),/unresolved fidelity/);
 });
 test('review failures retain only an already reviewed draft; cancellation stops both reviewers',async()=>{
-  const { refineExplanation }=require('./engine');
+  const { refineExplanation }=require('../src/ai/engine');
   const retained=await refineExplanation({initial:valid,steps:2,evaluate:async()=>({score:3,faithful:true,issues:[]}),revise:async()=>{throw new Error('quota reached');}});
   assert.equal(retained.sections,valid.sections);assert.match(retained.refinement.warning,/quota reached/);assert.equal(retained.refinement.stepsCompleted,0);
   const controller=new AbortController();let started=0,stopped=0;
@@ -1173,7 +1175,7 @@ test('review failures retain only an already reviewed draft; cancellation stops 
   await assert.rejects(failed,/review failed/);
 });
 test('review feedback uses valid block references and rejects invented entropy measurements',()=>{
-  const { parseReview }=require('./engine');
+  const { parseReview }=require('../src/ai/engine');
   const review={score:3,faithful:true,issues:[{section:0,view:'main',severity:'critical',problem:'Wrong computation',suggestion:'Keep the sign.'}]};
   assert.equal(parseReview(JSON.stringify(review),valid).faithful,false);
   for (const changed of [{score:NaN},{score:11},{faithful:'yes'},{issues:[{...review.issues[0],section:3}]},{issues:[{...review.issues[0],view:'unknown'}]}]) assert.throws(()=>parseReview(JSON.stringify({...review,...changed}),valid));
@@ -1246,8 +1248,8 @@ if(args[0]==='app-server'){
     const unreviewed=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'always-bad-reference',refinementSteps:1});
     assert.equal(unreviewed.refinement.status,'incomplete');assert.equal(unreviewed.refinement.faithful,undefined);assert.equal(unreviewed.sections[1].pseudocode,'Compute the count.');assert.match(unreviewed.refinement.warning,/has not passed both evaluator checks/);
     assert.equal(unreviewed.views.overview.refinement.status,'incomplete','companion views do not hide incomplete review');
-    const {LocalCache,}=require('./cache'),disk=new LocalCache(path.join(temp,'cache')),opts={provider:'codex',level:'logic',model:'always-bad-reference',effort:'low',refinementSteps:1};
-    await disk.save(input,opts,unreviewed,require('./engine').hash('incomplete-draft'));
+    const {LocalCache,}=require('../src/storage/cache'),disk=new LocalCache(path.join(temp,'cache')),opts={provider:'codex',level:'logic',model:'always-bad-reference',effort:'low',refinementSteps:1};
+    await disk.save(input,opts,unreviewed,require('../src/ai/engine').hash('incomplete-draft'));
     const restored=await disk.latest(input,opts);assert.equal(restored.value.refinement.status,'incomplete');assert.equal(restored.value.sections[1].pseudocode,unreviewed.sections[1].pseudocode);
     await fs.writeFile(log,'');
     const resumed=await generate({source:input,level:'logic',provider:'codex',cliPath:cli,model:'hard',refinementSteps:1,initialDraft:restored.value,sourceRefresh:{previous:restored.value,staleBlocks:[],changedRanges:[]}});
@@ -1261,7 +1263,7 @@ if(args[0]==='app-server'){
 });
 
 test('refinement policies have separate caches while old cached files remain readable without inference',async()=>{
-  const {LocalCache}=require('./cache'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const {LocalCache}=require('../src/storage/cache'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
   const temp=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-refinement-policy-'));
   try{
     const cache=new LocalCache(temp),opts={provider:'codex',level:'logic',effort:'low',refinementSteps:0},key=hashForTest('legacy');
@@ -1274,7 +1276,7 @@ test('refinement policies have separate caches while old cached files remain rea
     await cache.save(source,{...opts,refinementSteps:2},skipped,hashForTest('selected-none'));
     assert.equal((await cache.latest(source,{...opts,refinementSteps:2},true)).value.refinement.status,'skipped');
   }finally{await fs.rm(temp,{recursive:true,force:true});}
-  function hashForTest(value){return require('./engine').hash(value);}
+  function hashForTest(value){return require('../src/ai/engine').hash(value);}
 });
 
 test('Restricted Mode ignores workspace executable paths and cost settings',()=>{
@@ -1285,7 +1287,7 @@ test('Restricted Mode ignores workspace executable paths and cost settings',()=>
   api.workspace.getConfiguration=()=>({get:config.get,inspect:()=>({workspaceValue:'/project/evil-cli'})});
   assert.equal(setting(api,'codexPath'),'','workspace-only CLI settings are ignored');
   api.workspace.isTrusted=true;assert.equal(setting(api,'codexPath'),'/project/evil-cli','normal VS Code settings remain available in trusted folders');
-  function extensionForTest(){const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:require(id),Buffer,AbortController,setTimeout,clearTimeout});return module.exports;}
+  function extensionForTest(){const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'..','src','extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:srcRequire(id),Buffer,AbortController,setTimeout,clearTimeout});return module.exports;}
 });
 test('Restricted Mode does not invoke project definition providers or reuse their cached definitions',async()=>{
   const api={workspace:{isTrusted:false},commands:{executeCommand(){throw new Error('Must not invoke project tooling');}}};
@@ -1293,11 +1295,11 @@ test('Restricted Mode does not invoke project definition providers or reuse thei
   const result=await requireExtension().collectCallContext(snapshot,api);
   assert.equal(result.text,snapshot.text);assert.deepEqual(Array.from(result.callContext.definitions),[]);assert.match(result.callContext.note,/Restricted Mode/);
   await assert.rejects(findCLI('codex','./project/cli',{platform:'darwin',env:{PATH:'.:node_modules/.bin'},home:'/user',fs:{stat:async()=>({isFile:()=>true}),access:async()=>{}}}),/absolute path/);
-  function requireExtension(){const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:require(id),Buffer,AbortController,setTimeout,clearTimeout});return module.exports;}
+  function requireExtension(){const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'..','src','extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:srcRequire(id),Buffer,AbortController,setTimeout,clearTimeout});return module.exports;}
 });
 
 test('first use chooses an installed provider without overwriting an explicit preference',async()=>{
-  const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:require(id),Buffer,AbortController,setTimeout,clearTimeout});
+  const module={exports:{}};vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'..','src','extension.js'),'utf8'),{module,require:id=>id==='vscode'?{}:srcRequire(id),Buffer,AbortController,setTimeout,clearTimeout});
   const {chooseInstalledProvider}=module.exports;const values=new Map(),context={globalState:{get:key=>values.get(key),update:async(key,value)=>values.set(key,value)}};
   const api={workspace:{isTrusted:false,getConfiguration:()=>({get:()=>'/project/evil',inspect:()=>undefined})}};
   const calls=[];await chooseInstalledProvider(context,api,async(owner,configured)=>{calls.push(owner);assert.equal(configured,'');if(owner==='codex')throw new Error('not installed');return '/user/claude';});
@@ -1306,24 +1308,24 @@ test('first use chooses an installed provider without overwriting an explicit pr
 });
 
 test('satisfied reviewers skip redundant writer and re-review calls',async()=>{
-  const {refineExplanation}=require('./engine');let reviews=0,revisions=0;
+  const {refineExplanation}=require('../src/ai/engine');let reviews=0,revisions=0;
   const result=await refineExplanation({initial:valid,steps:5,evaluate:async()=>{reviews++;return {score:1,faithful:true,issues:[]};},revise:async()=>{revisions++;throw new Error('Must not revise an already clear candidate');}});
   assert.equal(reviews,2);assert.equal(revisions,0);assert.equal(result.refinement.stepsCompleted,0);assert.equal(result.refinement.stepsRequested,5);
 });
 test('refinement stops after a plateau instead of spending every remaining pass',async()=>{
-  const {refineExplanation}=require('./engine');let reviews=0,revisions=0;
+  const {refineExplanation}=require('../src/ai/engine');let reviews=0,revisions=0;
   const result=await refineExplanation({initial:valid,steps:5,evaluate:async()=>{reviews++;return {score:5,faithful:true,issues:[]};},revise:async candidate=>{revisions++;return candidate;}});
   assert.equal(reviews,4);assert.equal(revisions,1);assert.equal(result.refinement.stepsCompleted,1);assert.equal(result.refinement.acceptedStep,0);
 });
 test('compact refinement context retains source numbering, user intent and definition uncertainty',()=>{
-  const {refinementContext}=require('./engine');
+  const {refinementContext}=require('../src/ai/engine');
   const context=refinementContext(source,'logic',{edit:{instruction:'Propose doubling it',draft:'Return twice the value.',section:valid.sections[0]}});
   assert.match(context,/10: x = 1\n11: print\(x\)/);assert.match(context,/Propose doubling it/);assert.match(context,/source is unchanged/);assert.match(context,/untrusted data/);assert.match(context,/unknown custom behavior/);
   assert.ok(context.length<promptFor(source,'logic').length/2,'the evaluator context excludes the long writing guide and illustrative examples');
 });
 
 test('review schemas expose only available targets and normalize only a known detail alias',()=>{
-  const {reviewSchema,parseReview}=require('./engine'),schema=reviewSchema(valid),item=schema.properties.issues.items;
+  const {reviewSchema,parseReview}=require('../src/ai/engine'),schema=reviewSchema(valid),item=schema.properties.issues.items;
   assert.deepEqual(item.properties.view.enum,['main']);assert.deepEqual(item.properties.section.enum,[-1,0]);assert.equal(item.properties.problem.maxLength,2000);
   const feedback={score:3,faithful:true,issues:[{view:'logic',section:0,severity:'critical',problem:'Wrong behavior.',suggestion:'Fix it.'}]};
   const parsed=parseReview(JSON.stringify(feedback),valid,{level:'logic'});assert.equal(parsed.issues[0].view,'main');assert.equal(parsed.faithful,false,'normalizing an alias never clears a critical fidelity objection');
@@ -1331,17 +1333,17 @@ test('review schemas expose only available targets and normalize only a known de
   assert.throws(()=>parseReview(JSON.stringify({...feedback,issues:[null]}),valid),error=>error.code==='YAMORI_REVIEW_FORMAT');
 });
 test('a failed repair after a known fidelity rejection retains the hard fidelity error',async()=>{
-  const {refineExplanation}=require('./engine');
+  const {refineExplanation}=require('../src/ai/engine');
   await assert.rejects(refineExplanation({initial:valid,steps:1,evaluate:async()=>({score:6,faithful:false,issues:[]}),revise:async()=>{throw new Error('Bad revision references');}}),error=>error.code==='YAMORI_FIDELITY');
 });
 
 test('a malformed sibling review cannot hide an already reported fidelity failure',async()=>{
-  const {refineExplanation}=require('./engine');
+  const {refineExplanation}=require('../src/ai/engine');
   await assert.rejects(refineExplanation({initial:valid,steps:1,evaluate:async(candidate,role)=>{if(role==='entropy')return {score:8,faithful:false,issues:[]};throw new Error('Malformed feedback references');},revise:async()=>valid}),error=>error.code==='YAMORI_FIDELITY');
 });
 
 test('Ajv validators reject wrong types without coercion, defaults or mutation',()=>{
-  const validators=require('./validation.min');
+  const validators=require('../src/ai/validation.min');
   const wrong={score:'2',faithful:'false',issues:[],extra:'keep me'};
   const before=structuredClone(wrong);assert.equal(validators.review(wrong),false);assert.deepEqual(wrong,before);
   assert.equal(validators.review({score:2,issues:[]}),false,'missing fidelity is never defaulted to approval');
@@ -1350,7 +1352,7 @@ test('Ajv validators reject wrong types without coercion, defaults or mutation',
   assert.equal(validators.review({score:2,faithful:true,issues:[]}),true);
 });
 test('Ajv response errors include field paths while reference checks remain contextual',()=>{
-  const {parseReview,parseSelection}=require('./engine');
+  const {parseReview,parseSelection}=require('../src/ai/engine');
   assert.throws(()=>parseReview('{"score":"2","faithful":true,"issues":[]}',valid),error=>error.code==='YAMORI_REVIEW_FORMAT'&&error.validation.path==='/score'&&error.validation.keyword==='type');
   assert.throws(()=>parseReview('{"score":2,"faithful":true,"issues":[{"section":0,"view":"main","severity":"major","problem":22,"suggestion":"Define it."}]}',valid),error=>error.validation.path==='/issues/0/problem');
   assert.throws(()=>parseSelection('{"blocks":[{"index":"0","reason":"A derivation."}]}',valid,[0]),error=>error.validation.path==='/blocks/0/index');
@@ -1362,7 +1364,7 @@ test('packaged validators work with no Ajv installation, schema compilation or d
   const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-validator-runtime-'));
   try{
-    await Promise.all(['engine.js','schemas.js','validation.min.js'].map(file=>fs.copyFile(path.join(__dirname,file),path.join(root,file))));
+    await Promise.all(['engine.js','schemas.js','validation.min.js'].map(file=>fs.copyFile(path.join(__dirname,'..','src','ai',file),path.join(root,file))));
     const script=`const Module=require('node:module'),load=Module._load;Module._load=function(id,...args){if(id==='ajv'||id.startsWith('ajv/')||id==='esbuild')throw new Error('Build-only dependency loaded at runtime');return load.call(this,id,...args);};global.Function=function(){throw new Error('Runtime schema compilation is forbidden');};const {parseResult}=require('./engine');const source=${JSON.stringify(source)},value=${JSON.stringify(valid)};if(parseResult(JSON.stringify(value),source).title!==value.title)process.exit(2);process.stdout.write('Standalone validation works');`;
     const output=await runProcess(process.execPath,['-e',script],'',{cwd:root});assert.equal(output,'Standalone validation works');
   }finally{await fs.rm(root,{recursive:true,force:true});}
@@ -1384,12 +1386,12 @@ test('a refined view derived from another level does not invalidate that level a
       createWebviewPanel:()=>({reveal(){},onDidDispose:noop,webview:{postMessage(){},onDidReceiveMessage(fn){receive=fn;return noop();}}})},
     env:{clipboard:{writeText:async()=>{}}}};
   // Every refinement is accepted, so each generation returns a reviewed draft without companion views.
-  const engine={...require('./engine'),generate:async opts=>{generated.push(opts.level+(opts.revision?'<'+opts.revision.level:''));
+  const engine={...require('../src/ai/engine'),generate:async opts=>{generated.push(opts.level+(opts.revision?'<'+opts.revision.level:''));
     return{title:opts.level,summary:'s',sections:[{title:'Block',startLine:1,endLine:2,pseudocode:opts.level+' text',lineMap:[]}],requestedModel:opts.model,requestedEffort:opts.effort,effort:opts.effort,
       refinement:{version:1,stepsRequested:2,stepsCompleted:1,acceptedStep:1,lambda:0.5,initialObjective:6,finalObjective:2,entropy:1,readCost:2,faithful:true,history:[],selectedBlocks:[0],status:'reviewed'}};}};
   const moduleStub={exports:{}},context={subscriptions:[],globalStorageUri:{fsPath:temp},globalState:{get:(k,f)=>state.get(k)??f,update:async(k,v)=>state.set(k,v)},secrets:{}};
   try{
-    vm.runInNewContext(await fs.readFile(path.join(__dirname,'extension.js'),'utf8'),{require:id=>id==='vscode'?vscode:id==='./engine'?engine:require(id),module:moduleStub,Buffer,AbortController,setTimeout,clearTimeout});
+    vm.runInNewContext(await fs.readFile(path.join(__dirname,'..','src','extension.js'),'utf8'),{require:id=>id==='vscode'?vscode:id === './ai/engine'?engine:srcRequire(id),module:moduleStub,Buffer,AbortController,setTimeout,clearTimeout});
     await moduleStub.exports.activate(context);await commands.get('yamori.read')();
     for(const level of ['overview','logic','overview','logic'])await receive({type:'level',level});
     assert.deepEqual(generated,['logic','overview<logic'],'returning to a refined level uses its cached result');
@@ -1397,7 +1399,7 @@ test('a refined view derived from another level does not invalidate that level a
 });
 
 // ---- Project map ---------------------------------------------------------------
-const projectMap = require('./project');
+const projectMap = require('../src/project/graph');
 // A page's own script (the guide also embeds KaTeX in a script before it).
 const pageScript = html => [...html.matchAll(/<script nonce="[^"]+">([\s\S]*?)<\/script>/g)].map(match => match[1]).find(text => text.includes('acquireVsCodeApi'));
 const videoProject = {
@@ -1517,12 +1519,12 @@ test('project context gives explanations bounded roles and terms without changin
   assert.match(promptFor(base, 'logic'), /Define every ID, label, section name, constant or naming scheme at its first use/);
   assert.doesNotMatch(promptFor(base, 'logic'), /PROJECT CONTEXT \(JSON/, 'no project block without a map');
   assert.match(editPrompt({ ...base, projectContext: slice }, 'logic', { section: valid.sections[0], draft: 'x', instruction: '' }), /PROJECT CONTEXT/);
-  assert.match(require('./engine').refinementContext({ ...base, projectContext: slice }, 'logic'), /PROJECT CONTEXT/);
+  assert.match(require('../src/ai/engine').refinementContext({ ...base, projectContext: slice }, 'logic'), /PROJECT CONTEXT/);
   assert.doesNotMatch(prompt, /"fingerprint"/);
 });
 
 test('AI project notes are batched within budget and validated against the batch and file lines', () => {
-  const { notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary } = require('./engine');
+  const { notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary } = require('../src/ai/engine');
   const items = Array.from({ length: 30 }, (_, i) => ({ rel: 'f' + i + '.py', text: 'x = 1\n'.repeat(i === 3 ? 4000 : 20), record: { defs: [{ name: 'f', kind: 'function', line: 2 }], imports: [] }, language: 'python', hash: 'h' + i }));
   const batches = projectMap.noteBatches(items);
   assert.ok(batches.every(batch => batch.length <= 12 && batch.reduce((sum, item) => sum + item.body.length + 400, 0) <= 40000 + 16000));
@@ -1559,7 +1561,7 @@ function fakeDocument(ids, extra = {}) {
 }
 
 test('project guide lists folder reading steps and a folder-box map; drag, fold, click and double-click send safe messages', async () => {
-  const { mapHTML, edgePath, fitTransform, byFolder } = require('./map');
+  const { mapHTML, edgePath, fitTransform, byFolder } = require('../src/views/guide');
   const html = mapHTML('paper');
   assert.doesNotMatch(html, /innerHTML|insertAdjacentHTML|outerHTML|eval\(/);
   assert.match(html, /script-src 'nonce-/);
@@ -1678,11 +1680,11 @@ test('opening the project map scans locally, AI notes use the estimated requests
       showWarningMessage: async (message) => { shown.push(message); return 'Add notes'; }, showTextDocument: async (doc, options) => { shown.push(['open', doc.uri.fsPath, options?.selection?.start.line]); return { document: doc, setDecorations() {}, revealRange() {} }; },
       createWebviewPanel: type => { const panel = { type, messages: [], reveal() {}, onDidDispose: noop, onDidChangeViewState: noop, webview: { postMessage: m => panel.messages.push(m), onDidReceiveMessage(fn) { panel.receive = fn; return noop(); } } }; panels.push(panel); return panel; } },
     env: { clipboard: { writeText: async () => {} } } };
-  const engine = { ...require('./engine'),
+  const engine = { ...require('../src/ai/engine'),
     requestStructured: async ({ prompt, schema }) => {
       sentPrompts.push(prompt);
-      requests.push(schema === require('./engine').NOTES_SCHEMA ? 'notes' : 'summary');
-      if (schema === require('./engine').NOTES_SCHEMA) {
+      requests.push(schema === require('../src/ai/engine').NOTES_SCHEMA ? 'notes' : 'summary');
+      if (schema === require('../src/ai/engine').NOTES_SCHEMA) {
         const files = [...prompt.matchAll(/FILE "([^"]+)" \(numbered/g)].map(match => match[1]);
         return { raw: JSON.stringify({ files: files.map(file => ({ file, purpose: 'Purpose of ' + file, role: 'stage', terms: file === 'pipeline/plan.py' ? [{ term: 'L1', aliases: ['L2'], meaning: 'The first loop: opened by the hook, answered in the ending.', line: 5 }] : [] })) }) };
       }
@@ -1692,7 +1694,7 @@ test('opening the project map scans locally, AI notes use the estimated requests
   const moduleStub = { exports: {} }, context = { subscriptions: [], globalStorageUri: { fsPath: storage }, globalState: { get: (k, fallback) => state.get(k) ?? fallback, update: async (k, v) => state.set(k, v) }, secrets: {} };
   state.set('provider', 'codex'); state.set('launcherHintShown', true);
   try {
-    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './ai/engine' ? engine : srcRequire(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: require('node:path').join(__dirname, '..', 'src') });
     await moduleStub.exports.activate(context);
     await commands.get('yamori.map')(new Uri(root));
     assert.equal(panels.filter(panel => panel.type === 'yamoriMap').length, 1);
@@ -1736,10 +1738,10 @@ test('opening the project map scans locally, AI notes use the estimated requests
     assert.ok(generated[0].glossary.some(term => term.term === 'L1' && /opened by the hook/.test(term.meaning)));
     assert.ok(usedTools[0]?.args[0].endsWith('mcp.js') && usedTools[0].args.includes('--root') && usedTools[0].env.ELECTRON_RUN_AS_NODE === '1', 'a mapped file gets Yamori lookups');
     await new Promise(resolve => setTimeout(resolve, 20));
-    const index = JSON.parse(await fs.readFile(path.join(storage, 'cache', 'projects', require('./engine').hash('file://' + root).slice(0, 32), 'explanations.json'), 'utf8'));
+    const index = JSON.parse(await fs.readFile(path.join(storage, 'cache', 'projects', require('../src/ai/engine').hash('file://' + root).slice(0, 32), 'explanations.json'), 'utf8'));
     assert.deepEqual(Object.keys(index), ['pipeline/plan.py']); assert.equal(index['pipeline/plan.py'].logic.title, 'Plan');
     assert.ok(last().guide.steps.find(step => step.id === 'pipeline/plan.py').explained, 'explained files are marked in the guide');
-    const server = require('./mcp').createServer({ store: path.dirname(path.join(storage, 'cache', 'projects', require('./engine').hash('file://' + root).slice(0, 32), 'x')), root });
+    const server = require('../src/project/mcp').createServer({ store: path.dirname(path.join(storage, 'cache', 'projects', require('../src/ai/engine').hash('file://' + root).slice(0, 32), 'x')), root });
     assert.match(server.call('get_explanation', { path: 'pipeline/plan.py' }).content[0].text, /"title": "Plan"/, 'the agent can read Yamori explanations of other files');
     const reader = panels.find(panel => panel.type === 'yamori'), readerState = reader.messages.filter(m => m.type === 'state').at(-1).state;
     assert.equal(readerState.glossary.find(term => term.term === 'L1').defined, 'pipeline/plan.py:5');
@@ -1781,7 +1783,7 @@ test('Yamori MCP server answers over stdio with read-only lookups limited to map
       call(8, 'read_source', { path: '../outside/secret.py' }), call(9, 'read_source', { path: 'leak.py' }), call(10, 'read_source', { path: 'big.py', start_line: 1, end_line: 900 }),
       call(11, 'project_overview', {}), call(12, 'list_files', { folder: 'pipeline' }), { jsonrpc: '2.0', id: 13, method: 'resources/list' }
     ].map(message => JSON.stringify(message)).join('\n') + '\n';
-    const output = await runProcess(process.execPath, [path.join(__dirname, 'mcp.js'), '--store', fixture.store, '--root', fixture.root, '--log', log], input);
+    const output = await runProcess(process.execPath, [path.join(__dirname, '..', 'src', 'project', 'mcp.js'), '--store', fixture.store, '--root', fixture.root, '--log', log], input);
     const replies = new Map(output.trim().split('\n').map(line => JSON.parse(line)).map(reply => [reply.id, reply]));
     assert.equal(replies.size, 13, 'notifications get no reply');
     assert.equal(replies.get(1).result.protocolVersion, '2025-11-25'); assert.equal(replies.get(1).result.serverInfo.name, 'yamori');
@@ -1804,7 +1806,7 @@ test('Yamori MCP server answers over stdio with read-only lookups limited to map
 
 test('agent lookups reach Claude only through Yamori\'s MCP server, show in the activity trail and fall back without tools', async () => {
   const fs = require('node:fs/promises'), path = require('node:path');
-  const fixture = await mappedFixture(), tools = { command: process.execPath, args: [path.join(__dirname, 'mcp.js'), '--store', fixture.store, '--root', fixture.root], env: { ELECTRON_RUN_AS_NODE: '1' } };
+  const fixture = await mappedFixture(), tools = { command: process.execPath, args: [path.join(__dirname, '..', 'src', 'project', 'mcp.js'), '--store', fixture.store, '--root', fixture.root], env: { ELECTRON_RUN_AS_NODE: '1' } };
   const record = path.join(fixture.temp, 'args.json'), answer = JSON.stringify({ type: 'result', structured_output: { ...valid, views: { overview: valid } } });
   try {
     const binary = path.join(fixture.temp, 'claude.js');
@@ -1840,7 +1842,7 @@ process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(${JSON.st
 
 test('Codex tool runs load only Yamori\'s server and approve only its requests', async () => {
   const fs = require('node:fs/promises'), path = require('node:path');
-  const fixture = await mappedFixture(), tools = { command: process.execPath, args: [path.join(__dirname, 'mcp.js'), '--store', fixture.store, '--root', fixture.root], env: { ELECTRON_RUN_AS_NODE: '1' } };
+  const fixture = await mappedFixture(), tools = { command: process.execPath, args: [path.join(__dirname, '..', 'src', 'project', 'mcp.js'), '--store', fixture.store, '--root', fixture.root], env: { ELECTRON_RUN_AS_NODE: '1' } };
   const record = path.join(fixture.temp, 'codex.json'), binary = path.join(fixture.temp, 'codex');
   await fs.writeFile(binary, `#!${process.execPath}
 const fs=require('fs'),out=e=>process.stdout.write(JSON.stringify(e)+'\\n'),seen={launch:process.argv.slice(2),responses:{}};
@@ -1929,10 +1931,10 @@ test('Switch file groups project files by folder, lists open tabs first, and an 
       showQuickPick: async items => { picked = await items; return picked.find(item => item.label === 'write.py'); },
       createWebviewPanel: () => ({ reveal() {}, onDidDispose: noop, onDidChangeViewState: noop, webview: { postMessage() {}, onDidReceiveMessage: noop } }) },
     env: { clipboard: { writeText: async () => {} } } };
-  const engine = { ...require('./engine'), generate: async opts => { levels.push(opts.level); return { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 1 }], views: { overview: { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 1 }] } } }; } };
+  const engine = { ...require('../src/ai/engine'), generate: async opts => { levels.push(opts.level); return { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 1 }], views: { overview: { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 1 }] } } }; } };
   const moduleStub = { exports: {} }, context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (k, f) => state.get(k) ?? f, update: async (k, v) => state.set(k, v) }, secrets: {} };
   try {
-    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './ai/engine' ? engine : srcRequire(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: require('node:path').join(__dirname, '..', 'src') });
     await moduleStub.exports.activate(context);
     await commands.get('yamori.switchFile')();
     assert.deepEqual(JSON.parse(JSON.stringify(picked.map(item => item.kind === -1 ? '[' + item.label + ']' : item.label))), ['[models/]', 'script.py', '[pipeline/]', 'plan.py', 'write.py', '[Project root]', 'main.py']);
@@ -2004,7 +2006,7 @@ process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(JSON.stri
 });
 
 test('the reader shows who is writing and each stage live, then a finished summary; Claude defaults to medium effort', async () => {
-  const { connectionOptions } = (() => { const stub = { exports: {} }; vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? { workspace: { getConfiguration: () => ({ get: (_, f) => f }) } } : require(id), process, __dirname }); return stub.exports; })();
+  const { connectionOptions } = (() => { const stub = { exports: {} }; vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? { workspace: { getConfiguration: () => ({ get: (_, f) => f }) } } : srcRequire(id), process, __dirname: require('node:path').join(__dirname, '..', 'src') }); return stub.exports; })();
   const state = new Map(), globalState = { get: (k, f) => state.get(k) ?? f };
   const vscodeStub = { workspace: { isTrusted: true, getConfiguration: () => ({ get: (_, f) => f }) } };
   assert.equal(connectionOptions(globalState, 'claude', vscodeStub).effort, 'low', 'Claude writes at low effort unless told otherwise');
@@ -2043,11 +2045,11 @@ test('the reader tracks a run through every stage and marks it stopped when the 
     window: { createStatusBarItem: statusItem, activeTextEditor: editor, visibleTextEditors: [editor], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showTextDocument: async () => editor, showErrorMessage(m) { throw new Error(m); }, setStatusBarMessage() {},
       createWebviewPanel: () => ({ reveal() {}, onDidDispose: noop, webview: { postMessage: m => m.type === 'state' && states.push(JSON.parse(JSON.stringify(m.state))), onDidReceiveMessage(fn) { receive = fn; return noop(); } } }) },
     env: { clipboard: { writeText: async () => {} } } };
-  const engine = { ...require('./engine'), generate: opts => new Promise((resolve, reject) => { progress = opts.onProgress; release = () => resolve({ ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 2 }], views: { overview: { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 2 }] } } }); opts.signal.addEventListener('abort', () => reject(new Error('Cancelled.'))); }) };
+  const engine = { ...require('../src/ai/engine'), generate: opts => new Promise((resolve, reject) => { progress = opts.onProgress; release = () => resolve({ ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 2 }], views: { overview: { ...valid, sections: [{ ...valid.sections[0], startLine: 1, endLine: 2 }] } } }); opts.signal.addEventListener('abort', () => reject(new Error('Cancelled.'))); }) };
   const state = new Map([['provider', 'claude'], ['launcherHintShown', true]]), moduleStub = { exports: {} };
   const context = { subscriptions: [], globalStorageUri: { fsPath: temp }, globalState: { get: (k, f) => state.get(k) ?? f, update: async (k, v) => state.set(k, v) }, secrets: {} };
   try {
-    vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './ai/engine' ? engine : srcRequire(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: require('node:path').join(__dirname, '..', 'src') });
     await moduleStub.exports.activate(context);
     const reading = commands.get('yamori.read')();
     while (!progress) await new Promise(resolve => setTimeout(resolve, 1));
@@ -2124,7 +2126,7 @@ async function readerHarness(settings = {}, options = {}) {
       createWebviewPanel: type => { const panel = { type, messages: [], reveal() {}, onDidDispose: noop, onDidChangeViewState: noop, webview: { postMessage: m => panel.messages.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage(fn) { panel.receive = fn; return noop(); } } }; harness.panels.push(panel); return panel; } },
     env: { clipboard: { writeText: async () => {} } } };
   harness.vscode = vscode;
-  const real = require('./engine');
+  const real = require('../src/ai/engine');
   harness.models = []; harness.inFlight = 0; harness.peak = 0;
   const engine = { ...real, requestStructured: async ({ prompt, schema, model }) => {
     const kind = schema === real.NOTES_SCHEMA ? 'notes' : schema === real.MAP_SUMMARY_SCHEMA ? 'summary' : 'other';
@@ -2144,7 +2146,7 @@ async function readerHarness(settings = {}, options = {}) {
   }, ...(options.engine ? options.engine(harness) : {}) };
   const state = new Map([['provider', 'codex'], ['launcherHintShown', true]]), moduleStub = { exports: {} };
   harness.context = { subscriptions: [], globalStorageUri: { fsPath: storage }, globalState: { get: (k, f) => state.get(k) ?? f, update: async (k, v) => state.set(k, v) }, secrets: {} };
-  vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './ai/engine' ? engine : srcRequire(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: require('node:path').join(__dirname, '..', 'src') });
   await moduleStub.exports.activate(harness.context);
   harness.exports = moduleStub.exports;
   await harness.commands.get('yamori.map')(new Uri(root));
@@ -2440,7 +2442,7 @@ test('the Python runner records a function\'s real inputs, steps and output unde
     const run = async (testName, fn, line, end) => {
       const request = path.join(root, 'request.json'), output = path.join(root, 'result.json');
       await fs.writeFile(request, JSON.stringify({ root, testFile: path.join(root, 'tests', 'test_work.py'), testName, target: { file: path.join(root, 'pkg', 'work.py'), function: fn, line, end } }));
-      await runProcess('python3', [path.join(__dirname, 'runner', 'trace.py'), request, output], '', { cwd: root, timeout: 30000 });
+      await runProcess('python3', [path.join(__dirname, '..', 'src', 'runner', 'trace.py'), request, output], '', { cwd: root, timeout: 30000 });
       return JSON.parse(await fs.readFile(output, 'utf8'));
     };
     const ok = await run('test_total', 'total', 1, 5);
@@ -2567,7 +2569,7 @@ test('a sign-in started in Setup continues by itself once it works, and coming b
     window: { createTerminal(options) { const t = { options, show() {}, dispose() {} }; terminals.push(t); return t; }, onDidCloseTerminal(fn) { closeTerminal = fn; return { dispose() {} }; }, onDidChangeWindowState(fn) { focusWindow = fn; return { dispose() {} }; },
       createWebviewPanel(type) { const panel = { type, messages: [], reveal() {}, dispose() { panel.disposed = true; panel.closed?.(); }, onDidDispose(fn) { panel.closed = fn; }, webview: { postMessage: m => panel.messages.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage(fn) { panel.receive = fn; } } }; panels.push(panel); return panel; } } };
   const stub = { exports: {} };
-  vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : require(id), Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: require('node:path').join(__dirname, '..', 'src') });
   const values = new Map(), context = { subscriptions: [], globalState: { get: (k, f) => values.get(k) ?? f, update: async (k, v) => values.set(k, v) } };
   const statuses = { claude: { installed: false, signedIn: false, ready: false, problem: 'Not installed' }, codex: { installed: true, signedIn: false, ready: false, problem: 'Not signed in', path: '/usr/local/bin/codex' } };
   let checks = 0, opened = 0;
@@ -2659,7 +2661,7 @@ finish({title:k===1?'Whole file':'Part '+k,summary:k===1?'Explains the file.':'p
     assert.deepEqual(JSON.parse(JSON.stringify(draft.refinement)), { version: 1, status: 'pending', stepsRequested: 1, stepsCompleted: 0, selectedBlocks: [] });
     assert.ok(!(await read()).some(call => call.kind === 'select' || call.kind === 'review'), 'no review before the draft is returned');
     assert.equal(parseResult(JSON.stringify(draft), input).refinement.status, 'pending', 'a cached draft keeps its pending review');
-    const { reviewDraft } = require('./engine');
+    const { reviewDraft } = require('../src/ai/engine');
     const reviewed = await reviewDraft({ initial: draft, source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, review: { model: 'sonnet', effort: 'low' }, steps: 1 });
     const reviews = (await read()).filter(call => call.kind === 'review');
     assert.equal(reviews.length, 2); assert.ok(reviews.every(call => call.model === 'sonnet'), 'reviewers use the cheaper review model');
@@ -2673,7 +2675,7 @@ finish({title:k===1?'Whole file':'Part '+k,summary:k===1?'Explains the file.':'p
 });
 
 test('reviews use one tier below the writer, never above it', async () => {
-  const { reviewModel } = require('./engine');
+  const { reviewModel } = require('../src/ai/engine');
   const plain = value => value && JSON.parse(JSON.stringify(value));
   assert.deepEqual(plain(await reviewModel('claude', '', '')), { model: 'sonnet', effort: 'low' }, 'under Claude\'s default (Opus)');
   assert.deepEqual(plain(await reviewModel('claude', '', 'opus')), { model: 'sonnet', effort: 'low' });
@@ -2768,7 +2770,7 @@ out({title:'File',summary:'Explains.',sections:[{title:'Part '+p[1],startLine:+p
     const draft = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, parts, parallel: 2, refinementSteps: 1, background: true });
     assert.ok(Date.now() - started < 4000, 'the draft did not wait 15 s for the Overview (' + (Date.now() - started) + ' ms)');
     assert.equal(draft.views, undefined, 'a late Overview is written when that level is opened');
-    const { reviewDraft } = require('./engine');
+    const { reviewDraft } = require('../src/ai/engine');
     const reviewed = await reviewDraft({ initial: draft, source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, review: { model: 'sonnet', effort: 'low' }, steps: 1 });
     assert.equal(reviewed.refinement.acceptedStep, 1, 'the rewrite is kept');
     assert.equal(reviewed.sections[0].pseudocode, 'Reviewed text\n\nCount the items'); assert.equal(reviewed.sections[1].pseudocode, 'Draft 2');
@@ -2780,7 +2782,7 @@ test('guide search: a visible header box highlights every file that mentions a n
   const path = require('node:path');
   const flows = [];
   const engine = h => ({ requestStructured: async ({ prompt, schema, model }) => {
-    const real = require('./engine');
+    const real = require('../src/ai/engine');
     if (schema !== real.FLOW_SCHEMA) return { raw: JSON.stringify({ files: [] }) };
     flows.push(prompt);
     return { raw: JSON.stringify({ summary: 'plan_loops builds the loops; main.py calls it.', sections: [
@@ -2790,7 +2792,7 @@ test('guide search: a visible header box highlights every file that mentions a n
   } });
   const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine });
   try {
-    const html = require('./map').mapHTML();
+    const html = require('../src/views/guide').mapHTML();
     assert.match(html, /<form class="search" id="search-form" role="search"><input id="search" type="search" placeholder="Search a name: variable, function, term…"/, 'the search box sits in the header, always visible');
     await h.guide.receive({ type: 'search', query: 'plan_loops' });
     const found = h.guideState().search;
@@ -2822,7 +2824,7 @@ test('guide search: a visible header box highlights every file that mentions a n
   const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = []; let receive;
-  vm.runInNewContext(pageScript(require('./map').mapHTML()), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON, setTimeout, clearTimeout });
+  vm.runInNewContext(pageScript(require('../src/views/guide').mapHTML()), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON, setTimeout, clearTimeout });
   const { graph } = await scanFixture(videoProject);
   const map = projectMap.layoutGrouped(graph, { collapsed: [] });
   const search = { query: 'plan_loops', identifier: true, total: 3, more: 0, hits: [{ file: 'pipeline/plan.py', count: 2, defines: true, test: false, matches: [{ line: 1, text: 'def plan_loops(blocks):' }] }, { file: 'main.py', count: 1, defines: false, test: false, matches: [{ line: 2, text: 'plan_loops(x)' }] }] };

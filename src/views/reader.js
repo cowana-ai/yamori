@@ -240,8 +240,8 @@ function panelHTML(initialPalette = 'auto') {
   const logo = LOGO;
   const nonce = randomBytes(18).toString('base64');
   const palette = ['paper', 'slate'].includes(initialPalette) ? initialPalette : 'auto';
-  const editorLibrary = require('node:fs').readFileSync(require('node:path').join(__dirname, 'editor.min.js'), 'utf8');
-  const mathLibrary = require('node:fs').readFileSync(require('node:path').join(__dirname, 'katex.min.js'), 'utf8');
+  const editorLibrary = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'vendor', 'editor.min.js'), 'utf8');
+  const mathLibrary = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'vendor', 'katex.min.js'), 'utf8');
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">

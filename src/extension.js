@@ -3,12 +3,12 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { flowPrompt, parseFlow, FLOW_SCHEMA, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./engine');
-const { panelHTML } = require('./panel');
-const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks } = require('./cache');
-const { mapHTML } = require('./map');
-const { setupHTML } = require('./setup');
-const project = require('./project');
+const { flowPrompt, parseFlow, FLOW_SCHEMA, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./ai/engine');
+const { panelHTML } = require('./views/reader');
+const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks } = require('./storage/cache');
+const { mapHTML } = require('./views/guide');
+const { setupHTML } = require('./views/setup');
+const project = require('./project/graph');
 
 const INCLUDE = '**/*.{py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,h,hpp,rb,php,swift,dart,r,R,sh,bash,lua,pl,sql,vue,svelte}';
 const EXCLUDE = '**/{node_modules,.git,.venv,venv,env,dist,build,out,vendor,.next,coverage,__pycache__}/**';
@@ -434,7 +434,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   function ensurePanel(entry) {
     if (entry.panel) { entry.panel.reveal(entry.panel.viewColumn); return; }
     const panel = api.window.createWebviewPanel('yamoriMap', 'Project map · ' + path.basename(entry.root.fsPath), { viewColumn: api.ViewColumn.Active ?? api.ViewColumn.One, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
-    if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'yamori.png');
+    if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'media', 'yamori.png');
     panel.webview.html = mapHTML(context.globalState.get('readingPalette', 'auto'));
     entry.panel = panel; watch(entry);
     panel.onDidDispose(() => { entry.panel = undefined; unwatch(entry); entry.notesController?.abort(); entry.flowController?.abort(); entry.search = undefined; entry.flow = undefined; });
@@ -524,7 +524,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       if (api.workspace.isTrusted === false || setting(api, 'agentTools', true) === false || !snapshot?.uri?.startsWith('file:')) return undefined;
       const entry = await entryForFile(api.Uri.parse(snapshot.uri));
       if (!entry?.graph) return undefined;
-      return { command: process.execPath, args: [path.join(__dirname, 'mcp.js'), '--store', entry.store.dir, '--root', entry.root.fsPath], env: { ELECTRON_RUN_AS_NODE: '1' } };
+      return { command: process.execPath, args: [path.join(__dirname, 'project', 'mcp.js'), '--store', entry.store.dir, '--root', entry.root.fsPath], env: { ELECTRON_RUN_AS_NODE: '1' } };
     },
     async recordExplanation(snapshot, level, value) {
       if (!snapshot?.uri?.startsWith('file:') || snapshot.selected || !Array.isArray(value?.sections) || !LEVELS[level]) return;
@@ -790,7 +790,7 @@ function createSetup(context, { api = vscode, system = {}, status = providerStat
       if (panel) panel.reveal?.(panel.viewColumn);
       else {
         panel = api.window.createWebviewPanel('yamoriSetup', 'Set up Yamori', { viewColumn: api.ViewColumn.Active ?? api.ViewColumn.One, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
-        if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'yamori.png');
+        if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'media', 'yamori.png');
         panel.webview.html = setupHTML(context.globalState.get('readingPalette', 'auto'));
         panel.onDidDispose(() => { panel = undefined; pending = undefined; intent = undefined; });
         panel.onDidChangeViewState?.(event => { if (event?.webviewPanel?.visible !== false && !done) void check().catch(() => {}); });
@@ -1385,7 +1385,7 @@ function createReader(context, navigation) {
   function ensurePanel() {
     if (panel) { panel.reveal(panel.viewColumn || navigation.column(), false); return; }
     panel = vscode.window.createWebviewPanel('yamori', path.basename(vscode.Uri.parse(navigation.uri).fsPath) + ' · Yamori', { viewColumn: navigation.column(), preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
-    if (context.extensionUri && vscode.Uri.joinPath) panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'yamori.png');
+    if (context.extensionUri && vscode.Uri.joinPath) panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'yamori.png');
     panel.webview.html = panelHTML(context.globalState.get('readingPalette', 'auto'));
     panel.onDidDispose(() => { panel = undefined; reader.dispose(); }, null, context.subscriptions);
     panel.onDidChangeViewState?.(event => { if (!event.webviewPanel.visible) clearHighlight(); if (event.webviewPanel.active) { navigation.active(reader, event.webviewPanel); post(); } }, null, context.subscriptions);

@@ -2,8 +2,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { diffArrays } = require('./diff.min');
-const { hash, parseResult } = require('./engine');
+const { diffArrays } = require('../../vendor/diff.min');
+const { hash, parseResult } = require('../ai/engine');
 const linesOf = text => text.replace(/\r\n/g, '\n').split('\n');
 
 // Dates are the cheap signal; content determines whether an explanation is old.
