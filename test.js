@@ -1398,6 +1398,8 @@ test('a refined view derived from another level does not invalidate that level a
 
 // ---- Project map ---------------------------------------------------------------
 const projectMap = require('./project');
+// A page's own script (the guide also embeds KaTeX in a script before it).
+const pageScript = html => [...html.matchAll(/<script nonce="[^"]+">([\s\S]*?)<\/script>/g)].map(match => match[1]).find(text => text.includes('acquireVsCodeApi'));
 const videoProject = {
   'main.py': '"""Generate a video script."""\nfrom pipeline.plan import plan_loops\nfrom pipeline.write import write_blocks\nfrom models.script import Script\n\ndef main(outline):\n    script = Script.from_outline(outline)\n    return write_blocks(script, plan_loops(script.blocks))\n\nif __name__ == "__main__":\n    main("a")\n',
   'pipeline/__init__.py': '',
@@ -1564,10 +1566,10 @@ test('project guide lists folder reading steps and a folder-box map; drag, fold,
   assert.equal(edgePath({ x: 0, y: 0, w: 100, h: 36 }, { x: 0, y: 104, w: 100, h: 36 }), 'M50 36 C50 70 50 70 50 104');
   assert.ok(fitTransform([{ x: 0, y: 0, w: 100, h: 40 }, { x: 300, y: 200, w: 100, h: 40 }], 800, 600).k <= 1.4);
   assert.deepEqual(byFolder(['b/x.py', 'main.py', 'a/y.py', 'a/z.py']), [['a', ['a/y.py', 'a/z.py']], ['b', ['b/x.py']], ['', ['main.py']]]);
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = [], sent = { at: i => messages.at(i), get length() { return messages.length; } }; let receive;
-  vm.runInNewContext(html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON });
+  vm.runInNewContext(pageScript(html), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON });
   assert.equal(messages[0].type, 'ready');
   // A real grouped layout from the fixture project.
   const { graph } = await scanFixture(videoProject);
@@ -2772,4 +2774,82 @@ out({title:'File',summary:'Explains.',sections:[{title:'Part '+p[1],startLine:+p
     assert.equal(reviewed.sections[0].pseudocode, 'Reviewed text\n\nCount the items'); assert.equal(reviewed.sections[1].pseudocode, 'Draft 2');
     assert.deepEqual(JSON.parse(JSON.stringify(reviewed.sections[0].lineMap.map(link => link.pseudocodeLine))), [1, 3], 'only the link on a blank line was dropped');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('guide search: a visible header box highlights every file that mentions a name, and Explain traces its flow with AI', async () => {
+  const path = require('node:path');
+  const flows = [];
+  const engine = h => ({ requestStructured: async ({ prompt, schema, model }) => {
+    const real = require('./engine');
+    if (schema !== real.FLOW_SCHEMA) return { raw: JSON.stringify({ files: [] }) };
+    flows.push(prompt);
+    return { raw: JSON.stringify({ summary: 'plan_loops builds the loops; main.py calls it.', sections: [
+      { file: 'pipeline/plan.py', title: 'Build the loops', startLine: 1, endLine: 400, pseudocode: '# Context: a loop is an open question\nBuild the loops with **plan_loops**\n\nReturn them', lineMap: [[2, 1, 2], [1, 1, 1], [4, 1, 999]] },
+      { file: 'main.py', title: 'Use them', startLine: 1, endLine: 2, pseudocode: 'Call it for the video', lineMap: [[1, 2, 2]] },
+      { file: 'nowhere.py', title: 'Invented', startLine: 1, endLine: 1, pseudocode: 'Not real', lineMap: [] }], caveats: '' }), actualModel: 'flow-model' };
+  } });
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine });
+  try {
+    const html = require('./map').mapHTML();
+    assert.match(html, /<form class="search" id="search-form" role="search"><input id="search" type="search" placeholder="Search a name: variable, function, term…"/, 'the search box sits in the header, always visible');
+    await h.guide.receive({ type: 'search', query: 'plan_loops' });
+    const found = h.guideState().search;
+    assert.equal(found.query, 'plan_loops'); assert.equal(found.identifier, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(found.hits.map(hit => hit.file))), ['pipeline/plan.py', ...found.hits.map(hit => hit.file).filter(file => file !== 'pipeline/plan.py')], 'the defining file comes first');
+    assert.ok(found.hits.find(hit => hit.file === 'pipeline/plan.py').defines);
+    assert.ok(found.hits.every(hit => hit.matches.every(match => /plan_loops/.test(match.text))));
+    await h.guide.receive({ type: 'search', query: 'plan' });
+    assert.ok(!h.guideState().search.hits.some(hit => hit.matches.some(match => !/\bplan\b/.test(match.text))), 'a name matches whole words only');
+    await h.guide.receive({ type: 'search', query: 'plan_loops' });
+    await h.guide.receive({ type: 'explainFlow' });
+    const flow = h.guideState().flow;
+    assert.equal(flow.state, 'done'); assert.equal(flow.model, 'flow-model');
+    assert.deepEqual(JSON.parse(JSON.stringify(flow.sections.map(section => section.file))), ['pipeline/plan.py', 'main.py'], 'blocks outside the searched files are dropped');
+    const first = flow.sections[0];
+    assert.ok(first.endLine < 400, 'a block range is clamped to its file');
+    assert.deepEqual(JSON.parse(JSON.stringify(first.lineMap)), [{ pseudocodeLine: 2, startLine: 1, endLine: 2 }], 'links on notes or past the file are dropped');
+    assert.match(flows[0], /sections: the flow as Yamori reading blocks/); assert.match(flows[0], /VOICE AND INFORMATION DENSITY/, 'the reader\'s own writing rules');
+    assert.match(flows[0], /searched this project for "plan_loops"/); assert.match(flows[0], /FILE "pipeline\/plan\.py".*defines it/);
+    await h.guide.receive({ type: 'search', query: '' });
+    assert.equal(h.guideState().search, undefined); assert.equal(h.guideState().flow, undefined, 'clearing the search clears its flow');
+    // No AI ready: Explain opens setup instead.
+    await h.guide.receive({ type: 'search', query: 'plan_loops' });
+    testStatus.codex = { provider: 'codex', installed: false, signedIn: false, ready: false, problem: 'Not installed' };
+    await h.guide.receive({ type: 'explainFlow' });
+    assert.ok(h.panels.some(panel => panel.type === 'yamoriSetup')); assert.equal(flows.length, 1);
+  } finally { delete testStatus.codex; await h.close(); }
+  // The page: hits glow and carry counts; the side panel lists them and the flow.
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel'];
+  const { document, elements, all } = fakeDocument(ids);
+  const messages = []; let receive;
+  vm.runInNewContext(pageScript(require('./map').mapHTML()), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON, setTimeout, clearTimeout });
+  const { graph } = await scanFixture(videoProject);
+  const map = projectMap.layoutGrouped(graph, { collapsed: [] });
+  const search = { query: 'plan_loops', identifier: true, total: 3, more: 0, hits: [{ file: 'pipeline/plan.py', count: 2, defines: true, test: false, matches: [{ line: 1, text: 'def plan_loops(blocks):' }] }, { file: 'main.py', count: 1, defines: false, test: false, matches: [{ line: 2, text: 'plan_loops(x)' }] }] };
+  const flow = { state: 'done', query: 'plan_loops', model: 'm', summary: 'It builds loops.', caveats: '',
+    sections: [{ file: 'pipeline/plan.py', title: 'Build the loops', startLine: 1, endLine: 3, pseudocode: '# Context: L1 is the big question\nIf the hook is set:\n    Build **L1** with $n+1$ loops', lineMap: [{ pseudocodeLine: 3, startLine: 2, endLine: 3 }] }] };
+  receive({ data: { type: 'map', state: { files: 5, links: 6, notes: { done: 0, total: 4 }, folders: [], map, guide: { folder: '', steps: [] }, cards: {}, glossary: [], search, flow } } });
+  const nodes = all(elements.nodes).filter(el => el.attributes?.['data-id']);
+  const hit = nodes.find(el => el.attributes['data-id'] === 'pipeline/plan.py'), miss = nodes.find(el => el.attributes['data-id'] === 'models/script.py');
+  assert.ok(hit.classList.contains('hit')); assert.ok(!hit.classList.contains('dim')); assert.ok(miss.classList.contains('dim'), 'files without a hit fade');
+  assert.ok(all(hit).some(el => el.attributes?.class === 'hit-count' && all(el).some(child => child.textContent === '2')), 'each hit shows its count');
+  const panel = elements['search-panel'];
+  assert.equal(panel.hidden, false); assert.ok(all(panel).some(el => el.textContent === '2 files mention “plan_loops”'));
+  assert.ok(all(panel).some(el => el.textContent === 'How “plan_loops” flows')); assert.ok(all(panel).some(el => el.textContent === 'It builds loops.'));
+  const block = all(panel).find(el => el.className === 'reading-block'), rows = all(block).filter(el => /^code-line/.test(el.className || ''));
+  assert.ok(all(block).some(el => el.className === 'section-heading' && all(el).some(child => child.textContent === 'Build the loops')));
+  assert.ok(all(block).some(el => el.className === 'line' && el.textContent === 'plan.py · L1–3'));
+  assert.equal(rows.length, 3); assert.equal(rows[0].className, 'code-line note context-note'); assert.equal(rows[1].className, 'code-line decision');
+  assert.ok(all(rows[1]).some(el => el.className === 'keyword' && el.textContent === 'If'), 'control words are tokens, as in the reader');
+  assert.ok(all(rows[2]).some(el => el.tag === 'strong' && el.className === 'important'), '**emphasis** as in the reader');
+  assert.equal(rows[2].className, 'code-line linked'); rows[2].events.click();
+  assert.deepEqual(messages.at(-1), { type: 'revealSource', id: 'pipeline/plan.py', line: 2 }, 'a linked line opens its source');
+  assert.ok(elements['search-panel'].classList.contains('wide'), 'the panel widens for a flow');
+  all(panel).find(el => el.className === 'match').events.click();
+  assert.deepEqual(messages.at(-1), { type: 'revealSource', id: 'pipeline/plan.py', line: 1 });
+  receive({ data: { type: 'map', state: { files: 5, links: 6, notes: { done: 0, total: 4 }, folders: [], map, guide: { folder: '', steps: [] }, cards: {}, glossary: [], search } } });
+  all(elements['search-panel']).find(el => el.className === 'explain-flow').events.click();
+  assert.deepEqual(messages.at(-1), { type: 'explainFlow' });
+  elements.search.value = 'L1'; elements['search-form'].events.submit({ preventDefault() {} });
+  assert.deepEqual(messages.at(-1), { type: 'search', query: 'L1' }); assert.equal(elements['map-view'].hidden, false, 'searching shows the map');
 });

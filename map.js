@@ -4,7 +4,7 @@
 // boxes: drag a box to move it, click its header to fold it, click a file for
 // details, double-click to explain it. Text is always inserted with textContent.
 const { randomBytes } = require('node:crypto');
-const { BASE_STYLES, LOGO } = require('./panel');
+const { BASE_STYLES, LOGO, READING_STYLES, pseudocodeLines, emphasisParts, mathParts, tokenize } = require('./panel');
 
 // Pure helpers run in Node tests and are inserted into the webview script.
 function edgePath(a, b) {
@@ -90,7 +90,7 @@ body.vscode-light:not([data-palette="slate"]) .brand img, body[data-palette="pap
 #steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .step { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; padding: 12px 14px; border: 1px solid var(--read-border); background: var(--read-surface); }
 .step.focus { border-color: var(--read-ink); box-shadow: 3px 3px 0 var(--read-ink); }
-.step-number { width: 28px; height: 28px; display: grid; place-items: center; background: var(--read-accent); color: var(--read-on-accent); font: 700 13px ui-monospace, monospace; }
+.step-badge { width: 28px; height: 28px; display: grid; place-items: center; background: var(--read-accent); color: var(--read-on-accent); font: 700 13px ui-monospace, monospace; }
 .step-file { font: 700 14px/1.4 ui-monospace, monospace; overflow-wrap: anywhere; }
 .step-file .path { color: var(--read-muted); font-weight: 400; }
 .step-why { margin: 4px 0; }
@@ -151,13 +151,50 @@ aside section:first-child h2 { margin-top: 0; }
 .row strong { font: 600 12px ui-monospace, monospace; }
 .row span { display: block; font-size: 12px; color: var(--read-muted); }
 #glossary-search { width: 100%; font: inherit; color: inherit; background: var(--read-page); border: 1px solid var(--read-border); padding: 5px 7px; margin-bottom: 6px; }
+/* Search: always visible in the header; hits glow on the map. */
+.search { display: flex; align-items: stretch; flex: 1 1 260px; max-width: 460px; min-width: 200px; margin-left: 12px; }
+.search input { flex: 1; min-width: 0; font: 13px/1.4 var(--vscode-font-family, system-ui); color: var(--read-ink); background: var(--read-surface); border: 2px solid var(--read-ink); border-right: 0; padding: 6px 10px; }
+.search input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--read-ink); }
+.search button { border: 2px solid var(--read-ink); background: var(--read-accent); color: var(--read-on-accent); font-weight: 700; padding: 0 12px; }
+.node.hit .shape { stroke-width: 3; fill: var(--read-mark-bg); }
+.node.hit .label { font-weight: 800; }
+.hit-count rect { fill: var(--read-ink); }
+.hit-count text { fill: var(--read-page); font: 700 10px ui-monospace, monospace; pointer-events: none; }
+#search-panel { width: min(380px, 44vw); }
+.search-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.search-head h2 { flex: 1; overflow-wrap: anywhere; }
+.search-head button { font-size: 11px; border: 1px solid var(--read-border); padding: 2px 8px; }
+.explain-flow { width: 100%; margin: 4px 0 6px; padding: 8px; font-weight: 700; background: var(--read-accent); color: var(--read-on-accent); border: 1px solid var(--read-accent); }
+.flow { margin: 10px 0 14px; padding: 10px 12px; border: 1px solid var(--read-ink); box-shadow: 3px 3px 0 var(--read-ink); background: var(--read-page); }
+.flow p { margin: 4px 0; }
+.flow ol { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.flow li button { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; width: 100%; text-align: left; padding: 5px 4px; border-left: 3px solid var(--read-border); }
+.flow li button:hover { border-left-color: var(--read-ink); }
+.flow .num { font: 700 11px ui-monospace, monospace; }
+.flow .where { display: block; font: 600 11px ui-monospace, monospace; overflow-wrap: anywhere; }
+.flow .role { font: 600 10px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .05em; color: var(--read-muted); }
+/* Flow: the reader's own blocks and lines, scoped to the flow so they never touch the guide. */
+@scope (.flow-reading) {
+${READING_STYLES}
+}
+.flow-reading { margin-top: 12px; }
+.flow-reading details.reading-block { margin-bottom: 14px; }
+aside .flow-reading .section-heading { padding: 10px 12px; gap: 8px; }
+aside .flow-reading .section-heading h2 { margin: 0; padding: 0; border: 0; font: 650 14px/1.45 var(--vscode-font-family, system-ui); text-transform: none; letter-spacing: 0; }
+aside .flow-reading .line { border: 1px solid var(--read-border); padding: 2px 6px; }
+aside .flow-reading pre { font-size: 14px; padding: 12px 8px 14px; }
+#search-panel.wide { width: min(640px, 56vw); }
+.match { display: grid; grid-template-columns: 4ch minmax(0, 1fr); gap: 6px; width: 100%; text-align: left; padding: 1px 4px; font: 11px/1.5 ui-monospace, monospace; color: var(--read-muted); }
+.match:hover { color: var(--read-ink); }
+.match code { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Narrow columns: details sit below the map, never on top of it. */
-@media(max-width: 720px) { .start-body { grid-template-columns: 1fr; } #folders { position: static; } .stage { flex-direction: column; } aside { width: 100%; height: 45%; border-left: 0; border-top: 1px solid var(--read-border); } }
+@media(max-width: 720px) { .search { order: 5; flex-basis: 100%; max-width: none; margin: 8px 0 0; } #search-panel { width: 100%; } .start-body { grid-template-columns: 1fr; } #folders { position: static; } .stage { flex-direction: column; } aside { width: 100%; height: 45%; border-left: 0; border-top: 1px solid var(--read-border); } }
 @media(prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media(forced-colors: active) { .node .shape, .box .frame { stroke: CanvasText; fill: Canvas; } .edge { stroke: CanvasText; } }
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${LOGO}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span><span class="eyebrow">Project guide</span></span>
 <span class="tabs" role="tablist" aria-label="Project guide views"><button id="tab-start" role="tab" aria-selected="true" aria-controls="start-view" title="Which files to read first, folder by folder">Start here</button><button id="tab-map" role="tab" aria-selected="false" aria-controls="map-view" title="How files connect, grouped by folder">Map</button></span>
+<form class="search" id="search-form" role="search"><input id="search" type="search" placeholder="Search a name: variable, function, term…" aria-label="Search the project for a variable, function or term" autocomplete="off" spellcheck="false"><button id="search-go" type="submit" title="Highlight every file that mentions it (local, no AI)">Search</button></form>
 <span class="spacer"></span>
 <button id="rescan" title="Re-read changed files. Local and free; no AI.">Rescan</button><button id="notes" title="Ask your selected AI for a one-line purpose per file, project terms and a reading order">Write AI notes</button></div>
 <p id="status" class="status" role="status">Scanning project…</p></header>
@@ -170,13 +207,19 @@ aside section:first-child h2 { margin-top: 0; }
 <div class="stage"><svg id="canvas" tabindex="0" role="application" aria-label="Project map. Drag folders, drag the background to pan, scroll to zoom. Double-click a file to explain it." aria-roledescription="graph">
 <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0 0 L8 4 L0 8 z"/></marker></defs>
 <g id="viewport"><g id="boxes"></g><g id="edges"></g><g id="nodes"></g></g></svg>
+<aside id="search-panel" aria-label="Search results" hidden></aside>
 <aside id="drawer" aria-label="Details" hidden><div class="drawer-head"><span class="eyebrow">Details</span><button id="drawer-close" title="Close details" aria-label="Close details">Close ×</button></div><section id="card"></section><section id="glossary"></section></aside></div></section>
+<script nonce="${nonce}">${require('node:fs').readFileSync(require('node:path').join(__dirname, 'katex.min.js'), 'utf8')}</script>
 <script nonce="${nonce}">
 const edgePath = ${edgePath.toString()};
 const fitTransform = ${fitTransform.toString()};
 const neighbourSet = ${neighbourSet.toString()};
 const relativeTime = ${relativeTime.toString()};
 const byFolder = ${byFolder.toString()};
+const pseudocodeLines = ${pseudocodeLines.toString()};
+const emphasisParts = ${emphasisParts.toString()};
+const mathParts = ${mathParts.toString()};
+const tokenize = ${tokenize.toString()};
 const vscode = acquireVsCodeApi();
 const send = (type, extra = {}) => vscode.postMessage({ type, ...extra });
 const SVG = 'http://www.w3.org/2000/svg';
@@ -204,10 +247,26 @@ function zoom(factor, cx, cy) {
 }
 function center(id) { const b = box(id), { width, height } = size(); view = { ...view, x: width / 2 - (b.x + b.w / 2) * view.k, y: height / 2 - (b.y + b.h / 2) * view.k }; applyView(); }
 function drawEdges() { for (const item of edgeElements) item.el.setAttribute('d', edgePath(box(item.edge.from), box(item.edge.to))); }
+// Search hits by map node: a file's own count, or a folded folder's total.
+let hits, shownQuery;
+function searchHits() {
+  const found = state.search?.hits;
+  if (!found) return undefined;
+  const counts = new Map(found.map(hit => [hit.file, hit.count]));
+  for (const item of byId.values()) {
+    if (item.kind !== 'folder') continue;
+    const total = found.filter(hit => item.folder === '' || hit.file.startsWith(item.folder + '/')).reduce((sum, hit) => sum + hit.count, 0);
+    if (total) counts.set(item.id, total);
+  }
+  return counts;
+}
 function highlight(id) {
   const near = id && byId.has(id) ? neighbourSet(state.map?.edges || [], id) : undefined;
-  for (const [key, el] of nodeElements) el.classList.toggle('dim', !!near && !near.has(key));
-  for (const item of edgeElements) { const hot = !!near && (item.edge.from === id || item.edge.to === id); item.el.classList.toggle('hot', hot); item.el.classList.toggle('dim', !!near && !hot); }
+  for (const [key, el] of nodeElements) { el.classList.toggle('dim', near ? !near.has(key) : !!hits && !hits.has(key)); el.classList.toggle('hit', !!hits && hits.has(key)); }
+  for (const item of edgeElements) {
+    const hot = near ? item.edge.from === id || item.edge.to === id : !!hits && hits.has(item.edge.from) && hits.has(item.edge.to);
+    item.el.classList.toggle('hot', hot); item.el.classList.toggle('dim', (!!near || !!hits) && !hot);
+  }
 }
 function showDetails(open) {
   const drawer = $('drawer'); drawer.hidden = !open;
@@ -270,6 +329,13 @@ function drawMap() {
     if (item.kind === 'folder') {
       g.append(svgNode('text', { class: 'label', x: 12, y: 19 }, '▸ ' + item.label), svgNode('text', { class: 'caption', x: 12, y: 35 }, item.count + ' file' + (item.count === 1 ? '' : 's') + ' · click to unfold'));
     } else g.append(svgNode('text', { class: 'label', x: item.step ? 30 : 10, y: item.h / 2 + 4 }, item.label));
+    const hitCount = hits?.get(item.id);
+    if (hitCount) {
+      const label = String(hitCount), width = 12 + label.length * 6, tag = svgNode('g', { class: 'hit-count', transform: 'translate(' + (item.w - width / 2) + ' -8)' });
+      tag.append(svgNode('rect', { width, height: 16, rx: 0 }), svgNode('text', { x: width / 2, y: 12, 'text-anchor': 'middle' }, label));
+      tag.append(svgNode('title', {}, hitCount + ' mention' + (hitCount === 1 ? '' : 's') + ' of ' + state.search.query));
+      g.append(tag);
+    }
     if (item.step && item.kind === 'file') {
       const badge = svgNode('g', { class: 'badge', transform: 'translate(5 ' + (item.h / 2 - 9) + ')' });
       badge.append(svgNode('rect', { width: 18, height: 18 }), svgNode('text', { x: 9, y: 13, 'text-anchor': 'middle' }, String(item.step)));
@@ -377,6 +443,101 @@ function drawCard() {
   }
   if (note.defs?.length) { card.append(node('h2', 'Defines'), node('p', note.defs.join(', '), 'muted')); }
 }
+// Text, formulas and **emphasis** exactly as the reader draws them.
+function appendText(parent, text) { for (const token of tokenize(text)) parent.append(node('span', token.text, token.kind)); }
+function appendMath(parent, text) {
+  for (const part of mathParts(text)) {
+    if (!part.tex || typeof katex === 'undefined') { appendText(parent, part.text); continue; }
+    try {
+      const markup = katex.renderToString(part.tex, { output: 'mathml', throwOnError: true, trust: false, strict: 'ignore', maxExpand: 100, maxSize: 10 });
+      parent.append(document.importNode(new DOMParser().parseFromString(markup, 'text/html').querySelector('math'), true));
+    } catch { appendText(parent, part.text); }
+  }
+}
+function appendInline(parent, text) {
+  for (const part of emphasisParts(text)) { const target = part.strong ? node('strong', undefined, 'important') : parent; appendMath(target, part.text); if (part.strong) parent.append(target); }
+}
+// The flow as reading blocks: one per stop in a file, lines linked to that file's source.
+function flowBlocks(flow) {
+  const wrap = node('div', undefined, 'flow-reading');
+  flow.sections.forEach((section, index) => {
+    const el = node('details', undefined, 'reading-block'); el.open = true;
+    const heading = node('summary', undefined, 'section-heading');
+    const where = node('button', fileName(section.file) + ' · L' + section.startLine + (section.endLine !== section.startLine ? '–' + section.endLine : ''), 'line');
+    where.title = 'Open ' + section.file + ' at line ' + section.startLine;
+    where.addEventListener('click', event => { event.preventDefault?.(); send('revealSource', { id: section.file, line: section.startLine }); });
+    heading.append(node('span', String(index + 1).padStart(2, '0'), 'block-index'), node('h2', section.title), where);
+    heading.addEventListener('pointerenter', () => highlight(section.file)); heading.addEventListener('pointerleave', () => highlight(selected));
+    const pre = node('pre'); let number = 0;
+    pseudocodeLines(section.pseudocode).forEach(({ text, kind }, lineIndex) => {
+      const row = node('span', undefined, 'code-line' + (kind ? ' ' + kind : ''));
+      if (kind === 'note' && /^\\s*#\\s*(Context|Why|How|What):/i.test(text)) row.className += ' context-note';
+      row.append(node('span', text.trim() && kind !== 'note' ? String(++number) : '', 'step-number'));
+      const mapping = section.lineMap?.find(item => item.pseudocodeLine === lineIndex + 1);
+      if (mapping) {
+        row.className += ' linked'; row.tabIndex = 0; row.setAttribute('role', 'button');
+        row.title = fileName(section.file) + ' L' + mapping.startLine + (mapping.endLine !== mapping.startLine ? '–' + mapping.endLine : '') + ' · Click to open the source';
+        const go = () => send('revealSource', { id: section.file, line: mapping.startLine });
+        row.addEventListener('click', go); row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault?.(); go(); } });
+        row.addEventListener('pointerenter', () => highlight(section.file)); row.addEventListener('pointerleave', () => highlight(selected));
+      }
+      const body = node('span', undefined, 'step-body');
+      body.style.paddingInlineStart = Math.min(text.length - text.trimStart().length, 40) * .55 + 'em';
+      appendInline(body, text.trimStart());
+      if (!text) body.append(document.createTextNode(' '));
+      row.append(body); pre.append(row);
+    });
+    el.append(heading, pre); wrap.append(el);
+  });
+  return wrap;
+}
+function drawSearch() {
+  const panel = $('search-panel'), found = state.search;
+  panel.hidden = !found; panel.replaceChildren();
+  panel.classList.toggle('wide', state.flow?.state === 'done');
+  if (!found) return;
+  const head = node('div', undefined, 'search-head');
+  head.append(node('h2', found.hits.length ? found.hits.length + (found.more ? '+' : '') + ' file' + (found.hits.length === 1 ? '' : 's') + ' mention “' + found.query + '”' : 'No file mentions “' + found.query + '”'));
+  const clear = node('button', 'Clear ×'); clear.title = 'Clear the search'; clear.addEventListener('click', () => { $('search').value = ''; send('search', { query: '' }); });
+  head.append(clear); panel.append(head);
+  if (!found.hits.length) { panel.append(node('p', found.identifier ? 'Names match as whole words, with exact capitals. Check the spelling, or Rescan if the file is new.' : 'Text matches anywhere, ignoring capitals.', 'muted')); return; }
+  panel.append(node('p', found.total + ' mention' + (found.total === 1 ? '' : 's') + (found.identifier ? ' as a whole word' : '') + '. Highlighted on the map; hover a file to find it.', 'muted'));
+  const flow = state.flow;
+  if (!flow || flow.state === 'failed') {
+    const go = node('button', 'Explain how “' + found.query + '” flows', 'explain-flow');
+    go.title = 'Ask your AI how this name moves through and connects the highlighted files. Sends excerpts around each mention.';
+    go.addEventListener('click', () => send('explainFlow')); panel.append(go);
+  }
+  if (flow) {
+    const box = node('section', undefined, 'flow'); box.setAttribute('aria-live', 'polite');
+    if (flow.state === 'running') {
+      box.append(node('p', 'Tracing “' + flow.query + '” with ' + (flow.provider || 'your AI') + '…'));
+      const stop = node('button', 'Stop'); stop.addEventListener('click', () => send('stopFlow')); box.append(stop);
+    } else if (flow.state === 'failed') box.append(node('p', 'Could not explain the flow: ' + flow.error));
+    else {
+      box.append(node('h2', 'How “' + flow.query + '” flows'), node('p', flow.summary), flowBlocks(flow));
+      if (flow.caveats) box.append(node('p', flow.caveats, 'muted'));
+      box.append(node('p', 'AI-written from the excerpts' + (flow.model ? ' · ' + flow.model : '') + '. Verify against the source.', 'muted'));
+    }
+    panel.append(box);
+  }
+  for (const [folder, files] of byFolder(found.hits.map(hit => hit.file))) {
+    panel.append(node('div', folder ? folder + '/' : 'project root', 'folder-label'));
+    for (const id of files) {
+      const hit = found.hits.find(item => item.file === id);
+      const row = fileRow(id, [hit.count + ' mention' + (hit.count === 1 ? '' : 's'), hit.defines && 'defines it', hit.test && 'test', state.cards?.[id]?.purpose].filter(Boolean).join(' · '));
+      row.addEventListener('pointerenter', () => highlight(id)); row.addEventListener('pointerleave', () => highlight(selected));
+      panel.append(row);
+      for (const match of hit.matches) {
+        const line = node('button', undefined, 'match'); line.append(node('span', String(match.line)), node('code', match.text));
+        line.title = 'Open ' + id + ' at line ' + match.line; line.addEventListener('click', () => send('revealSource', { id, line: match.line }));
+        panel.append(line);
+      }
+      if (hit.count > hit.matches.length) panel.append(node('p', '+ ' + (hit.count - hit.matches.length) + ' more in this file', 'muted'));
+    }
+  }
+  if (found.more) panel.append(node('p', found.more + ' more files not listed.', 'muted'));
+}
 function drawGlossary() {
   const glossary = $('glossary'), terms = state.glossary || [];
   glossary.replaceChildren(node('h2', 'Project terms · ' + terms.length));
@@ -422,7 +583,7 @@ function drawStart() {
   const list = $('steps'); list.replaceChildren();
   guide.steps.forEach((step, index) => {
     const item = node('li', undefined, 'step' + (step.id === state.focus ? ' focus' : ''));
-    const number = node('span', String(index + 1), 'step-number'), body = node('div');
+    const number = node('span', String(index + 1), 'step-badge'), body = node('div');
     const title = node('div', undefined, 'step-file');
     if (step.id.includes('/')) title.append(node('span', step.id.slice(0, step.id.lastIndexOf('/') + 1), 'path'));
     title.append(document.createTextNode(fileName(step.id)));
@@ -462,14 +623,33 @@ function render(s) {
   notes.disabled = !s.notesBusy && !!s.busy;
   notes.title = s.notesBusy ? 'Stop writing AI notes; finished files are kept' : s.waitingForAI ? 'Install or sign in to Claude or ChatGPT; AI notes then start by themselves' : s.autoNotes ? 'AI notes are written automatically after each scan. Press to write them now (also retries after an error).' : 'Ask your selected AI for a one-line purpose per file, project terms and a reading order';
   $('rescan').disabled = !!s.busy;
-  drawStart(); drawMap(); drawGlossary();
+  hits = searchHits();
+  // A new result is shown on the map, wherever the search came from.
+  let zoomToHits = false;
+  if (s.search?.query && s.search.query !== shownQuery) { shownQuery = s.search.query; zoomToHits = true; if (current !== 'map') show('map'); }
+  if (!s.search) shownQuery = undefined;
+  const input = $('search');
+  if (document.activeElement !== input) input.value = s.search?.query || '';
+  drawStart(); drawMap(); drawGlossary(); drawSearch();
   // Refit when the set of folders changes, not when one is folded.
   const key = (s.map?.boxes || []).map(b => b.id).join('|');
   if (key !== layoutKey) { layoutKey = key; needsFit = true; }
   if (current === 'map' && needsFit) { needsFit = false; fit(); }
+  // A new search zooms to the files it found.
+  if (zoomToHits && hits?.size) {
+    const found = [...hits.keys()].filter(id => byId.has(id) && positions.has(id)).map(box);
+    if (found.length) { const { width, height } = size(); view = fitTransform(found, width, height, 140); needsFit = false; applyView(); }
+  }
   if (s.viewToken && s.viewToken !== viewToken) { viewToken = s.viewToken; show(s.view === 'map' ? 'map' : 'start'); }
   if (s.focusToken && s.focusToken !== focusToken && byId.has(s.focus)) { focusToken = s.focusToken; if (current === 'map') select(s.focus, true); }
 }
+// Typing searches after a short pause; Enter searches at once. Results show on the map.
+let searchTimer;
+const runSearch = () => { clearTimeout(searchTimer); const query = $('search').value.trim(); if (query) show('map'); send('search', { query }); };
+$('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 350); });
+$('search-form').addEventListener('submit', event => { event.preventDefault?.(); runSearch(); });
+$('search').addEventListener('keydown', event => { if (event.key === 'Escape') { $('search').value = ''; runSearch(); } });
+document.addEventListener('keydown', event => { if ((event.metaKey || event.ctrlKey) && event.key === 'f') { event.preventDefault?.(); $('search').focus(); $('search').select?.(); } });
 $('tab-start').addEventListener('click', () => show('start'));
 $('tab-map').addEventListener('click', () => show('map'));
 $('expand-all').addEventListener('click', () => send('foldAll', { collapsed: false }));

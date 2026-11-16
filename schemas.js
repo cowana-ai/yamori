@@ -58,6 +58,18 @@ const SIMULATION_SCHEMA = { type: 'object', additionalProperties: false, propert
   output: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['return', 'raises'] }, value: { type: 'string', maxLength: 600 } }, required: ['kind', 'value'] },
   caveats: { type: 'string', maxLength: 400 }
 }, required: ['inputs', 'steps', 'output', 'caveats'] };
+// How one name (a variable, function or term) moves through several files.
+const FLOW_SCHEMA = { type: 'object', additionalProperties: false, properties: {
+  summary: { type: 'string', minLength: 1, maxLength: 900 },
+  // Reading blocks like an explanation's sections, each in one searched file.
+  sections: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object', additionalProperties: false, properties: {
+    file: { type: 'string', minLength: 1, maxLength: 500 }, title: { type: 'string', minLength: 1, maxLength: 200 },
+    startLine: { type: 'integer', minimum: 1 }, endLine: { type: 'integer', minimum: 1 },
+    pseudocode: { type: 'string', minLength: 1, maxLength: 4000 },
+    lineMap: { type: 'array', maxItems: 60, items: { type: 'array', items: { type: 'integer', minimum: 1 }, minItems: 3, maxItems: 3 } }
+  }, required: ['file', 'title', 'startLine', 'endLine', 'pseudocode', 'lineMap'] } },
+  caveats: { type: 'string', maxLength: 500 }
+}, required: ['summary', 'sections', 'caveats'] };
 // Cache compatibility: older approved blocks may not have step links. Extra
 // metadata is ignored by the canonical parser rather than invalidating old work.
 const section = SCHEMA.properties.sections.items;
@@ -75,7 +87,7 @@ const EXPLANATION_DATA = {
     views: { type: 'object' }
   }
 };
-module.exports = { SCHEMA, REVIEW_SCHEMA, SELECTION_SCHEMA, EXPLANATION_DATA, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, SIMULATION_SCHEMA };
+module.exports = { SCHEMA, REVIEW_SCHEMA, SELECTION_SCHEMA, EXPLANATION_DATA, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, SIMULATION_SCHEMA, FLOW_SCHEMA };
 
 // Build-only dependencies: production loads the generated standalone validators.
 if (require.main === module) {
@@ -89,7 +101,8 @@ if (require.main === module) {
   ajv.addSchema(NOTES_SCHEMA, 'notes');
   ajv.addSchema(MAP_SUMMARY_SCHEMA, 'mapSummary');
   ajv.addSchema(SIMULATION_SCHEMA, 'simulation');
-  const code = standalone(ajv, { explanation: 'explanation', review: 'review', selection: 'selection', notes: 'notes', mapSummary: 'mapSummary', simulation: 'simulation' });
+  ajv.addSchema(FLOW_SCHEMA, 'flow');
+  const code = standalone(ajv, { explanation: 'explanation', review: 'review', selection: 'selection', notes: 'notes', mapSummary: 'mapSummary', simulation: 'simulation', flow: 'flow' });
   const license = fs.readFileSync(path.join(path.dirname(require.resolve('ajv/package.json')), 'LICENSE'), 'utf8');
   esbuild.buildSync({ stdin: { contents: code, resolveDir: __dirname, sourcefile: 'ajv-validators.js' },
     bundle: true, minify: true, platform: 'node', target: 'node20', format: 'cjs',

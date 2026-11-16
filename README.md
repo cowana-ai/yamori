@@ -251,6 +251,23 @@ and no language service is used,
 so it also works in Restricted Mode. While the guide is open, saves, new files and
 deletions trigger an incremental rescan of changed files only.
 
+**Search a name.** The box in the guide's header (always visible; ⌘F / Ctrl+F) finds a
+variable, function or term across the mapped files, locally and without AI. Names match
+as whole words with exact capitals; other text matches anywhere. The map switches into
+view with every file that mentions it highlighted and a count badge, and other files
+fade. A folded folder shows the total for its files. A side panel lists the hits by
+folder, defining files first, with each matching line; click a line to open it.
+**Explain how it flows** asks your AI how the name moves through those files: where it
+is defined or set, where it is passed, read, changed or returned, and which file hands
+it to which. It sends excerpts around each mention (up to 12 files), plus their AI
+notes and import links. The answer is a short summary, then the flow as reading blocks
+that look and read like the reader's own: one block per stop in a file, titled with what
+happens there and its file and line range. Each block holds numbered pseudocode written
+with the same rules, with notes, **emphasis** and formulas. Click a line to open the
+source lines it stands for; hover it to find its file on the map. The side panel widens
+while a flow is shown. On `plan_loops` in a real project, Opus answered in about 15 seconds. Steps that point outside the
+searched files are dropped.
+
 **AI notes (automatic).** When the guide maps a folder, Yamori asks your selected
 provider, model and effort for a one-line purpose and role per file, plus a project
 glossary: IDs and naming schemes, section and stage names, enum members, meaningful
@@ -699,13 +716,13 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 106 automated tests cover the project guide and lookups (tree-sitter extraction for
+**Validation:** 107 automated tests cover the project guide and lookups (tree-sitter extraction for
 every bundled grammar, import resolution per language, entry points and reading
 paths, incremental rescans, deterministic layouts, bounded explanation context,
 note validation, folder reading orders, folder boxes that stay structured at any
 size, Start here and map messages, glossary links, the MCP server over stdio with
 mapped-only and bounded reads, Claude and Codex lookup flags and approvals, the
-no-lookup fallback, unit-test discovery and association, the Python runner on real tests (inputs, every executed line, outputs, failures, unittest, fixtures that need pytest, file and image descriptions), real runs gated by trust and a once-per-folder question, AI simulations limited to the function's lines, the notebook cell with emoji values and step highlighting, fast models for quick jobs (a parallel Overview, compact step links, three note batches at a time, Codex's catalog fast model), parallel parts (local part planning from whole definitions, at most N requests at once, sections kept inside their part, one retry then a whole-file fallback, a draft that never waits long for a slow Overview), background review (draft readable at once, improved blocks swapped in and cached, dropped after edits or refreshes, kept through level switches, fidelity warnings with Retry review, pending drafts resumed), the review model one tier below the writer, the setup screen (Claude Desktop's bundled Claude Code, sign-in status from each CLI without a model request, one action per AI, visible install and sign-in terminals, continuing by itself once sign-in works, setup before the first explanation, switching open readers), automatic AI notes (quiet, changed files only, asks first for large projects, no retry loops, waiting for setup instead of failing, also in Restricted Mode), the map-first guide with Details on demand, the reader's tour bar and one-step-ahead preparation (only in a tour, only when not cached, off with its setting), project-name links that open the defining block, editor hovers with escaped text and only Yamori's commands trusted, CodeLens that hides on changed code, the plain-language reader controls, the live progress card and its stages (thinking token counts, never thinking text), effort defaults, the folder-grouped file
+no-lookup fallback, unit-test discovery and association, the Python runner on real tests (inputs, every executed line, outputs, failures, unittest, fixtures that need pytest, file and image descriptions), real runs gated by trust and a once-per-folder question, AI simulations limited to the function's lines, the notebook cell with emoji values and step highlighting, fast models for quick jobs (a parallel Overview, compact step links, three note batches at a time, Codex's catalog fast model), guide search (whole-word name hits, defining files first, highlighted map nodes with counts, the AI flow explanation as reader-style blocks with links clamped to the searched files, setup first when no AI is ready), parallel parts (local part planning from whole definitions, at most N requests at once, sections kept inside their part, one retry then a whole-file fallback, a draft that never waits long for a slow Overview), background review (draft readable at once, improved blocks swapped in and cached, dropped after edits or refreshes, kept through level switches, fidelity warnings with Retry review, pending drafts resumed), the review model one tier below the writer, the setup screen (Claude Desktop's bundled Claude Code, sign-in status from each CLI without a model request, one action per AI, visible install and sign-in terminals, continuing by itself once sign-in works, setup before the first explanation, switching open readers), automatic AI notes (quiet, changed files only, asks first for large projects, no retry loops, waiting for setup instead of failing, also in Restricted Mode), the map-first guide with Details on demand, the reader's tour bar and one-step-ahead preparation (only in a tour, only when not cached, off with its setting), project-name links that open the defining block, editor hovers with escaped text and only Yamori's commands trusted, CodeLens that hides on changed code, the plain-language reader controls, the live progress card and its stages (thinking token counts, never thinking text), effort defaults, the folder-grouped file
 picker and an end-to-end guide → notes → explanation flow that rejects symlinked
 files outside the project), strict schema validation, field-path errors,
 cache compatibility, loading without development dependencies or runtime schema

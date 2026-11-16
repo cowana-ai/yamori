@@ -3,7 +3,7 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./engine');
+const { flowPrompt, parseFlow, FLOW_SCHEMA, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./engine');
 const { panelHTML } = require('./panel');
 const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks } = require('./cache');
 const { mapHTML } = require('./map');
@@ -221,7 +221,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
         defs: file.defs.filter(def => ['class', 'function', 'interface', 'type', 'enum'].includes(def.kind)).slice(0, 10).map(def => def.name) };
     }
     const glossary = project.glossaryOf(graph, notes).map(term => ({ term: term.term, aliases: term.aliases, meaning: term.meaning, kind: term.kind, file: term.file, line: term.line }));
-    return { ...base, folders, guide: { folder, steps }, map, overview: notes.overview, cards, glossary,
+    return { ...base, folders, guide: { folder, steps }, map, overview: notes.overview, cards, glossary, search: entry.search, flow: entry.flow,
       files: known.size, links: graph.edges.length, scannedAt: graph.scannedAt, limited: !!graph.limited };
   }
   function post(entry) { entry.panel?.webview.postMessage({ type: 'map', state: stateOf(entry) }); }
@@ -363,13 +363,81 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       entry.error = stopped ? 'AI notes stopped. Notes written so far are saved.' : (auto ? 'AI notes could not be written automatically: ' : 'AI notes failed: ') + e.message + (changed ? ' Notes written so far are saved.' : '') + (auto ? ' Press Write AI notes to retry.' : '');
     } finally { entry.notesController = undefined; entry.progress = undefined; post(entry); }
   }
+  // ---- Search: which files mention a name (local, no AI), and how it flows (AI) ----
+  const SEARCH_FILES = 200, SEARCH_SHOWN = 12;
+  async function search(entry, raw) {
+    const query = typeof raw === 'string' ? raw.trim().slice(0, 80) : '';
+    entry.flowController?.abort(); entry.flowController = undefined; entry.flow = undefined;
+    const token = entry.searchToken = (entry.searchToken || 0) + 1;
+    if (!query || !entry.graph) { entry.search = undefined; entry.searchLines = undefined; post(entry); return; }
+    // A name matches as a whole word, case-sensitively; other text anywhere, ignoring case.
+    const identifier = /^[A-Za-z_$][\w$]*$/.test(query), escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = identifier ? new RegExp('(?<![\\w$])' + escaped + '(?![\\w$])') : new RegExp(escaped, 'i');
+    const rootReal = await fs.realpath(entry.root.fsPath), hits = [], lines = new Map();
+    await Promise.all(Object.keys(entry.graph.files).map(async rel => {
+      let text;
+      try { text = await readSource(entry, rootReal, fileUri(entry, rel)); } catch { return; }
+      const all = text.split(/\r?\n/), found = [];
+      all.forEach((line, index) => { if (pattern.test(line)) found.push(index + 1); });
+      if (!found.length) return;
+      const file = entry.graph.files[rel];
+      lines.set(rel, { found, total: all.length });
+      hits.push({ file: rel, count: found.length, defines: !!file.defs?.some(def => def.name === query), test: !!file.test,
+        matches: found.slice(0, SEARCH_SHOWN).map(line => ({ line, text: all[line - 1].trim().slice(0, 160) })) });
+    }));
+    if (token !== entry.searchToken) return;
+    hits.sort((a, b) => b.defines - a.defines || a.test - b.test || b.count - a.count || a.file.localeCompare(b.file));
+    entry.search = { query, identifier, total: hits.reduce((sum, hit) => sum + hit.count, 0), hits: hits.slice(0, SEARCH_FILES), more: Math.max(0, hits.length - SEARCH_FILES) };
+    entry.searchLines = lines;
+    post(entry);
+  }
+  // Excerpts around each hit (±3 lines, merged), bounded per file and overall.
+  function excerpt(text, found) {
+    const all = text.split(/\r?\n/), keep = new Set();
+    for (const line of found.slice(0, 30)) for (let i = Math.max(1, line - 3); i <= Math.min(all.length, line + 3); i++) keep.add(i);
+    let out = '', last = 0;
+    for (const line of [...keep].sort((a, b) => a - b)) { if (last && line > last + 1) out += '⋮\n'; out += line + ': ' + all[line - 1] + '\n'; last = line; if (out.length > 3500) { out += '⋮ (more hits omitted)\n'; break; } }
+    return out;
+  }
+  async function explainFlow(entry) {
+    const found = entry.search;
+    if (!found?.hits.length || !entry.graph) return;
+    const chosen = context.globalState.get('provider');
+    const status = PROVIDERS[chosen] ? await providerStatus(chosen, cliPathFor(api, chosen)).catch(() => undefined) : undefined;
+    if (!status?.ready) { openSetup?.({ focus: chosen, pending: { label: 'explain how ' + found.query + ' flows', run: () => explainFlow(entry) } }); return; }
+    entry.flowController?.abort();
+    const controller = new AbortController(); entry.flowController = controller;
+    const connection = connectionOptions(context.globalState, chosen, api);
+    entry.flow = { state: 'running', query: found.query, provider: PROVIDERS[chosen] }; post(entry);
+    try {
+      const rootReal = await fs.realpath(entry.root.fsPath), files = [];
+      let budget = 40000;
+      for (const hit of found.hits.slice(0, 12)) {
+        const info = entry.searchLines?.get(hit.file);
+        if (!info || budget <= 0) continue;
+        const body = excerpt(await readSource(entry, rootReal, fileUri(entry, hit.file)), info.found).slice(0, budget);
+        budget -= body.length;
+        files.push({ file: hit.file, lines: info.total, purpose: entry.notes.files?.[hit.file]?.purpose, defines: hit.defines, excerpt: body });
+      }
+      const names = new Set(files.map(file => file.file));
+      const links = entry.graph.edges.filter(edge => names.has(edge.from) && names.has(edge.to)).map(edge => ({ from: edge.from, uses: edge.to, names: (edge.names || []).slice(0, 8) }));
+      const response = await requestStructured({ ...connection, prompt: flowPrompt({ query: found.query, files, links, overview: entry.notes.overview }), schema: FLOW_SCHEMA, signal: controller.signal, showPreview: false });
+      const flow = parseFlow(response.raw, files);
+      if (controller.signal.aborted || entry.search?.query !== found.query) return;
+      entry.flow = { state: 'done', query: found.query, provider: PROVIDERS[chosen], model: response.actualModel || connection.model || '', ...flow };
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      if (isSetupProblem(e.message)) clearProviderStatus();
+      entry.flow = { state: 'failed', query: found.query, error: e.message };
+    } finally { if (entry.flowController === controller) entry.flowController = undefined; post(entry); }
+  }
   function ensurePanel(entry) {
     if (entry.panel) { entry.panel.reveal(entry.panel.viewColumn); return; }
     const panel = api.window.createWebviewPanel('yamoriMap', 'Project map · ' + path.basename(entry.root.fsPath), { viewColumn: api.ViewColumn.Active ?? api.ViewColumn.One, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
     if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'yamori.png');
     panel.webview.html = mapHTML(context.globalState.get('readingPalette', 'auto'));
     entry.panel = panel; watch(entry);
-    panel.onDidDispose(() => { entry.panel = undefined; unwatch(entry); entry.notesController?.abort(); });
+    panel.onDidDispose(() => { entry.panel = undefined; unwatch(entry); entry.notesController?.abort(); entry.flowController?.abort(); entry.search = undefined; entry.flow = undefined; });
     panel.webview.onDidReceiveMessage(async message => {
       try { await receive(entry, message); } catch (e) { entry.error = e.message; post(entry); }
     });
@@ -388,6 +456,9 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       case 'revealSource': if (file) await reveal(entry, file, message.line); break;
       case 'rescan': await scan(entry); break;
       case 'notes': await runNotes(entry); break;
+      case 'search': await search(entry, message.query); break;
+      case 'explainFlow': await explainFlow(entry); break;
+      case 'stopFlow': entry.flowController?.abort(); entry.flowController = undefined; entry.flow = undefined; post(entry); break;
       case 'setup': openSetup?.({ focus: context.globalState.get('provider'), pending: { label: 'write AI notes for ' + path.basename(entry.root.fsPath), run: () => runNotes(entry) } }); break;
       case 'stop': entry.notesController?.abort(); break;
       case 'guideFolder':
