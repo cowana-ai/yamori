@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code, with a project map that shows where to start.",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -256,10 +256,21 @@
   },
   "keywords": [
     "pseudocode",
-    "code-understanding",
-    "cursor",
-    "codex",
-    "claude"
+    "code explanation",
+    "code understanding",
+    "code comprehension",
+    "code navigation",
+    "code reading",
+    "source code",
+    "programming",
+    "algorithm",
+    "project map",
+    "VS Code",
+    "Cursor",
+    "Claude Code",
+    "Codex",
+    "Python",
+    "TypeScript"
   ],
   "devDependencies": {
     "@vscode/tree-sitter-wasm": "0.3.1",
