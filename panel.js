@@ -361,6 +361,9 @@ textarea:focus { outline: 1px solid var(--read-ink); }
 .edit-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0; }
 .primary { background: var(--read-accent); color: var(--read-on-accent); border: 1px solid var(--read-accent); padding: 7px 11px; font-size: 12px; }
 .primary:hover:not(:disabled) { background: var(--read-accent); transform: translate(-1px, -1px); box-shadow: 2px 2px 0 var(--read-muted); }
+.review-status.running::before { content: '● '; animation: review-pulse 1.4s ease-in-out infinite; }
+@keyframes review-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .review-status.running::before { animation: none; } }
 .notice { color: var(--read-muted); margin: 0 0 20px; font-size: 12px; }
 .sync-warning { border: 1px solid var(--read-ink); padding: 12px; margin-bottom: 20px; }
 .sync-warning p { margin: 0 0 8px; font-size: 12px; }
@@ -430,7 +433,7 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
 <button id="source" class="crumb" title="Show this file in the editor">No file yet</button>
-<details class="ai-settings"><summary id="ai-summary" title="Which AI writes explanations, and how hard it thinks">AI ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 2 ▾</button></div></details>
+<details class="ai-settings"><summary id="ai-summary" title="Which AI writes explanations, and how hard it thinks">AI ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 1 ▾</button><button id="setup-ai" title="Install, sign in to or switch between Claude and ChatGPT">Set up AI…</button></div></details>
 <button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
 <div class="controls"><span class="control-label" id="detail-label">Detail</span><div class="segments" role="group" aria-labelledby="detail-label">
 <button data-level="overview" aria-pressed="false" title="Short: the goal and the main stages">Overview</button>
@@ -570,7 +573,7 @@ function render(s) {
   document.getElementById('model').textContent = (s.requestedModel || 'Default') + ' ▾';
   document.getElementById('model').title = 'New requests: ' + (s.requestedModel || 'provider default') + ' · Choose model';
   document.getElementById('effort').textContent = 'Effort: ' + (s.requestedEffort || 'Default') + ' ▾';
-  document.getElementById('refinement').textContent = 'Refine: ' + (s.refinementSteps ?? 2) + ' ▾';
+  document.getElementById('refinement').textContent = 'Refine: ' + (s.refinementSteps ?? 1) + ' ▾';
   document.getElementById('effort').title = 'New requests: ' + (s.requestedEffort || 'CLI default') + ' reasoning effort';
   const crumb = document.getElementById('source');
   crumb.replaceChildren();
@@ -594,12 +597,13 @@ function render(s) {
     content.append(notice);
   }
   if (s.modelNotice) content.append(node('p', s.modelNotice, 'notice'));
+  if (s.review) { const line = node('p', s.review.text, 'notice review-status ' + s.review.state); line.setAttribute('role', 'status'); content.append(line); }
   if (s.error) {
     const el = node('div', undefined, 'notice error'); el.setAttribute('role', 'alert'); el.append(node('p', s.error));
-    if (s.providerLabel === 'Claude Code') {
-      const connect = node('button', 'Connect Claude', 'primary'); connect.disabled = !!s.busy;
-      connect.title = 'Open Claude Code sign-in, or install its CLI if missing';
-      connect.addEventListener('click', () => send('connectClaude')); el.append(connect);
+    if (s.setupHint) {
+      const connect = node('button', 'Set up AI', 'primary'); connect.disabled = !!s.busy;
+      connect.title = 'Sign in, install, or switch to the other AI. Opens the setup screen.';
+      connect.addEventListener('click', () => send('setup')); el.append(connect);
     }
     content.append(el);
   }
@@ -807,10 +811,6 @@ function render(s) {
       const button = node('button', label, primary ? 'primary' : ''); button.addEventListener('click', () => send(type)); actions.append(button);
     }
     empty.append(actions);
-    if (s.providerLabel === 'Claude Code' && !s.error) {
-      const connect = node('button', 'Connect Claude'); connect.title = 'Sign in with Claude Code or install its CLI';
-      connect.addEventListener('click', () => send('connectClaude')); empty.append(connect);
-    }
     content.append(empty);
   }
   if (restoreEditorFocus && editing) draftEditors.get(editing.key)?.focus();
@@ -948,6 +948,7 @@ document.getElementById('provider').addEventListener('click', () => send('provid
 document.getElementById('model').addEventListener('click', () => send('model'));
 document.getElementById('effort').addEventListener('click', () => send('effort'));
 document.getElementById('refinement').addEventListener('click', () => send('refinement'));
+document.getElementById('setup-ai').addEventListener('click', () => send('setup'));
 document.addEventListener?.('keydown', event => { if (event.key === 'Escape') document.querySelector?.('.ai-settings')?.removeAttribute('open'); });
 document.getElementById('colors').addEventListener('click', () => send('palette'));
 document.getElementById('source').addEventListener('click', () => send('showSource'));

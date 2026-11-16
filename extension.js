@@ -3,10 +3,11 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./engine');
+const { reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./engine');
 const { panelHTML } = require('./panel');
 const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks } = require('./cache');
 const { mapHTML } = require('./map');
+const { setupHTML } = require('./setup');
 const project = require('./project');
 
 const INCLUDE = '**/*.{py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,h,hpp,rb,php,swift,dart,r,R,sh,bash,lua,pl,sql,vue,svelte}';
@@ -107,6 +108,28 @@ function hoverMarkdown(info, api = vscode) {
 function quickModel(provider, cliPath, api = vscode) {
   return fastModel(provider, cliPath, setting(api, 'fastModel', 'auto')).catch(() => undefined);
 }
+// Reviewers and the review rewrite: a cheaper model than the writer (setting).
+function reviewerFor(opts, api = vscode) {
+  return reviewModel(opts.provider, opts.cliPath, opts.model, setting(api, 'reviewModel', 'auto')).catch(() => undefined);
+}
+// How many requests write one explanation at once, and the parts they write:
+// whole top-level definitions found locally with tree-sitter, no AI.
+function parallelRequests(api = vscode) {
+  const value = Number(setting(api, 'parallelRequests', 6));
+  return Number.isInteger(value) ? Math.max(1, Math.min(8, value)) : 6;
+}
+let partIndexer;
+const EXTENSIONS = { python: '.py', javascript: '.js', javascriptreact: '.jsx', typescript: '.ts', typescriptreact: '.tsx', go: '.go', java: '.java', rust: '.rs' };
+async function partsFor(snapshot, parallel) {
+  if (parallel < 2 || !snapshot?.text) return undefined;
+  const ext = path.extname(snapshot.name || '') || EXTENSIONS[snapshot.language] || '';
+  if (!project.GRAMMAR_FOR[ext.toLowerCase()]) return undefined;
+  try {
+    partIndexer ||= new project.Indexer();
+    const record = await partIndexer.extract('part' + ext.toLowerCase(), snapshot.text);
+    return project.planParts(record.defs, snapshot.text, snapshot.startLine || 1, { maxParts: parallel });
+  } catch { return undefined; }
+}
 
 // The provider, model and effort the reader would use for its next request.
 function connectionOptions(globalState, provider, api = vscode) {
@@ -122,7 +145,7 @@ function connectionOptions(globalState, provider, api = vscode) {
 // Project map: one local graph (plus optional AI notes and moved node
 // positions) per mapped folder. The scan reads files but never runs them and
 // never asks a language service, so it also works in Restricted Mode.
-function createProjectMap(context, { openFile, api = vscode, indexer = new project.Indexer() } = {}) {
+function createProjectMap(context, { openFile, openSetup, api = vscode, indexer = new project.Indexer() } = {}) {
   const cache = new LocalCache(path.join(context.globalStorageUri.fsPath, 'cache'));
   const maps = new Map(), listeners = new Set();
   // Readers, hovers and CodeLens refresh when a map, its notes or an explanation change.
@@ -174,7 +197,7 @@ function createProjectMap(context, { openFile, api = vscode, indexer = new proje
   }
   function stateOf(entry) {
     const graph = entry.graph, notes = entry.notes;
-    const base = { readingPalette: context.globalState.get('readingPalette', 'auto'), busy: !!entry.busy, notesBusy: !!entry.notesController, autoNotes: setting(api, 'autoNotes', true) !== false && api.workspace.isTrusted !== false, progress: entry.progress, error: entry.error, notes: counts(entry),
+    const base = { readingPalette: context.globalState.get('readingPalette', 'auto'), busy: !!entry.busy, notesBusy: !!entry.notesController, autoNotes: setting(api, 'autoNotes', true) !== false, waitingForAI: !!entry.waitingForAI, progress: entry.progress, error: entry.error, notes: counts(entry),
       ...(entry.focus ? { focus: entry.focus.id, focusToken: entry.focus.token } : {}), ...(entry.viewRequest ? { view: entry.viewRequest.view, viewToken: entry.viewRequest.token } : {}) };
     if (!graph) return { ...base, folders: [], guide: { folder: '', steps: [] }, map: { boxes: [], nodes: [], edges: [] }, files: 0, links: 0 };
     const known = new Set(Object.keys(graph.files));
@@ -244,20 +267,31 @@ function createProjectMap(context, { openFile, api = vscode, indexer = new proje
     entry.queue = queue;
   }
   function unwatch(entry) { clearTimeout(entry.timer); clearTimeout(entry.notesTimer); entry.watchers?.forEach(item => item.dispose()); entry.watchers = undefined; }
-  // AI notes run on their own after each scan (auto) or from the button. Auto
-  // runs stay quiet, ask once only for big projects, and stop after a failure.
+  // AI notes run on their own after each scan and whenever a mapped file is
+  // opened, or from the button. Like explanations they are tool-free requests
+  // that never run project code, so Restricted Mode writes them too. Auto runs
+  // stay quiet, wait for a ready AI instead of failing, and ask first only for
+  // big projects.
   const AUTO_NOTES_LIMIT = 120;
   function scheduleAutoNotes(entry) {
-    if (setting(api, 'autoNotes', true) === false || api.workspace.isTrusted === false || entry.autoFailed || entry.autoDeclined || !entry.graph || !entry.panel) return;
+    if (setting(api, 'autoNotes', true) === false || entry.autoFailed || entry.autoDeclined || !entry.graph) return;
     clearTimeout(entry.notesTimer);
-    entry.notesTimer = setTimeout(() => { if (!entry.notesController && entry.panel) void runNotes(entry, { auto: true }); }, 1500);
+    entry.notesTimer = setTimeout(() => { if (!entry.notesController) void runNotes(entry, { auto: true }).catch(() => {}); }, 1500);
   }
   async function runNotes(entry, { auto = false } = {}) {
     if (entry.notesController) return;
     if (!auto) { entry.autoFailed = false; entry.autoDeclined = false; }
     if (!entry.graph) { if (auto) return; await scan(entry); }
     const graph = entry.graph; if (!graph) return;
-    const provider = PROVIDERS[context.globalState.get('provider')] ? context.globalState.get('provider') : 'codex';
+    const chosen = context.globalState.get('provider');
+    const status = PROVIDERS[chosen] ? await providerStatus(chosen, cliPathFor(api, chosen)).catch(() => undefined) : undefined;
+    if (!status?.ready) {
+      entry.waitingForAI = true; entry.error = ''; post(entry);
+      if (!auto) openSetup?.({ focus: chosen, pending: { label: 'write AI notes for ' + path.basename(entry.root.fsPath), run: () => runNotes(entry) } });
+      return;
+    }
+    entry.waitingForAI = false;
+    const provider = chosen;
     const main = connectionOptions(context.globalState, provider, api);
     const connection = { ...main, ...(await quickModel(provider, main.cliPath, api) || {}) };
     const rootReal = await fs.realpath(entry.root.fsPath);
@@ -323,6 +357,8 @@ function createProjectMap(context, { openFile, api = vscode, indexer = new proje
       else await run();
     } catch (e) {
       const stopped = controller.signal.aborted && !failure;
+      // A sign-in problem waits for Set up AI instead of needing the button.
+      if (auto && !stopped && isSetupProblem(e.message)) { clearProviderStatus(); entry.waitingForAI = true; entry.error = ''; return; }
       if (auto && !stopped) entry.autoFailed = true;
       entry.error = stopped ? 'AI notes stopped. Notes written so far are saved.' : (auto ? 'AI notes could not be written automatically: ' : 'AI notes failed: ') + e.message + (changed ? ' Notes written so far are saved.' : '') + (auto ? ' Press Write AI notes to retry.' : '');
     } finally { entry.notesController = undefined; entry.progress = undefined; post(entry); }
@@ -352,6 +388,7 @@ function createProjectMap(context, { openFile, api = vscode, indexer = new proje
       case 'revealSource': if (file) await reveal(entry, file, message.line); break;
       case 'rescan': await scan(entry); break;
       case 'notes': await runNotes(entry); break;
+      case 'setup': openSetup?.({ focus: context.globalState.get('provider'), pending: { label: 'write AI notes for ' + path.basename(entry.root.fsPath), run: () => runNotes(entry) } }); break;
       case 'stop': entry.notesController?.abort(); break;
       case 'guideFolder':
         if (typeof message.folder === 'string' && entry.graph && project.folderTree(entry.graph).some(item => item.key === message.folder)) { entry.guideFolder = message.folder; post(entry); }
@@ -529,6 +566,19 @@ function createProjectMap(context, { openFile, api = vscode, indexer = new proje
       changed();
     },
     rescanOpen() { for (const entry of maps.values()) if (entry.panel) void scan(entry); },
+    // An AI just became ready: maps that were waiting for one write their notes.
+    aiReady() {
+      for (const entry of maps.values()) {
+        if (!entry.graph || !(entry.waitingForAI || entry.autoFailed)) continue;
+        entry.waitingForAI = false; entry.autoFailed = false; entry.error = ''; post(entry); scheduleAutoNotes(entry);
+      }
+    },
+    // Opening a file of a mapped project fills in its missing notes.
+    async noteFile(uri) {
+      if (uri?.scheme !== 'file') return;
+      const entry = await entryForFile(uri).catch(() => undefined);
+      if (entry?.graph) scheduleAutoNotes(entry);
+    },
     dispose() { for (const entry of maps.values()) { entry.notesController?.abort(); unwatch(entry); entry.panel?.dispose?.(); } maps.clear(); }
   };
 }
@@ -542,30 +592,153 @@ async function migratePreferences(context) {
   await fs.unlink(file);
 }
 
-async function connectClaude(context, api = vscode, system = {}) {
-  let binary;
-  try { binary = await findCLI('claude', setting(api, 'claudePath'), system); }
-  catch (error) {
-    const choice = await api.window.showInformationMessage(error.message + ' Yamori can open Anthropic’s official installer in a visible terminal, then start its browser sign-in.', 'Install and sign in', 'Choose executable', 'Setup guide');
-    if (choice === 'Choose executable') { await api.commands.executeCommand('workbench.action.openSettings', 'yamori.claudePath'); return ''; }
-    if (choice === 'Setup guide') { await api.env.openExternal(api.Uri.parse('https://code.claude.com/docs/en/setup')); return ''; }
-    if (choice !== 'Install and sign in') return '';
-    const windows = (system.platform || process.platform) === 'win32';
-    const terminal = api.window.createTerminal(windows ? {
-      name: 'Yamori · Install Claude Code', cwd: system.home || os.homedir(),
-      shellPath: path.win32.join((system.env || process.env).SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+// ---- Setup: which AI explains code, and one button to make it ready ----
+const OWNERS = ['claude', 'codex'];
+const AI_NAMES = { claude: 'Claude', codex: 'ChatGPT' };
+function cliPathFor(api, owner) { return setting(api, owner === 'claude' ? 'claudePath' : 'codexPath'); }
+// The terminal behind Sign in / Install. Commands are fixed here; the webview
+// only names the provider. A failed install waits so its messages stay visible.
+function setupTerminal(context, api, owner, kind, binary, system = {}) {
+  const windows = (system.platform || process.platform) === 'win32', env = system.env || process.env, home = system.home || os.homedir();
+  const powershell = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const pause = ' || { echo; echo "Yamori: setup did not finish. Read the messages above, then close this terminal."; read -r _; }';
+  let options;
+  if (kind === 'signIn' && binary) {
+    const launch = cliLaunch(binary, owner === 'claude' ? ['auth', 'login'] : ['login']);
+    options = { name: owner === 'claude' ? 'Yamori · Claude sign-in' : 'Yamori · ChatGPT sign-in', shellPath: launch.command, shellArgs: launch.args, env: launch.env, cwd: home };
+  } else if (owner === 'claude') {
+    options = windows ? {
+      name: 'Yamori · Install Claude Code', cwd: home, shellPath: powershell,
       shellArgs: ['-NoProfile', '-NoExit', '-Command', '$ErrorActionPreference = "Stop"; irm https://claude.ai/install.ps1 | iex; $claudeExe = Join-Path $env:USERPROFILE ".local\\bin\\claude.exe"; if (Test-Path -LiteralPath $claudeExe) { & $claudeExe auth login } else { Write-Error "Claude Code installation did not finish. See the installer output above." }']
     } : {
-      name: 'Yamori · Install Claude Code', cwd: system.home || os.homedir(), shellPath: '/bin/bash',
-      shellArgs: ['-lc', 'set -euo pipefail; curl -fsSL https://claude.ai/install.sh | /bin/bash; "$HOME/.local/bin/claude" auth login']
-    });
-    context.subscriptions.push(terminal); terminal.show();
-    return 'Complete Claude Code installation and browser sign-in in the Yamori terminal, then press Refresh.';
+      name: 'Yamori · Install Claude Code', cwd: home, shellPath: '/bin/bash',
+      shellArgs: ['-lc', 'set -o pipefail; { curl -fsSL https://claude.ai/install.sh | /bin/bash && "$HOME/.local/bin/claude" auth login; }' + pause]
+    };
+  } else {
+    // Codex: npm when Node.js is installed, otherwise Homebrew. The user's own
+    // shell (login + interactive) sees the same PATH as their terminal.
+    const shell = /[\\/](?:zsh|bash)$/.test(env.SHELL || '') ? env.SHELL : '/bin/bash';
+    options = windows ? {
+      name: 'Yamori · Install Codex', cwd: home, shellPath: powershell,
+      shellArgs: ['-NoProfile', '-NoExit', '-Command', '$ErrorActionPreference = "Stop"; if (Get-Command npm -ErrorAction SilentlyContinue) { npm install -g @openai/codex; codex login } else { Write-Error "Codex needs Node.js. Install it from https://nodejs.org, then press Install Codex again." }']
+    } : {
+      name: 'Yamori · Install Codex', cwd: home, shellPath: shell,
+      shellArgs: ['-ilc', '{ if command -v npm >/dev/null 2>&1; then npm install -g @openai/codex; elif command -v brew >/dev/null 2>&1; then brew install --cask codex; else echo "Yamori: Codex needs Node.js (https://nodejs.org) or Homebrew (https://brew.sh). Install one, then press Install Codex again."; false; fi && hash -r && codex login; }' + pause]
+    };
   }
-  const launch = cliLaunch(binary, ['auth', 'login']);
-  const terminal = api.window.createTerminal({ name: 'Yamori · Claude sign-in', shellPath: launch.command, shellArgs: launch.args, env: launch.env, cwd: system.home || os.homedir() });
-  context.subscriptions.push(terminal); terminal.show();
-  return 'Complete Claude’s browser sign-in from the Yamori terminal, then press Refresh. Your credentials stay with Claude Code.';
+  const terminal = api.window.createTerminal(options);
+  context.subscriptions?.push(terminal); terminal.show();
+  return terminal;
+}
+// Cards for the setup screen, most ready first. Pure, so tests can read it.
+function setupView(statuses, { chosen, working = {}, pending, done } = {}) {
+  const card = owner => {
+    const s = statuses[owner] || {}, name = AI_NAMES[owner], cli = owner === 'claude' ? 'Claude Code' : 'Codex';
+    const lines = [s.installed
+      ? { state: 'yes', text: cli + ' installed' + (s.source && s.source !== 'Command line' ? ' · from ' + s.source : '') }
+      : { state: 'no', text: cli + ' not installed' }];
+    if (s.installed) lines.push(s.signedIn === true ? { state: 'yes', text: 'Signed in' + (s.account ? ' · ' + s.account : '') }
+      : s.signedIn === false ? { state: 'no', text: s.problem || 'Not signed in' } : { state: 'unknown', text: 'Sign-in not confirmed; Yamori will try it' });
+    let action;
+    if (working[owner]) action = { label: 'Show the ' + (working[owner] === 'install' ? 'install' : 'sign-in') + ' terminal', hint: 'Finish there (and in your browser). This page updates when you come back.' };
+    else if (s.ready) action = { label: 'Use ' + name, hint: 'Explanations use your ' + name + ' plan. Yamori never asks for an API key.' };
+    else if (s.installed) action = { label: owner === 'claude' ? 'Sign in to Claude' : 'Sign in with ChatGPT', hint: 'Opens a terminal and your browser. Sign in there; this page updates when you come back.' };
+    else action = { label: 'Install ' + cli, hint: owner === 'claude' ? 'Runs Anthropic’s official installer in a terminal, then opens sign-in. About a minute.' : 'Installs OpenAI’s Codex CLI in a terminal (with npm or Homebrew), then opens sign-in.' };
+    const alt = s.installed && s.signedIn !== false && !working[owner] ? { label: s.signedIn === true ? 'Use a different account' : 'Sign in' } : undefined;
+    return { id: owner, name, product: cli + ' · uses your ' + name + ' plan', lines, action, alt, ready: !!s.ready, badge: s.ready ? (chosen === owner ? 'In use' : 'Ready') : '' };
+  };
+  const rank = owner => (statuses[owner]?.ready ? 0 : statuses[owner]?.installed ? 2 : 4) + (owner === chosen ? 0 : 1);
+  const cards = [...OWNERS].sort((a, b) => rank(a) - rank(b)).map(card);
+  const other = OWNERS.find(owner => owner !== chosen);
+  const notice = PROVIDERS[chosen] && statuses[chosen] && !statuses[chosen].ready && statuses[other]?.ready ? `${AI_NAMES[chosen]} isn’t ready (${statuses[chosen].problem || 'not set up'}). ${AI_NAMES[other]} is ready to use instead.`
+    : OWNERS.every(owner => statuses[owner] && !statuses[owner].installed) ? 'Neither is on this computer yet. Pick the one whose plan you have; the install runs in a terminal you can watch.' : '';
+  const view = { title: 'Set up Yamori', lead: 'Yamori explains code with an AI you already use: Claude or ChatGPT. Choose one; setup takes about a minute and uses your own sign-in.',
+    next: pending?.label || '', notice, cards, foot: 'Yamori runs Claude Code or Codex on this computer with your sign-in and plan limits.' };
+  if (done) {
+    const s = statuses[done] || {};
+    view.done = { title: '✓ Yamori will use ' + AI_NAMES[done], text: (s.account ? 'Signed in · ' + s.account + '. ' : '') + 'Change it any time from AI ▾ in a Yamori tab, or with Yamori: Set Up AI.',
+      actions: [{ id: 'read', label: 'Explain current file' }, { id: 'map', label: 'Open project guide' }, { id: 'close', label: 'Close' }] };
+    view.lead = 'You’re ready. Click the gecko beside any script, or Yamori in the status bar.'; view.notice = '';
+  }
+  return view;
+}
+// The setup screen and the check behind every "can Yamori explain now?".
+function createSetup(context, { api = vscode, system = {}, status = providerStatus, onReady = () => {}, onNext = () => {} } = {}) {
+  let panel, pending, done, intent, checking = false, serial = 0, statuses = {};
+  const working = {}, terminals = new Map(), subscriptions = [];
+  if (api.window.onDidCloseTerminal) subscriptions.push(api.window.onDidCloseTerminal(terminal => {
+    const job = terminals.get(terminal); if (!job) return;
+    terminals.delete(terminal); delete working[job.owner]; clearProviderStatus(); void check().catch(() => {});
+  }));
+  // Coming back from the browser sign-in re-checks without a click.
+  if (api.window.onDidChangeWindowState) subscriptions.push(api.window.onDidChangeWindowState(state => { if (state.focused && panel && !done) void check().catch(() => {}); }));
+  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), checking, ...setupView(statuses, { chosen: context.globalState.get('provider'), working, pending, done }) });
+  const post = () => panel?.webview.postMessage({ type: 'setup', state: view() });
+  const statusOf = (owner, fresh) => status(owner, cliPathFor(api, owner), { fresh, system }).catch(error => ({ provider: owner, installed: false, signedIn: false, ready: false, problem: error.message }));
+  async function check() {
+    const id = ++serial; checking = true; post();
+    const results = await Promise.all(OWNERS.map(owner => statusOf(owner, true)));
+    if (id !== serial) return statuses;
+    statuses = Object.fromEntries(OWNERS.map((owner, index) => [owner, { ...results[index], provider: owner }])); checking = false;
+    // A sign-in or install started here continues by itself once it works.
+    if (intent && statuses[intent]?.ready) { const owner = intent; intent = undefined; await use(owner); return statuses; }
+    post(); return statuses;
+  }
+  async function use(owner) {
+    await context.globalState.update('provider', owner);
+    await context.globalState.update('setupDone', true);
+    try { onReady(owner); } catch { /* A listener cannot block setup. */ }
+    const next = pending; pending = undefined;
+    if (next) { done = undefined; panel?.dispose?.(); await next.run(); return; }
+    done = owner; post();
+  }
+  async function act(owner, which) {
+    if (!PROVIDERS[owner]) return;
+    const open = [...terminals].find(([, job]) => job.owner === owner);
+    if (which === 'primary' && open) { open[0].show(); return; }
+    const s = statuses[owner] || await statusOf(owner, true);
+    if (which === 'primary' && s.ready) return use(owner);
+    const kind = s.installed ? 'signIn' : 'install';
+    const terminal = setupTerminal(context, api, owner, kind, s.path, system);
+    terminals.set(terminal, { owner, kind }); working[owner] = kind; intent = owner; post();
+  }
+  async function receive(message) {
+    if (!message || typeof message.type !== 'string') return;
+    switch (message.type) {
+      case 'ready': post(); break;
+      case 'check': clearProviderStatus(); await check(); break;
+      case 'primary': case 'alt': await act(message.provider, message.type); break;
+      case 'next': if (['read', 'map', 'close'].includes(message.id)) { panel?.dispose?.(); if (message.id !== 'close') await onNext(message.id); } break;
+    }
+  }
+  return {
+    // Shows the screen; `pending` runs once an AI is chosen and ready.
+    async show({ pending: next } = {}) {
+      done = undefined;
+      if (next) pending = next;
+      if (panel) panel.reveal?.(panel.viewColumn);
+      else {
+        panel = api.window.createWebviewPanel('yamoriSetup', 'Set up Yamori', { viewColumn: api.ViewColumn.Active ?? api.ViewColumn.One, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
+        if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'yamori.png');
+        panel.webview.html = setupHTML(context.globalState.get('readingPalette', 'auto'));
+        panel.onDidDispose(() => { panel = undefined; pending = undefined; intent = undefined; });
+        panel.onDidChangeViewState?.(event => { if (event?.webviewPanel?.visible !== false && !done) void check().catch(() => {}); });
+        panel.webview.onDidReceiveMessage(message => receive(message).catch(error => api.window.showErrorMessage?.(error.message)));
+      }
+      post();
+      await check();
+    },
+    // Is the chosen AI usable now? Installed and not known to be signed out.
+    async ready() {
+      const chosen = context.globalState.get('provider');
+      if (!PROVIDERS[chosen]) return false;
+      const s = await statusOf(chosen, false);
+      statuses = { ...statuses, [chosen]: { ...s, provider: chosen } };
+      return !!s.ready;
+    },
+    receive,
+    dispose() { subscriptions.forEach(item => item.dispose?.()); panel?.dispose?.(); }
+  };
 }
 
 async function chooseInstalledProvider(context, api = vscode, discover = findCLI) {
@@ -581,7 +754,13 @@ async function activate(context) {
   await context.secrets.delete?.('geminiKey');
   const readers = new Map();
   let activeReader, readingColumn, lastEditor = vscode.window.activeTextEditor;
-  const projectMap = createProjectMap(context, { openFile: (uri, options) => open(uri, options) });
+  const projectMap = createProjectMap(context, { openFile: (uri, options) => open(uri, options), openSetup: options => setup.show(options) });
+  // Setup comes before the app: opening a file with no ready AI shows it first.
+  const setup = createSetup(context, {
+    onReady: owner => { for (const reader of readers.values()) reader.useProvider(owner); projectMap.aiReady(); },
+    onNext: async id => id === 'map' ? projectMap.show(undefined, (vscode.window.activeTextEditor || lastEditor)?.document.uri) : open(undefined, { ready: true })
+  });
+  context.subscriptions.push(setup);
   // One background preparation at a time, only for the next step of a tour.
   const prefetching = new Set();
   const notifyReaders = () => { for (const reader of readers.values()) reader.projectChanged(); };
@@ -683,7 +862,7 @@ async function activate(context) {
       const local = { subscriptions: [], globalState: context.globalState, globalStorageUri: context.globalStorageUri, extensionUri: context.extensionUri };
       const reader = createReader(local, {
         uri: key, column: () => readingColumn || vscode.ViewColumn.Beside,
-        open, browse, switchFile, connectClaude: () => connectClaude(context),
+        open, browse, switchFile, setup: () => setup.show(),
         projectContext: snapshot => projectMap.contextFor(snapshot),
         openMap: uri => projectMap.show(undefined, uri),
         revealDefinition: (uri, defined, column) => projectMap.revealDefinition(uri, defined, column),
@@ -703,11 +882,16 @@ async function activate(context) {
     return readers.get(key);
   }
   async function open(uri, options = {}) {
-    await chooseInstalledProvider(context);
     if (!uri && !vscode.window.activeTextEditor && activeReader?.snapshot()) { activeReader.focus(); return activeReader; }
     const editor = vscode.window.activeTextEditor || lastEditor;
     const doc = uri instanceof vscode.Uri ? await vscode.workspace.openTextDocument(uri) : editor?.document;
     if (!doc) return browse();
+    if (!options.ready && !(await setup.ready())) {
+      const name = path.basename(doc.uri.fsPath || doc.uri.path || 'this file');
+      await setup.show({ pending: { label: 'explain ' + name, run: () => open(doc.uri, { ...options, ready: true }) } });
+      return undefined;
+    }
+    void projectMap.noteFile(doc.uri).catch(() => {});
     const reader = readerFor(doc.uri);
     const selection = !uri && editor?.document === doc ? editor.selection : undefined;
     activeReader = reader;
@@ -759,6 +943,7 @@ async function activate(context) {
     const found = await files(root);
     if (found.length > 500) throw new Error('More than 500 source files. Choose a smaller folder in the Explorer.');
     if (!found.length) throw new Error('No supported source files found in this folder.');
+    if (!(await setup.ready())) { await setup.show({ pending: { label: 'prepare files in ' + path.basename(root.fsPath), run: () => prepareFolder(root) } }); return; }
     const picked = await vscode.window.showQuickPick(found.map(uri => ({ label: vscode.workspace.asRelativePath(uri), uri, picked: true })), { title: 'Yamori · Prepare files', placeHolder: 'Generate and cache files, then use Switch files to open them.', canPickMany: true });
     if (!picked?.length) return;
     let completed = 0, skipped = 0, stopped = false, failure, job;
@@ -786,7 +971,8 @@ async function activate(context) {
     try { return await fn(...args); } catch (e) { vscode.window.showErrorMessage(e.message); }
   }));
   command('yamori.read', open); command('yamori.browse', browse); command('yamori.project', prepareFolder); command('yamori.switchFile', switchFile);
-  command('yamori.connectClaude', () => connectClaude(context));
+  command('yamori.setup', () => setup.show());
+  command('yamori.connectClaude', () => setup.show());
   // Hidden commands behind hovers, CodeLens and links: open a file's explanation
   // at a line, or show the source line itself. Local files only.
   const fileTarget = uri => { const target = typeof uri === 'string' ? vscode.Uri.parse(uri) : uri; return target?.scheme === 'file' ? target : undefined; };
@@ -845,11 +1031,16 @@ async function activate(context) {
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => { for (const reader of readers.values()) reader.changed(event); }));
   if (vscode.workspace.onDidSaveTextDocument) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => { projectMap.saved(doc.uri); for (const reader of readers.values()) void reader.check(doc.uri, 'save').catch(() => {}); }));
   if (vscode.window.onDidChangeWindowState) context.subscriptions.push(vscode.window.onDidChangeWindowState(state => { if (state.focused) for (const reader of readers.values()) void reader.check(undefined, 'focus').catch(() => {}); }));
+  // First run: the setup screen when no AI is ready yet, otherwise a pointer
+  // to the gecko.
   if (!context.globalState.get('launcherHintShown') && vscode.window.showInformationMessage) {
     await context.globalState.update('launcherHintShown', true);
-    const action = vscode.window.activeTextEditor ? 'Open current file' : 'Choose a file';
-    void Promise.resolve(vscode.window.showInformationMessage('Yamori is ready. Click the gecko beside any script, or Yamori in the status bar.', action)).then(choice => {
-      if (choice === action) return vscode.commands.executeCommand(action === 'Open current file' ? 'yamori.read' : 'yamori.browse');
+    void setup.ready().then(ready => {
+      if (!ready) return setup.show();
+      const action = vscode.window.activeTextEditor ? 'Open current file' : 'Choose a file';
+      return Promise.resolve(vscode.window.showInformationMessage('Yamori is ready. Click the gecko beside any script, or Yamori in the status bar.', action)).then(choice => {
+        if (choice === action) return vscode.commands.executeCommand(action === 'Open current file' ? 'yamori.read' : 'yamori.browse');
+      });
     }).catch(error => vscode.window.showErrorMessage(error.message));
   }
   context.subscriptions.push({ dispose() { projectMap.dispose(); const closing = [...readers.values()].map(reader => reader.dispose()); readers.clear(); return Promise.all(closing); } });
@@ -864,6 +1055,10 @@ function createReader(context, navigation) {
   let blockTests = {}, runs = {}, runsKey;
   const runControllers = new Map();
   let selectedModel, modelNotice = '', activity = [];
+  // Background reviews by cache key: they outlive level switches and swap in
+  // improved blocks when they finish.
+  const backgroundReviews = new Map();
+  let reviewState;
   let level = context.globalState.get('detail', 'logic');
   let provider = context.globalState.get('provider', 'codex');
   if (!LEVELS[level]) level = 'logic';
@@ -1061,7 +1256,7 @@ function createReader(context, navigation) {
     if (key !== runsKey) { runsKey = key; for (const controller of runControllers.values()) controller.abort(); runControllers.clear(); runs = {}; }
     return runs;
   }
-  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, modelNotice, level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined, run, tour, focusLine, runs: currentRuns(),
+  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, review: reviewState && source && reviewState.key === keyFor(source, options()) ? { state: reviewState.state, text: reviewState.text } : undefined, modelNotice, setupHint: !!error && isSetupProblem(error), level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined, run, tour, focusLine, runs: currentRuns(),
     canRunTests: vscode.workspace.isTrusted !== false && !stale,
     blockTests: stale ? {} : Object.fromEntries(Object.entries(blockTests).map(([index, tests]) => [index, tests.map(({ id, name, function: fn, file, language }) => ({ id, name, function: fn, file, language }))])),
     symbols: symbols.map(({ name, file, line, kind, block, purpose, explained }) => ({ name, file, line, kind, block, purpose, explained })),
@@ -1103,7 +1298,8 @@ function createReader(context, navigation) {
       if (Number.isFinite(update.thinkingTokens)) run.thinkingTokens = update.thinkingTokens;
       stage('think', [run.thinkingTokens ? '~' + run.thinkingTokens.toLocaleString('en-US') + ' thinking tokens' : update.phase === 'Thinking' ? 'Thinking…' : update.phase,
         run.lookups ? run.lookups + ' lookup' + (run.lookups === 1 ? '' : 's') + ' · ' + run.lastLookup : ''].filter(Boolean).join(' · '));
-    } else if (update.stage === 'write') stage('write', Number.isFinite(update.characters) ? update.characters.toLocaleString('en-US') + ' characters written' : undefined);
+    } else if (update.stage === 'write') stage('write', [/parts in parallel/.test(update.phase || '') ? update.phase.replace(/^Writing /, '') : /^Parallel writing failed/.test(update.phase || '') ? 'Parallel writing failed; one request' : '',
+      Number.isFinite(update.characters) ? update.characters.toLocaleString('en-US') + ' characters written' : ''].filter(Boolean).join(' · ') || undefined);
     else if (update.stage === 'review') stage('review', update.detail || update.phase, update.done);
   }
   function progressFor(id, task, onPreview) {
@@ -1153,11 +1349,7 @@ function createReader(context, navigation) {
             if (term) await navigation.revealDefinition?.(source.uri, term.defined, sourceColumn);
             break;
           }
-          case 'connectClaude': {
-            const notice = await navigation.connectClaude();
-            if (notice) { error = ''; modelNotice = notice; post(); }
-            break;
-          }
+          case 'setup': await navigation.setup(); break;
           case 'provider': await chooseProvider(); break;
           case 'model': await chooseModel(); break;
           case 'effort': await chooseEffort(); break;
@@ -1221,7 +1413,7 @@ function createReader(context, navigation) {
   }
   function options(snapshot = source) {
     const { model, effort, cliPath } = connectionOptions(context.globalState, provider);
-    return { provider, level, model, effort, refinementSteps: refinementSteps(setting(vscode, 'refinementSteps', 2)), cliPath, revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
+    return { provider, level, model, effort, refinementSteps: refinementSteps(setting(vscode, 'refinementSteps', 1)), cliPath, revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
   }
   async function cached(s, opts) {
     if (opts.revision?.level === opts.level && matchesModel(opts.revision.value, opts) && (opts.revision.value.refinement?.stepsRequested || 0) === opts.refinementSteps) return opts.revision.value;
@@ -1305,10 +1497,12 @@ function createReader(context, navigation) {
     if (id !== serial) return;
     const opts = options(snapshot);
     await loadDrafts();
+    if (force) backgroundReviews.get(keyFor(snapshot, opts))?.abort();
     const ready = !force && memory.get(keyFor(snapshot, opts));
-    if (ready) { restoreStatus(ready._cacheMeta); result = ready; selectedModel = ready.model; error = ''; busy = false; progress = undefined; post(); return; }
+    if (ready) { restoreStatus(ready._cacheMeta); result = ready; selectedModel = ready.model; error = ''; busy = false; progress = undefined; post(); resumeReview(snapshot, opts, ready); return; }
     error = ''; busy = true; startedAt = Date.now(); progress = 'Checking cache'; activity = []; selectedModel = undefined; post();
     const task = new AbortController(); controller = task;
+    let pendingReview;
     try {
       let value = force ? undefined : await cached(snapshot, opts);
       if (value) restoreStatus(value._cacheMeta);
@@ -1318,9 +1512,12 @@ function createReader(context, navigation) {
         const tools = await agentTools(snapshot);
         if (id !== serial || task.signal.aborted) return;
         startRun(snapshot, opts, tools, 'Writing the ' + (LEVELS[opts.level]?.label || '') + ' explanation'); post();
-        const fast = await quickModel(opts.provider, opts.cliPath);
+        const parallel = parallelRequests();
+        const [fast, parts, review] = await Promise.all([quickModel(opts.provider, opts.cliPath), opts.level === 'logic' ? partsFor(snapshot, parallel) : undefined, opts.refinementSteps ? reviewerFor(opts) : undefined]);
         if (id !== serial || task.signal.aborted) return;
-        value = await generate({ source: snapshot, ...opts, tools, fast, signal: task.signal, onProgress: progressFor(id, task, update => { if (update.preview) preview = update.preview; }) });
+        if (parts) stage('write', parts.length + ' parts in parallel');
+        // The draft comes back as soon as it is written; review runs afterwards.
+        value = await generate({ source: snapshot, ...opts, tools, fast, parts, parallel, background: true, review, signal: task.signal, onProgress: progressFor(id, task, update => { if (update.preview) preview = update.preview; }) });
         if (id !== serial || task.signal.aborted) return;
         if (!await stillCurrent(snapshot)) { await inspect(undefined, 'change'); return; }
         staleBlocks.clear(); removedBlocks.clear(); stale = false; sourceMissing = false; changedRanges = [];
@@ -1332,12 +1529,63 @@ function createReader(context, navigation) {
       if (id !== serial) return;
       result = value;
       if (!value._cacheMeta) await save(snapshot, opts, value);
+      if (value.refinement?.status === 'pending') pendingReview = [snapshot, opts, value];
       selectedModel = value.model || selectedModel;
       if (activity.length) activity.push('Ready');
       const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === snapshot.uri);
       stale = sharedChange || staleBlocks.size > 0 || (doc ? hash(doc.getText()) !== snapshot.fullHash : false);
-    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; finishRun('failed'); } }
-    finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
+    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; if (isSetupProblem(error)) clearProviderStatus(); finishRun('failed'); } }
+    finally {
+      if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); }
+      if (pendingReview && id === serial) startBackgroundReview(...pendingReview);
+    }
+  }
+  // A cached draft whose review never finished (Yamori closed meanwhile) is
+  // reviewed again once it is shown.
+  function resumeReview(snapshot, opts, value) {
+    if (value?.refinement?.status === 'pending' && opts.refinementSteps) startBackgroundReview(snapshot, opts, value);
+  }
+  // Review after the draft is shown: improved blocks swap in when it finishes,
+  // unless the reader edited the explanation or the code changed meanwhile.
+  async function startBackgroundReview(snapshot, opts, draft) {
+    let key = keyFor(snapshot, opts);
+    if (backgroundReviews.has(key) || disposed) return;
+    const task = new AbortController(), owner = run && run.state !== 'running' && result === draft ? run : undefined;
+    backgroundReviews.set(key, task);
+    const reviewStep = () => owner?.steps.find(step => step.id === 'review');
+    try {
+      const [fast, review] = await Promise.all([quickModel(opts.provider, opts.cliPath), reviewerFor(opts)]);
+      if (task.signal.aborted || disposed) return;
+      const by = review?.model ? ' with ' + review.model : '';
+      reviewState = { key, state: 'running', text: 'Reviewing difficult blocks in the background' + by + '. You can read now; improved blocks swap in when it finishes.' };
+      const step = reviewStep();
+      if (step) Object.assign(step, { state: 'active', startedAt: Date.now(), endedAt: undefined, detail: 'In the background' + by });
+      post();
+      let reviewed;
+      try {
+        reviewed = await reviewDraft({ initial: draft, source: snapshot, level: opts.level, provider: opts.provider, cliPath: opts.cliPath, model: opts.model, effort: opts.effort, fast, review, steps: opts.refinementSteps, signal: task.signal,
+          onProgress: update => { const active = reviewStep(); if (active && update.detail && !task.signal.aborted) { active.detail = update.detail + (by ? ' ·' + by : ''); post(); } } });
+      } catch (error) {
+        if (task.signal.aborted) return;
+        reviewed = { ...draft, refinement: { version: REFINEMENT_VERSION, status: 'incomplete', stepsRequested: opts.refinementSteps, stepsCompleted: 0, selectedBlocks: [],
+          warning: (error.code === 'YAMORI_FIDELITY' ? 'The reviewers flagged possible inaccuracies they could not fix. Read this explanation with care, or press Retry review. ' : 'Review could not finish. The draft is kept; press Retry review to try again. ') + error.message.slice(0, 200) } };
+      }
+      if (task.signal.aborted || disposed || !await stillCurrent(snapshot)) return;
+      // An edit or a new explanation under this key since the draft wins.
+      if (memory.has(key) && memory.get(key) !== draft) return;
+      const showing = result === draft, info = reviewed.refinement || {};
+      if (info.acceptedStep && (!opts.revision || opts.revision.level === opts.level)) { opts = { ...opts, revision: await persistRevision(snapshot, opts, reviewed) }; }
+      await save(snapshot, opts, reviewed);
+      const improved = info.acceptedStep ? (info.selectedBlocks || []).map(index => reviewed.sections[index]?.title).filter(Boolean) : [];
+      const text = info.status === 'incomplete' ? 'Review could not finish; the draft is kept.' : info.status === 'skipped' ? 'Review: nothing needed a second look.'
+        : improved.length ? 'Review improved ' + improved.length + ' block' + (improved.length === 1 ? '' : 's') + ': ' + improved.join(', ') + '.' : 'Review checked the difficult blocks and found nothing to change.';
+      key = keyFor(snapshot, opts);
+      reviewState = { key, state: info.status === 'incomplete' ? 'failed' : 'done', text };
+      const done = reviewStep();
+      if (done) Object.assign(done, { state: info.status === 'incomplete' ? 'stopped' : 'done', endedAt: Date.now(), detail: text });
+      if (showing) result = reviewed;
+      post();
+    } finally { for (const [name, value] of backgroundReviews) if (value === task) backgroundReviews.delete(name); }
   }
   async function updateBlock(message) {
     if (busy || sourceMissing || staleBlocks.has(message.index) || !source || !result || !Number.isInteger(message.index)) return;
@@ -1348,11 +1596,12 @@ function createReader(context, navigation) {
     const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === snapshot.uri);
     if (doc && hash(doc.getText()) !== snapshot.fullHash) throw new Error('Source changed. Refresh before editing this explanation.');
     cancel(); const id = serial, opts = options(snapshot), task = new AbortController(); controller = task;
+    backgroundReviews.get(keyFor(snapshot, opts))?.abort();
     busy = true; modelNotice = ''; startedAt = Date.now(); activity = []; progress = 'Updating block'; post();
     try {
       const tools = await agentTools(snapshot);
       startRun(snapshot, opts, tools, 'Updating "' + original.title + '"'); post();
-      const updated = await generate({ source: snapshot, ...opts, tools, fast: await quickModel(opts.provider, opts.cliPath), edit: { section: original, draft: message.draft, instruction: message.instruction }, signal: task.signal, onProgress: progressFor(id, task, update => {
+      const updated = await generate({ source: snapshot, ...opts, tools, fast: await quickModel(opts.provider, opts.cliPath), review: opts.refinementSteps ? await reviewerFor(opts) : undefined, edit: { section: original, draft: message.draft, instruction: message.instruction }, signal: task.signal, onProgress: progressFor(id, task, update => {
         // Keep all other blocks untouched while the selected one streams.
         if (update.preview?.sections?.[0]) preview = { ...base, sections: base.sections.map((s, i) => i === message.index ? { ...update.preview.sections[0], title: original.title } : s) };
       }) });
@@ -1368,7 +1617,7 @@ function createReader(context, navigation) {
       await save(snapshot, { ...opts, revision }, value);
       if (id !== serial) return;
       result = value; selectedModel = value.model; error = ''; activity.push('Block updated and cached');
-    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; finishRun('failed'); } }
+    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; if (isSetupProblem(error)) clearProviderStatus(); finishRun('failed'); } }
     finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; post(); } }
   }
   async function read(doc, selection, settings = {}) {
@@ -1386,13 +1635,14 @@ function createReader(context, navigation) {
     const saved = await disk.latest(next, options(next), true);
     if (saved) {
       source = saved.meta.source; result = saved.value; restoreStatus(saved.meta); selectedModel = result.model; error = '';
-      modelNotice = (saved.meta.opts?.refinementSteps || 0) !== options().refinementSteps ? 'This cached result predates your refinement setting. Use Regenerate to apply it; opening the cache uses no AI.' : '';
+      modelNotice = (saved.meta.opts?.refinementSteps || 0) < options().refinementSteps ? 'This cached result predates your refinement setting. Use Regenerate to apply it; opening the cache uses no AI.' : '';
       await loadDrafts(); applySource(next, 'Source changed since the cached explanation');
       const fresh = await Promise.resolve(navigation.projectContext?.(source)).catch(() => undefined);
       if (fresh && fresh.fingerprint !== source.projectContext?.fingerprint) modelNotice = (modelNotice ? modelNotice + ' ' : '') + 'The project map has new context for this file. Use Regenerate to include it; opening the cache uses no AI.';
       if (settings.openSource) await showSource();
       if (settings.show !== false) { ensurePanel(); post(); }
       await inspect(undefined, 'open');
+      if (!stale && (saved.meta.opts?.refinementSteps || 0) === options().refinementSteps) resumeReview(source, options(), result);
       afterReady();
       return;
     }
@@ -1417,6 +1667,7 @@ function createReader(context, navigation) {
     const one = Number.isInteger(index);
     if (one && (!result.sections[index] || removedBlocks.has(index))) throw new Error('This code block was removed. Use Update from code to reorganize the explanation.');
     const base = result || refreshBase, previousSource = source, pending = [...staleBlocks];
+    backgroundReviews.get(keyFor(source, options()))?.abort();
     const contextSource = await withProjectContext(await collectCallContext({ ...source, callContext: undefined, projectContext: undefined }));
     const original = one ? base.sections[index] : undefined;
     const scope = one ? { ...contextSource, startLine: original.startLine, endLine: original.endLine, text: contextSource.text.split('\n').slice(original.startLine - contextSource.startLine, original.endLine - contextSource.startLine + 1).join('\n'), callContext: undefined } : contextSource;
@@ -1428,7 +1679,7 @@ function createReader(context, navigation) {
     try {
       const tools = await agentTools(contextSource);
       startRun(requestSource, opts, tools, one ? 'Updating one block from the code' : 'Updating the explanation from the code'); post();
-      const updated = await generate({ source: requestSource, ...opts, tools, fast: await quickModel(opts.provider, opts.cliPath), initialDraft: !one && !stale && result === base && base.refinement?.status === 'incomplete' ? base : undefined, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: progressFor(id, task) });
+      const updated = await generate({ source: requestSource, ...opts, tools, fast: await quickModel(opts.provider, opts.cliPath), review: opts.refinementSteps ? await reviewerFor(opts) : undefined, initialDraft: !one && !stale && result === base && base.refinement?.status === 'incomplete' ? base : undefined, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: progressFor(id, task) });
       if (id !== serial || task.signal.aborted || source.fullHash !== previousSource.fullHash) return;
       if (!await stillCurrent(contextSource)) { await inspect(undefined, 'change'); return; }
       if (id !== serial || task.signal.aborted || source.fullHash !== previousSource.fullHash) return;
@@ -1443,7 +1694,7 @@ function createReader(context, navigation) {
       if (id !== serial || task.signal.aborted) return;
       source = contextSource; trackSources(); result = value; refreshBase = undefined; restoreStatus({ ...freshStatus, savedAt: saved ? cacheSavedAt : undefined });
       selectedModel = value.model; activity.push(saved ? one ? 'Block refreshed and cached' : 'Explanation refreshed and cached' : 'Updated; local cache needs attention');
-    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; finishRun('failed'); } }
+    } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; if (isSetupProblem(error)) clearProviderStatus(); finishRun('failed'); } }
     finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
   }
   async function chooseProvider() {
@@ -1496,9 +1747,9 @@ function createReader(context, navigation) {
   }
   async function chooseRefinement() {
     const config = vscode.workspace.getConfiguration('yamori');
-    const selected = refinementSteps(setting(vscode, 'refinementSteps', 2));
+    const selected = refinementSteps(setting(vscode, 'refinementSteps', 1));
     const picked = await vscode.window.showQuickPick(Array.from({ length: 6 }, (_, value) => ({
-      label: value ? `${value} refinement step${value === 1 ? '' : 's'}${value === 2 ? ' · Default' : ''}` : 'Off · Fast draft', value, picked: value === selected,
+      label: value ? `${value} refinement step${value === 1 ? '' : 's'}${value === 1 ? ' · Default' : ''}` : 'Off · Fast draft', value, picked: value === selected,
       description: value ? `Up to ${3 * value + 4} model requests per new explanation` : 'One generation request',
       detail: value ? 'A selector picks difficult blocks; two parallel evaluators review only those blocks after generation and each revision. Only the best reviewed result is shown.' : 'Skip the evaluator loop. Cached results are never reviewed automatically.'
     })), { title: 'Yamori · Refinement steps', placeHolder: 'Uses your selected provider, model and effort. More steps take longer and use more of your plan.' });
@@ -1551,6 +1802,8 @@ function createReader(context, navigation) {
     read, showSource, chooseProvider, chooseModel, chooseEffort, chooseReadingColors, chooseRefinement,
     snapshot: () => source, isBusy: () => busy, hasPanel: () => !!panel, hasResult: () => !!result, failure: () => error, focusAt,
     projectChanged() { if (panel && source && !disposed) void refreshProjectView(); },
+    // Set up AI picked a provider: new requests use it (not while writing).
+    useProvider(value) { if (!PROVIDERS[value] || value === provider || busy) return; provider = value; error = ''; modelNotice = ''; if (panel) post(); },
     stop: cancel,
     focus() { ensurePanel(); post(); },
     async clear() { clearTimeout(persistTimer); for (const timer of watchTimers.values()) clearTimeout(timer); watchTimers.clear(); cancel(); result = undefined; refreshBase = undefined; await disk.flush(); memory.clear(); revisions.clear(); revisionLoaded.clear(); draftScopes.clear(); error = ''; cacheWarning = ''; restoreStatus(); panel?.webview.postMessage({ type: 'cacheCleared' }); post(); },
@@ -1559,6 +1812,7 @@ function createReader(context, navigation) {
       if (disposed) return;
       const pendingSave = !!persistTimer; clearTimeout(persistTimer); persistTimer = undefined;
       disposed = true; for (const timer of watchTimers.values()) clearTimeout(timer); watchTimers.clear(); cancel(); clearHighlight();
+      for (const review of backgroundReviews.values()) review.abort(); backgroundReviews.clear();
       const closing = pendingSave && source && result ? save(source, options(), result) : disk.flush();
       panel?.dispose?.(); panel = undefined;
       for (const subscription of context.subscriptions.splice(0)) subscription?.dispose?.();
@@ -1568,4 +1822,4 @@ function createReader(context, navigation) {
   };
   return reader;
 }
-module.exports = { hoverMarkdown, createProjectMap, connectionOptions, chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext, connectClaude };
+module.exports = { hoverMarkdown, createProjectMap, createSetup, setupView, setupTerminal, connectionOptions, chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext };

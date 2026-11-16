@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code, with a project map that shows where to start.",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -24,6 +24,8 @@
         "yamori.codexPath",
         "yamori.claudePath",
         "yamori.refinementSteps",
+        "yamori.reviewModel",
+        "yamori.parallelRequests",
         "yamori.agentTools",
         "yamori.autoNotes",
         "yamori.pythonPath"
@@ -52,6 +54,10 @@
       {
         "command": "yamori.provider",
         "title": "Yamori: Choose Provider"
+      },
+      {
+        "command": "yamori.setup",
+        "title": "Yamori: Set Up AI"
       },
       {
         "command": "yamori.connectClaude",
@@ -131,6 +137,10 @@
         {
           "command": "yamori.showSource",
           "when": "false"
+        },
+        {
+          "command": "yamori.connectClaude",
+          "when": "false"
         }
       ]
     },
@@ -155,14 +165,26 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Optional absolute path to Claude Code CLI."
+          "description": "Optional absolute path to Claude Code CLI. Otherwise detected automatically, including the copy inside Claude Desktop."
         },
         "yamori.refinementSteps": {
           "type": "integer",
-          "default": 2,
+          "default": 1,
           "minimum": 0,
           "maximum": 5,
-          "description": "Maximum refinement steps for difficult blocks. A selector skips straightforward functions; two parallel evaluators check uncertainty and reading cost. Up to 3N+4 model requests per new explanation, or 2 if no hard blocks. 0 skips selection and refinement. Cached reads use no AI."
+          "description": "Maximum refinement steps for difficult blocks. A selector skips straightforward functions; two reviewers check uncertainty and reading cost; a rewrite is kept only if both find it better and faithful. New explanations are reviewed in the background after the draft is shown, with yamori.reviewModel. Up to 3N+4 model requests per new explanation, or 2 if no hard blocks. 0 skips selection and refinement. Cached reads use no AI."
+        },
+        "yamori.parallelRequests": {
+          "type": "integer",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "How many requests write one Logic explanation at the same time. Yamori splits a bigger file locally (no AI) into parts made of whole functions and classes; each request explains one part with the whole file as context, so the draft is ready about when the slowest part is. 1 writes the whole file in one request. More parts use more of your plan for the same output."
+        },
+        "yamori.reviewModel": {
+          "type": "string",
+          "default": "auto",
+          "description": "Model for the reviewers and the review rewrite, which run in the background after the draft is shown. auto uses one tier below your writer, never above it: Sonnet under Opus or Claude's default, or Codex's balanced catalog model (Terra) under its default; if you already chose a smaller writer, reviews use it. main uses your writer's model; or enter an exact model ID."
         },
         "yamori.agentTools": {
           "type": "boolean",
@@ -182,7 +204,7 @@
         "yamori.autoNotes": {
           "type": "boolean",
           "default": true,
-          "description": "Write AI notes (file purposes, project terms and a project overview) automatically when the Project guide maps a folder, and re-note changed files after rescans. Uses your AI settings; asks first for projects with more than 120 files. Off in Restricted Mode."
+          "description": "Write AI notes (file purposes, project terms and a project overview) automatically once a folder is mapped, when you open its files, and after rescans. Waits until an AI is set up; asks first for projects with more than 120 files. Notes are tool-free requests and never run project code, so they also work in Restricted Mode."
         },
         "yamori.fastModel": {
           "type": "string",
@@ -209,7 +231,7 @@
   },
   "scripts": {
     "test": "node --test test.js",
-    "check": "node --check extension.js && node --check engine.js && node --check panel.js && node --check cache.js && node --check schemas.js && node --check validation.min.js && node --check project.js && node --check map.js && node --check mcp.js",
+    "check": "node --check extension.js && node --check engine.js && node --check panel.js && node --check cache.js && node --check schemas.js && node --check validation.min.js && node --check project.js && node --check map.js && node --check setup.js && node --check mcp.js",
     "build:validation": "node schemas.js",
     "build:parser": "node project.js"
   },
@@ -230,6 +252,7 @@
     "validation.min.js",
     "project.js",
     "map.js",
+    "setup.js",
     "grammars/",
     "mcp.js",
     "runner/"

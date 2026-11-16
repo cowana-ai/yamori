@@ -273,8 +273,9 @@ function parseResult(raw, source, { dropInvalidLinks = false } = {}) {
   if (review?.version === REFINEMENT_VERSION && Number.isInteger(review.stepsRequested) && review.stepsRequested >= 1 && review.stepsRequested <= 5 && Number.isInteger(review.stepsCompleted) && review.stepsCompleted >= 0 && review.stepsCompleted <= review.stepsRequested) {
     const selectedBlocks = Array.isArray(review.selectedBlocks) && review.selectedBlocks.length <= 6 && new Set(review.selectedBlocks).size === review.selectedBlocks.length && review.selectedBlocks.every(index => Number.isInteger(index) && index >= 0 && index < sections.length) ? review.selectedBlocks : undefined;
     if (review.status === 'incomplete' && selectedBlocks && typeof review.warning === 'string' && review.warning.trim()) result.refinement = { version: REFINEMENT_VERSION, status: 'incomplete', stepsRequested: review.stepsRequested, stepsCompleted: review.stepsCompleted, selectedBlocks, warning: review.warning.slice(0, 500) };
+    else if (review.status === 'pending' && review.stepsCompleted === 0) result.refinement = { version: REFINEMENT_VERSION, status: 'pending', stepsRequested: review.stepsRequested, stepsCompleted: 0, selectedBlocks: [] };
     else if (review.status === 'skipped' && selectedBlocks?.length === 0 && review.stepsCompleted === 0) result.refinement = { version: REFINEMENT_VERSION, stepsRequested: review.stepsRequested, stepsCompleted: 0, selectedBlocks: [], status: 'skipped' };
-    else if (Number.isInteger(review.acceptedStep) && review.acceptedStep >= 0 && review.acceptedStep <= review.stepsCompleted && review.faithful === true && review.lambda === READ_COST_WEIGHT && ['initialObjective','finalObjective','entropy','readCost'].every(name => Number.isFinite(review[name]) && review[name] >= 0 && review[name] <= 15) && Array.isArray(review.history) && review.history.length <= 6 && review.history.every(row => Number.isInteger(row.step) && row.step >= 0 && row.step <= review.stepsRequested && ['entropy','readCost','objective'].every(name => Number.isFinite(row[name]) && row[name] >= 0 && row[name] <= 15) && typeof row.faithful === 'boolean' && typeof row.accepted === 'boolean')) result.refinement = { version: REFINEMENT_VERSION, stepsRequested: review.stepsRequested, stepsCompleted: review.stepsCompleted, acceptedStep: review.acceptedStep, lambda: review.lambda, initialObjective: review.initialObjective, finalObjective: review.finalObjective, entropy: review.entropy, readCost: review.readCost, faithful: true, history: review.history.map(row => ({ step: row.step, entropy: row.entropy, readCost: row.readCost, objective: row.objective, faithful: row.faithful, accepted: row.accepted })), ...(selectedBlocks ? { selectedBlocks, status: 'reviewed' } : {}), ...(typeof review.warning === 'string' ? { warning: review.warning.slice(0, 500) } : {}) };
+    else if (Number.isInteger(review.acceptedStep) && review.acceptedStep >= 0 && review.acceptedStep <= review.stepsCompleted && review.faithful === true && review.lambda === READ_COST_WEIGHT && ['initialObjective','finalObjective','entropy','readCost'].every(name => Number.isFinite(review[name]) && review[name] >= 0 && review[name] <= 15) && Array.isArray(review.history) && review.history.length <= 6 && review.history.every(row => Number.isInteger(row.step) && row.step >= 0 && row.step <= review.stepsRequested && ['entropy','readCost','objective'].every(name => Number.isFinite(row[name]) && row[name] >= 0 && row[name] <= 15) && typeof row.faithful === 'boolean' && typeof row.accepted === 'boolean')) result.refinement = { version: REFINEMENT_VERSION, stepsRequested: review.stepsRequested, stepsCompleted: review.stepsCompleted, acceptedStep: review.acceptedStep, lambda: review.lambda, initialObjective: review.initialObjective, finalObjective: review.finalObjective, entropy: review.entropy, readCost: review.readCost, faithful: true, history: review.history.map(row => ({ step: row.step, entropy: row.entropy, readCost: row.readCost, objective: row.objective, faithful: row.faithful, accepted: row.accepted })), ...(selectedBlocks ? { selectedBlocks, status: 'reviewed' } : {}), ...(typeof review.warning === 'string' ? { warning: review.warning.slice(0, 500) } : {}), ...(typeof review.reviewModel === 'string' && review.reviewModel ? { reviewModel: review.reviewModel.slice(0, 100) } : {}) };
   }
   if (value.views && typeof value.views === 'object') {
     result.views = {};
@@ -299,7 +300,9 @@ async function findCLI(provider, configured, system = {}) {
     ...(!windows && name === 'codex' ? [
       '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex',
       '/Applications/Codex.app/Contents/Resources/codex'
-    ] : [])
+    ] : []),
+    // Claude Desktop downloads its own copy of Claude Code; it shares the sign-in.
+    ...(name === 'claude' ? await desktopClaude(platform, env, home, io, paths) : [])
   ];
   if (configured && !paths.isAbsolute(candidates[0])) throw new Error('Choose an absolute path to your installed ' + PROVIDERS[provider] + ' CLI in Yamori settings.');
   let launcherFound = false;
@@ -324,8 +327,89 @@ async function findCLI(provider, configured, system = {}) {
     } catch { /* Try another installed executable. */ }
   }
   if (launcherFound) throw new Error(`${PROVIDERS[provider]} has a Windows launcher Yamori could not resolve. Install the native CLI, or set Yamori's executable path to its .exe file.`);
-  throw new Error(`${PROVIDERS[provider]} CLI was not found. ${provider === 'claude' ? 'The Claude desktop app alone does not provide the terminal CLI Yamori needs. Use Connect Claude to install or select Claude Code.' : 'Install Codex or set its executable path in Yamori settings.'}`);
+  throw new Error(`${PROVIDERS[provider]} was not found on this computer. Use Set up AI to install it${provider === 'claude' ? '' : ' (or install the ChatGPT desktop app)'}, or set its executable path in Yamori settings.`);
 }
+// Claude Desktop keeps Claude Code under <app data>/Claude/claude-code/<version>/...
+// (macOS: .../claude.app/Contents/MacOS/claude). Newest version first; the
+// sibling claude-code-vm folder holds a Linux build for its sandbox and is skipped.
+async function desktopClaude(platform, env, home, io, paths) {
+  const base = platform === 'darwin' ? paths.join(home, 'Library', 'Application Support', 'Claude', 'claude-code')
+    : platform === 'win32' ? paths.join(env.APPDATA || paths.join(home, 'AppData', 'Roaming'), 'Claude', 'claude-code') : undefined;
+  if (!base || !io.readdir) return [];
+  const binary = platform === 'win32' ? 'claude.exe' : 'claude', found = [];
+  const walk = async (dir, depth) => {
+    let entries;
+    try { entries = await io.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = paths.join(dir, entry.name);
+      if (entry.isDirectory()) { if (depth < 5) await walk(full, depth + 1); }
+      else if (entry.name === binary && (platform === 'win32' || /[\\/]Contents[\\/]MacOS$/.test(dir) || depth === 1)) found.push(full);
+    }
+  };
+  let versions;
+  try { versions = (await io.readdir(base, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name); } catch { return []; }
+  const parts = name => name.split(/[^\d]+/).filter(Boolean).map(Number);
+  versions.sort((a, b) => { const x = parts(a), y = parts(b); for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (y[i] || 0) - (x[i] || 0); return 0; });
+  for (const version of versions.slice(0, 4)) await walk(paths.join(base, version), 1);
+  return found;
+}
+// Where a CLI came from, in words for the setup screen.
+function cliSource(binary = '') {
+  if (/[\\/]Claude[\\/]claude-code[\\/]/.test(binary)) return 'Claude Desktop';
+  if (/ChatGPT\.app/.test(binary)) return 'ChatGPT app';
+  if (/Codex\.app/.test(binary)) return 'Codex app';
+  return 'Command line';
+}
+// Installed? Signed in? Asked of the CLI itself (claude auth status, codex
+// login status); no model request and no quota. Unknown answers (an older CLI
+// without these commands, a timeout) count as usable so they never block.
+const statusCache = new Map();
+function clearProviderStatus() { statusCache.clear(); }
+function statusProcess(binary, args, timeout) {
+  return new Promise(resolve => {
+    let child, out = '', done = false;
+    const finish = value => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
+    const timer = setTimeout(() => { try { child?.kill(); } catch { /* exited */ } finish({ code: null, out, timedOut: true }); }, timeout);
+    try { child = spawnCLI(binary, args, { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (error) { finish({ code: null, out: error.message }); return; }
+    child.stdout.on('data', data => { out = (out + data).slice(-8000); });
+    child.stderr.on('data', data => { out = (out + data).slice(-8000); });
+    child.on('error', error => finish({ code: null, out: out + error.message }));
+    child.on('close', code => finish({ code, out }));
+  });
+}
+function readStatus(provider, { code, out, timedOut }) {
+  if (timedOut) return { signedIn: null, problem: 'Sign-in could not be checked (the CLI took too long).' };
+  if (provider === 'claude') {
+    const json = out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1);
+    let value; try { value = json && JSON.parse(json); } catch { value = undefined; }
+    if (value && typeof value.loggedIn === 'boolean') {
+      if (!value.loggedIn) return { signedIn: false, problem: 'Not signed in' };
+      const plan = typeof value.subscriptionType === 'string' && value.subscriptionType ? value.subscriptionType + ' plan' : '';
+      const via = value.apiProvider && value.apiProvider !== 'firstParty' ? 'via ' + value.apiProvider : value.authMethod === 'api-key' || value.authMethod === 'apiKey' ? 'API key' : '';
+      return { signedIn: true, account: [typeof value.email === 'string' ? value.email : '', plan, via].filter(Boolean).join(' · ').slice(0, 120) };
+    }
+  }
+  if (/not\s+(?:logged|signed)\s+in|no\s+credentials|login\s+required|please\s+(?:log|sign)\s*in/i.test(out)) return { signedIn: false, problem: 'Not signed in' };
+  if (/expired/i.test(out)) return { signedIn: false, problem: 'Sign-in expired' };
+  if (provider === 'codex' && code === 0 && /logged\s+in/i.test(out)) return { signedIn: true, account: /chatgpt/i.test(out) ? 'ChatGPT account' : /api\s*key/i.test(out) ? 'API key' : '' };
+  return { signedIn: null, problem: code === 0 ? '' : 'Sign-in could not be checked.' };
+}
+async function providerStatus(provider, configured = '', { fresh = false, system, timeout = 10000 } = {}) {
+  let binary;
+  try { binary = await findCLI(provider, configured, system); }
+  catch (error) { return { provider, installed: false, signedIn: false, ready: false, problem: 'Not installed', detail: error.message }; }
+  const key = provider + '\0' + binary, cached = statusCache.get(key);
+  if (!fresh && cached && cached.expires > Date.now()) return cached.value;
+  const read = readStatus(provider, await statusProcess(binary, provider === 'claude' ? ['auth', 'status'] : ['login', 'status'], timeout));
+  const value = { provider, installed: true, path: binary, source: cliSource(binary), ...read, ready: read.signedIn !== false };
+  // Good answers are kept for 10 minutes; anything else is asked again next time.
+  if (value.signedIn === true) statusCache.set(key, { value, expires: Date.now() + 600000 }); else statusCache.delete(key);
+  return value;
+}
+// Errors that mean "set up the AI" rather than "try again".
+const SETUP_PROBLEM = /was not found on this computer|CLI was not found|not\s+(?:logged|signed)\s+in|log\s*in|sign\s*in|authenticat|unauthori[sz]ed|\b401\b|credential|expired|ENOENT/i;
+function isSetupProblem(message) { return SETUP_PROBLEM.test(String(message || '')); }
 function cliLaunch(binary, args, env = process.env) {
   if (/\.[cm]?js$/i.test(binary)) return { command: process.execPath, args: [binary, ...args], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
   return { command: binary, args, env };
@@ -545,6 +629,24 @@ async function fastModel(provider, cliPath = '', preference = 'auto') {
   const model = await fastModelCache.get(key);
   // Without a fast catalog model, the main model at low effort is the quick path.
   return model ? { model: model.id, effort: model.efforts.some(item => item.reasoningEffort === 'low') ? 'low' : null } : { effort: 'low' };
+}
+// Reviewers and the review rewrite run one tier below the writer, never above
+// it: Sonnet under Opus (or Claude's default), Codex's balanced catalog model
+// under its workhorse. 'main' keeps the writer's model; any other value is an
+// exact model ID.
+const reviewCatalogCache = new Map();
+async function reviewModel(provider, cliPath = '', mainModel = '', preference = 'auto', catalog) {
+  const choice = typeof preference === 'string' ? preference.trim() : 'auto';
+  if (choice === 'main' || choice === '') return undefined;
+  if (choice !== 'auto') return { model: choice, effort: provider === 'claude' && !/^(haiku|sonnet|opus|fable)$|claude-/.test(choice) ? null : 'low' };
+  if (provider === 'claude') return !mainModel || /opus/i.test(mainModel) ? { model: 'sonnet', effort: 'low' } : undefined;
+  if (provider !== 'codex' || (mainModel && !/astra|sol/i.test(mainModel))) return undefined;
+  if (!catalog) {
+    if (!reviewCatalogCache.has(cliPath)) reviewCatalogCache.set(cliPath, listModels('codex', cliPath).catch(() => []));
+    catalog = await reviewCatalogCache.get(cliPath);
+  }
+  const middle = catalog.find(model => /terra|balanced/i.test([model.id, model.label, model.description].join(' ')));
+  return middle ? { model: middle.id, effort: (middle.efforts || []).some(item => item.reasoningEffort === 'low') ? 'low' : null } : undefined;
 }
 const REFINEMENT_VERSION = 1, READ_COST_WEIGHT = 0.5;
 const refinementSteps = value => Number.isInteger(value) ? Math.max(0, Math.min(5, value)) : 0;
@@ -835,7 +937,7 @@ async function requestStructured({ prompt, schema, provider, cliPath, model = ''
         const toolArgs = server ? ['--allowedTools', 'mcp__' + MCP_NAME + '__*', ...(capabilities.permissionPrompts ? ['--permission-prompts', 'none'] : [])] : [];
         raw = await runProcess(binary, ['-p', ...(model ? ['--model', model] : []), '--output-format', onProgress ? 'stream-json' : 'json', ...(onProgress ? ['--verbose', '--include-partial-messages'] : []), ...(effort ? ['--effort', effort] : []), '--tools', '', '--strict-mcp-config', '--mcp-config', mcpConfig, ...toolArgs, ...settingsArgs, '--disable-slash-commands', '--no-session-persistence', '--json-schema', JSON.stringify(schema)], prompt, { cwd: dir, provider, signal, onStdout, timeout: requestTimeout(effort) });
         if (onStdout && pending.trim()) onStdout('\n');
-        if (!envelope) { try { envelope = JSON.parse(raw); } catch { throw new Error('Claude Code returned an unexpected response. Use Connect Claude to check setup, and update Claude Code if your CLI is older.'); } }
+        if (!envelope) { try { envelope = JSON.parse(raw); } catch { throw new Error('Claude Code returned an unexpected response. Use Set up AI to check its sign-in, and update Claude Code if your CLI is older.'); } }
         if (envelope.is_error) throw new Error(redact(String(envelope.result || envelope.errors?.join('\n') || 'Claude could not complete the request.')));
         const used = Object.keys(envelope.modelUsage || {});
         if (used.length) actualModel = used.join(', ');
@@ -848,7 +950,76 @@ async function requestStructured({ prompt, schema, provider, cliPath, model = ''
   } else throw new Error('Unknown provider.');
   return { raw, actualModel, toolCalls };
 }
-async function generate({ source, level, provider, cliPath, model = '', effort = provider === 'claude' ? null : 'low', signal, onProgress, edit, revision, sourceRefresh, initialDraft, refinementSteps: requestedSteps = 0, tools, fast }) {
+// ---- Parallel parts ---------------------------------------------------------
+// One file, several writers: each explains its own line range with the whole
+// file as context. The draft is ready when the slowest part is.
+function partPrompt(base, parts, index) {
+  const part = parts[index], names = list => list?.length ? ' (' + list.slice(0, 12).join(', ') + ')' : '';
+  const others = parts.map((other, i) => i === index ? '' : `part ${i + 1}: lines ${other.startLine}–${other.endLine}${names(other.names)}`).filter(Boolean);
+  return base + `
+PARALLEL PART ${index + 1} OF ${parts.length}: Several writers explain this file at the same time, one part each. You write ONLY part ${index + 1}: source lines ${part.startLine}–${part.endLine}${names(part.names)}. The rest of the file is context for understanding your part; do not explain it.
+- Every section's startLine/endLine and every lineMap range must lie within ${part.startLine}–${part.endLine}. Cover the important code of your part in useful sections.
+- Other writers explain ${others.join('; ')}. When your part uses something defined there, name it briefly instead of explaining it.
+- ${index === 0 ? 'Your title and summary describe the WHOLE file, not only your part.' : 'Keep title and summary to a few words; only the sections are shown.'}`;
+}
+// Sections stay inside their part; links that leave it are dropped.
+function clampToPart(view, part) {
+  const sections = view.sections.map(section => {
+    const startLine = Math.max(part.startLine, section.startLine), endLine = Math.min(part.endLine, section.endLine);
+    if (endLine < startLine) return undefined;
+    return { ...section, startLine, endLine, ...(section.lineMap ? { lineMap: section.lineMap.filter(link => link.startLine >= part.startLine && link.endLine <= part.endLine) } : {}) };
+  }).filter(Boolean);
+  return { ...view, sections };
+}
+async function writeParts({ base, parts, writer, source, tools, signal, onProgress, parallel }) {
+  const count = parts.length, results = new Array(count), previews = new Array(count), characters = new Array(count).fill(0);
+  const stop = new AbortController(), relay = () => stop.abort();
+  signal?.addEventListener('abort', relay, { once: true });
+  if (signal?.aborted) stop.abort();
+  let done = 0;
+  const combined = () => ({ title: (results[0] || previews[0])?.title || '', summary: (results[0] || previews[0])?.summary || '',
+    sections: parts.flatMap((_, index) => results[index]?.sections || (previews[index]?.sections || []).filter(section => section.pseudocode)) });
+  const emit = () => onProgress?.({ phase: `Writing ${count} parts in parallel (${done}/${count} done)`, stage: 'write', characters: characters.reduce((a, b) => a + b, 0), preview: combined() });
+  const request = (prompt, progress) => {
+    const call = withTools => requestStructured({ ...writer, signal: stop.signal, prompt: withTools ? prompt + TOOLS_SECTION : prompt, schema: SCHEMA, onProgress: progress, showPreview: true, ...(withTools ? { tools } : {}) });
+    if (!tools) return call(false);
+    return call(true).catch(error => { if (stop.signal.aborted || /took too long|Cancelled/.test(error.message)) throw error; return call(false); });
+  };
+  const one = async index => {
+    const prompt = partPrompt(base, parts, index);
+    // Thinking and start-up come from part 1 only; lookups from every part.
+    const progress = update => {
+      if (update.stage === 'write') { characters[index] = update.characters || characters[index]; if (update.preview) previews[index] = update.preview; emit(); }
+      else if (index === 0 || update.lookup) onProgress?.(update);
+    };
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await request(prompt, progress), part = parts[index];
+        // A section that strays past its part (or the file) is clamped or dropped, not fatal.
+        const data = JSON.parse(response.raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+        data.sections = (Array.isArray(data.sections) ? data.sections : []).flatMap(section => {
+          const startLine = Math.max(part.startLine, Number(section?.startLine)), endLine = Math.min(part.endLine, Number(section?.endLine));
+          return Number.isInteger(startLine) && Number.isInteger(endLine) && endLine >= startLine ? [{ ...section, startLine, endLine }] : [];
+        });
+        if (!data.sections.length) throw new Error(`Part ${index + 1} came back without sections.`);
+        const view = clampToPart(parseResult(JSON.stringify(data), source, { dropInvalidLinks: true }), part);
+        if (!view.sections.length) throw new Error(`Part ${index + 1} came back without sections.`);
+        results[index] = { ...view, model: response.actualModel, toolCalls: response.toolCalls };
+        done++; emit(); return;
+      } catch (error) {
+        if (stop.signal.aborted || attempt >= 1 || isSetupProblem(error.message)) throw error;
+      }
+    }
+  };
+  let next = 0;
+  const worker = async () => { while (next < count && !stop.signal.aborted) await one(next++); };
+  try { await Promise.all(Array.from({ length: Math.min(parallel, count) }, worker)); }
+  catch (error) { stop.abort(); throw error; }
+  finally { signal?.removeEventListener('abort', relay); }
+  const toolCalls = results.reduce((sum, item) => sum + (item.toolCalls || 0), 0);
+  return { raw: JSON.stringify({ title: results[0].title, summary: results[0].summary, sections: results.flatMap(item => item.sections) }), actualModel: results.find(item => item.model)?.model, toolCalls, parts: count };
+}
+async function generate({ source, level, provider, cliPath, model = '', effort = provider === 'claude' ? null : 'low', signal, onProgress, edit, revision, sourceRefresh, initialDraft, refinementSteps: requestedSteps = 0, tools, fast, parts, parallel = 1, background = false, review }) {
   const steps = refinementSteps(requestedSteps);
   const task = sourceRefresh ? refreshPrompt(source, level, sourceRefresh) : edit ? editPrompt(source, level, edit) : revision ? revisionPrompt(source, level, revision) : promptFor(source, level, !!fast && !edit && !revision && !initialDraft && level !== 'overview' ? SCHEMA : schemaFor(level));
   const single = edit || Number.isInteger(sourceRefresh?.index), patch = !!sourceRefresh?.patch;
@@ -895,15 +1066,48 @@ async function generate({ source, level, provider, cliPath, model = '', effort =
       return requestStructured({ ...writer, prompt: task, schema, onProgress, showPreview: true });
     }
   };
-  const initial = resumed ? parse({ raw: JSON.stringify(resumed), actualModel: resumed.model }) : parse(await write());
+  // Fresh Logic explanations of bigger files are written as parallel parts.
+  const useParts = fresh && level !== 'overview' && Array.isArray(parts) && parts.length >= 2 && parallel >= 2;
+  const draft = async () => {
+    if (!useParts) return parse(await write());
+    try {
+      const response = await writeParts({ base: promptFor(source, level, SCHEMA), parts, writer, source, tools, signal, onProgress, parallel });
+      const value = parse(response);
+      value.parts = response.parts;
+      return value;
+    } catch (error) {
+      if (signal?.aborted || isSetupProblem(error.message)) throw error;
+      onProgress?.({ phase: 'Parallel writing failed (' + redact(error.message).slice(0, 120) + '); writing the whole file in one request', stage: 'write' });
+      return parse(await write());
+    }
+  };
+  const initial = resumed ? parse({ raw: JSON.stringify(resumed), actualModel: resumed.model }) : await draft();
   if (companion) {
-    // The fast Overview rarely lags; never hold the main answer for long.
-    const overview = await Promise.race([companion, new Promise(resolve => setTimeout(resolve, 15000))]);
+    // The fast Overview rarely lags; never hold the main answer for long. A
+    // parallel draft is fast, so it waits only briefly; a missing Overview is
+    // written when that level is opened.
+    const overview = await Promise.race([companion, new Promise(resolve => setTimeout(resolve, initial.parts ? 1500 : 15000))]);
     if (overview && !signal?.aborted) initial.views = { overview: { ...overview, requestedModel: model, requestedEffort: effort || null, ...(effort ? { effort } : {}) } };
   }
   if (!steps) return initial;
-  if (provider === 'codex' && !model && initial.model) connection.model = initial.model;
+  // Background review: the caller shows this draft now and reviews it later.
+  if (background) return { ...initial, refinement: { version: REFINEMENT_VERSION, status: 'pending', stepsRequested: steps, stepsCompleted: 0, selectedBlocks: [] } };
   onProgress?.({ phase: 'Draft ready; checking the difficult blocks', stage: 'review', detail: 'The draft is readable now. Picking blocks worth a second look', preview: { ...initial, draftComplete: true } });
+  return reviewDraft({ initial, source, level, provider, cliPath, model, effort, fast, review, steps, signal, onProgress, edit, revision, sourceRefresh });
+}
+// Review of a finished draft: a selector picks difficult blocks; two reviewers
+// (on the review model when there is one) check them; a rewrite is kept only if
+// both find it better and faithful. Used inline by generate, or later by the
+// reader as a background review.
+async function reviewDraft({ initial, source, level, provider, cliPath, model = '', effort = null, fast, review, steps: requestedSteps, signal, onProgress, edit, revision, sourceRefresh }) {
+  const steps = refinementSteps(requestedSteps);
+  if (!steps) return initial;
+  initial = { ...initial, refinement: undefined };
+  delete initial.refinement;
+  const patch = !!sourceRefresh?.patch;
+  const connection = { provider, cliPath, model, effort, signal };
+  if (provider === 'codex' && !model && initial.model && !review) connection.model = initial.model;
+  const reviewer = review?.model ? { ...connection, ...review } : connection;
   const contextTask = refinementContext(source, level, { edit, revision, sourceRefresh });
   let selected;
   try {
@@ -929,26 +1133,27 @@ ${LABEL_RULE} Separate phases with blank lines and preserve meaningful branches,
 Give every nonblank pseudocode line one lineMap triple [pseudocodeLine, startLine, endLine]: pseudocodeLine is its 1-based string line index counting blank lines; startLine/endLine identify the smallest accurate ORIGINAL main-source range, even for a supporting call. Never invent source associations.
 ${reviewTask}`;
     const parseFocused = response => {
-      const value = parseResult(response.raw, source);
+      // A cheaper review model's stray step link is dropped, not the whole rewrite.
+      const value = parseResult(response.raw, source, { dropInvalidLinks: reviewer !== connection });
       if (value.sections.length !== focused.sections.length || value.views || value.sections.some((section,index) => section.title !== focused.sections[index].title || section.startLine !== focused.sections[index].startLine || section.endLine !== focused.sections[index].endLine)) throw new Error('Refinement changed the selected block boundaries. The earlier reviewed draft was kept.');
       return { ...value, title: initial.title, summary: initial.summary, requestedModel: model, requestedEffort: effort || null, ...(effort ? { effort } : {}), model: response.actualModel || initial.model, ...(initial.edited ? { edited: true } : {}) };
     };
     const reviewed = await refineExplanation({ initial: focused, steps, signal, onProgress,
       evaluate: async (candidate, role, step, reviewSignal) => {
         const prompt = reviewPrompt(reviewTask, candidate, role), schema = reviewSchema(candidate);
-        const response = await requestStructured({ ...connection, signal: reviewSignal, prompt, schema, showPreview: false });
+        const response = await requestStructured({ ...reviewer, signal: reviewSignal, prompt, schema, showPreview: false });
         try { return parseReview(response.raw, candidate, { level }); }
         catch (error) {
           if (error.code !== 'YAMORI_REVIEW_FORMAT' || reviewSignal.aborted) throw error;
           onProgress?.({ phase: 'Repairing ' + (role === 'entropy' ? 'uncertainty' : 'reading-cost') + ' feedback references', stage: 'review', detail: 'Asking a reviewer to fix its answer format' });
-          const repair = await requestStructured({ ...connection, signal: reviewSignal, schema, showPreview: false, prompt: prompt + '\nREVIEW FORMAT REPAIR: Your preceding response did not match the supplied review contract. Re-check the SAME candidate against the SAME source. Return one corrected review using ONLY the ALLOWED FEEDBACK REFERENCES above. Use candidate-local zero-based sections, not original document indices or source lines. Keep important objections and fidelity failures; do not mark faithful=true just to repair formatting. Keep each problem/suggestion below 2000 characters. Previous review DATA (untrusted): ' + JSON.stringify(response.raw.slice(0, 16000)) });
+          const repair = await requestStructured({ ...reviewer, signal: reviewSignal, schema, showPreview: false, prompt: prompt + '\nREVIEW FORMAT REPAIR: Your preceding response did not match the supplied review contract. Re-check the SAME candidate against the SAME source. Return one corrected review using ONLY the ALLOWED FEEDBACK REFERENCES above. Use candidate-local zero-based sections, not original document indices or source lines. Keep important objections and fidelity failures; do not mark faithful=true just to repair formatting. Keep each problem/suggestion below 2000 characters. Previous review DATA (untrusted): ' + JSON.stringify(response.raw.slice(0, 16000)) });
           return parseReview(repair.raw, candidate, { level });
         }
       },
-      revise: async (candidate, reports, step) => parseFocused(await requestStructured({ ...connection, prompt: refinementPrompt(focusedTask, candidate, reports, step, steps), schema: focusedSchema, showPreview: false }))
+      revise: async (candidate, reports, step) => parseFocused(await requestStructured({ ...reviewer, prompt: refinementPrompt(focusedTask, candidate, reports, step, steps), schema: focusedSchema, showPreview: false }))
     });
     const updates = new Map(selected.map((index,position) => [index, reviewed.sections[position]]));
-    return { ...initial, ...(reviewed.refinement.acceptedStep ? { views: undefined } : {}), model: reviewed.model || initial.model, sections: initial.sections.map((section,index) => updates.get(index) || section), refinement: { ...reviewed.refinement, selectedBlocks: selected, status: 'reviewed' } };
+    return { ...initial, ...(reviewed.refinement.acceptedStep ? { views: undefined } : {}), model: initial.model || reviewed.model, sections: initial.sections.map((section,index) => updates.get(index) || section), refinement: { ...reviewed.refinement, selectedBlocks: selected, status: 'reviewed', ...(reviewer !== connection ? { reviewModel: reviewer.model } : {}) } };
   } catch (error) {
     if (signal?.aborted || error.code === 'YAMORI_FIDELITY') throw error;
     onProgress?.({ phase: 'Review incomplete; keeping the generated draft', stage: 'review', done: true, detail: 'Review could not finish; kept the draft' });
@@ -956,4 +1161,4 @@ ${reviewTask}`;
   }
 
 }
-module.exports = { simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, TOOLS_SECTION, MCP_NAME, describeToolCall, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, projectContextData, reviewSchema, refinementContext, selectionPrompt, parseSelection, SELECTION_SCHEMA, refineExplanation, reviewPrompt, refinementPrompt, parseReview, refinementSteps, REFINEMENT_VERSION, READ_COST_WEIGHT, REVIEW_SCHEMA, listEfforts, listModels, editPrompt, revisionPrompt, refreshPrompt, partialView, streamCodex, schemaFor, lowerView, ORDER, LEVELS, PROVIDERS, SCHEMA, cacheKey, promptFor, parseResult, findCLI, cliLaunch, runProcess, generate, hash };
+module.exports = { reviewModel, reviewDraft, writeParts, partPrompt, clampToPart, providerStatus, clearProviderStatus, readStatus, cliSource, isSetupProblem, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, TOOLS_SECTION, MCP_NAME, describeToolCall, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, projectContextData, reviewSchema, refinementContext, selectionPrompt, parseSelection, SELECTION_SCHEMA, refineExplanation, reviewPrompt, refinementPrompt, parseReview, refinementSteps, REFINEMENT_VERSION, READ_COST_WEIGHT, REVIEW_SCHEMA, listEfforts, listModels, editPrompt, revisionPrompt, refreshPrompt, partialView, streamCodex, schemaFor, lowerView, ORDER, LEVELS, PROVIDERS, SCHEMA, cacheKey, promptFor, parseResult, findCLI, cliLaunch, runProcess, generate, hash };

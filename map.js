@@ -455,12 +455,12 @@ function render(s) {
   boxes = new Map((s.map?.boxes || []).map(b => [b.id, { ...b }]));
   if (!byId.has(selected)) selected = undefined;
   const n = s.notes || {};
-  $('status').textContent = s.error ? s.error : [s.busy || s.notesBusy ? s.progress || 'Working…' : undefined, (s.files || 0) + ' files · ' + (s.links || 0) + ' links', 'scanned ' + relativeTime(s.scannedAt), 'AI notes ' + (n.done || 0) + '/' + (n.total || 0) + (n.outdated ? ' (' + n.outdated + ' outdated)' : ''), s.limited ? 'first ' + s.files + ' files shown' : undefined].filter(Boolean).join(' · ');
+  $('status').textContent = s.error ? s.error : s.waitingForAI && !s.busy ? 'AI notes start once an AI is connected. ' + (s.files || 0) + ' files · ' + (s.links || 0) + ' links mapped without AI.' : [s.busy || s.notesBusy ? s.progress || 'Working…' : undefined, (s.files || 0) + ' files · ' + (s.links || 0) + ' links', 'scanned ' + relativeTime(s.scannedAt), 'AI notes ' + (n.done || 0) + '/' + (n.total || 0) + (n.outdated ? ' (' + n.outdated + ' outdated)' : ''), s.limited ? 'first ' + s.files + ' files shown' : undefined].filter(Boolean).join(' · ');
   $('status').className = 'status' + (s.error ? ' error' : '');
   const notes = $('notes');
-  notes.textContent = s.notesBusy ? 'Stop' : n.done && (n.done < n.total || n.outdated) ? 'Update AI notes' : n.done ? 'AI notes ✓' : 'Write AI notes';
+  notes.textContent = s.notesBusy ? 'Stop' : s.waitingForAI ? 'Set up AI' : n.done && (n.done < n.total || n.outdated) ? 'Update AI notes' : n.done ? 'AI notes ✓' : 'Write AI notes';
   notes.disabled = !s.notesBusy && !!s.busy;
-  notes.title = s.notesBusy ? 'Stop writing AI notes; finished files are kept' : s.autoNotes ? 'AI notes are written automatically after each scan. Press to write them now (also retries after an error).' : 'Ask your selected AI for a one-line purpose per file, project terms and a reading order';
+  notes.title = s.notesBusy ? 'Stop writing AI notes; finished files are kept' : s.waitingForAI ? 'Install or sign in to Claude or ChatGPT; AI notes then start by themselves' : s.autoNotes ? 'AI notes are written automatically after each scan. Press to write them now (also retries after an error).' : 'Ask your selected AI for a one-line purpose per file, project terms and a reading order';
   $('rescan').disabled = !!s.busy;
   drawStart(); drawMap(); drawGlossary();
   // Refit when the set of folders changes, not when one is folded.
@@ -479,7 +479,7 @@ $('zoom-out').addEventListener('click', () => zoom(0.8));
 $('fit').addEventListener('click', fit);
 $('reset').addEventListener('click', () => send('resetLayout'));
 $('rescan').addEventListener('click', () => send('rescan'));
-$('notes').addEventListener('click', () => send(state.notesBusy ? 'stop' : 'notes'));
+$('notes').addEventListener('click', () => send(state.notesBusy ? 'stop' : state.waitingForAI ? 'setup' : 'notes'));
 $('drawer-toggle').addEventListener('click', () => showDetails($('drawer').hidden));
 $('drawer-close').addEventListener('click', () => showDetails(false));
 window.addEventListener('message', event => { if (event.data?.type === 'map') render(event.data.state); });

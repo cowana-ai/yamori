@@ -7,6 +7,10 @@ const { cleanEmphasis, panelHTML, tokenize, pseudocodeLines, mathParts, emphasis
 // Tests never start a real CLI: choosing the quick-job model is stubbed for the
 // extension; the real chooser is tested against a fixture Codex below.
 const realFastModel = require('./engine').fastModel;
+// Tests never ask the real CLIs whether they are signed in; a test can set
+// testStatus[provider] to simulate a missing or signed-out AI.
+const realProviderStatus = require('./engine').providerStatus, testStatus = {};
+require('./engine').providerStatus = async provider => testStatus[provider] || { provider, installed: true, signedIn: true, ready: true, source: 'Command line', account: 'reader@example.com · pro plan', path: '/usr/local/bin/' + provider };
 require('./engine').fastModel = async provider => provider === 'claude' ? { model: 'haiku', effort: 'low' } : { model: 'fast-test', effort: 'low' };
 const source = { uri: 'file:///example.py', name: 'example.py', language: 'python', startLine: 10, text: 'x = 1\nprint(x)' };
 const valid = { title: 'Print a number', summary: 'Sets and prints a number.', sections: [{ title: 'Print', startLine: 10, endLine: 11, pseudocode: 'Set x to 1\nPrint x' }] };
@@ -71,7 +75,7 @@ test('Windows discovery handles native installs, quoted PATH folders and configu
   assert.equal(await findCLI('claude', '', windowsFixture({ [native]: '' })), native);
   assert.equal(await findCLI('claude', '', windowsFixture({ 'C:\\Tool Folder\\claude.exe': '' })), 'C:\\Tool Folder\\claude.exe');
   assert.equal(await findCLI('claude', '"D:\\Custom Folder\\claude.exe"', windowsFixture({ 'D:\\Custom Folder\\claude.exe': '' })), 'D:\\Custom Folder\\claude.exe');
-  await assert.rejects(findCLI('claude', '', windowsFixture({ [native]: 'directory' })), /desktop app alone/);
+  await assert.rejects(findCLI('claude', '', windowsFixture({ [native]: 'directory' })), /Use Set up AI to install it/);
 });
 test('Windows npm launchers resolve only expected package entry points without a shell', async () => {
   const root = 'C:\\Users\\A Person\\AppData\\Roaming\\npm';
@@ -114,25 +118,114 @@ test('Claude safe mode preserves auth setup, uses default effort, and parses a f
     }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
-test('Connect Claude opens provider login, and installation requires an explicit choice', async () => {
-  const fs = require('node:fs/promises'), path = require('node:path'), terminals = [], commands = [], links = [];
-  let choice;
+test('setup terminals: sign-in runs the CLI itself, installs are visible and wait on failure', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), terminals = [];
   const api = { workspace: { getConfiguration: () => ({ get: () => '' }) }, Uri: { parse: value => value },
-    commands: { executeCommand: async (...args) => commands.push(args) }, env: { openExternal: async value => links.push(value) },
-    window: { showInformationMessage: async () => choice, createTerminal(options) { const t = { options, show() { t.visible = true; }, dispose() {} }; terminals.push(t); return t; } } };
+    window: { createTerminal(options) { const t = { options, show() { t.visible = true; }, dispose() {} }; terminals.push(t); return t; } } };
   const stub = { exports: {} };
-  vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : require(id), Buffer, AbortController, setTimeout, clearTimeout });
-  const context = { subscriptions: [] }, native = 'C:\\Users\\A Person\\.local\\bin\\claude.exe';
-  await stub.exports.connectClaude(context, api, windowsFixture({ [native]: '' }));
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : require(id), Buffer, AbortController, setTimeout, clearTimeout, process });
+  const { setupTerminal } = stub.exports, context = { subscriptions: [] }, native = 'C:\\Users\\A Person\\.local\\bin\\claude.exe';
+  setupTerminal(context, api, 'claude', 'signIn', native, windowsFixture());
   assert.equal(terminals[0].options.shellPath, native); assert.deepEqual([...terminals[0].options.shellArgs], ['auth', 'login']); assert.equal(terminals[0].visible, true);
-  await stub.exports.connectClaude(context, api, windowsFixture()); assert.equal(terminals.length, 1, 'dismiss never installs');
-  choice = 'Choose executable'; await stub.exports.connectClaude(context, api, windowsFixture()); assert.equal(commands[0][1], 'yamori.claudePath');
-  choice = 'Setup guide'; await stub.exports.connectClaude(context, api, windowsFixture()); assert.equal(links[0], 'https://code.claude.com/docs/en/setup');
-  choice = 'Install and sign in'; await stub.exports.connectClaude(context, api, windowsFixture());
-  const win = terminals.at(-1); assert.equal(win.visible, true); assert.equal(win.options.shellPath, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  setupTerminal(context, api, 'codex', 'signIn', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex', { platform: 'darwin', home: '/u', env: {} });
+  assert.deepEqual([...terminals[1].options.shellArgs], ['login']); assert.equal(terminals[1].options.name, 'Yamori · ChatGPT sign-in');
+  setupTerminal(context, api, 'claude', 'install', undefined, windowsFixture());
+  const win = terminals.at(-1); assert.equal(win.options.shellPath, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
   assert.match(win.options.shellArgs.at(-1), /irm https:\/\/claude.ai\/install.ps1 \| iex/); assert.match(win.options.shellArgs.at(-1), /& \$claudeExe auth login/);
-  await stub.exports.connectClaude(context, api, { platform: 'darwin', home: '/missing', env: {}, fs: windowsFixture().fs });
+  setupTerminal(context, api, 'claude', 'install', undefined, { platform: 'darwin', home: '/missing', env: {} });
   assert.equal(terminals.at(-1).options.shellPath, '/bin/bash'); assert.match(terminals.at(-1).options.shellArgs.at(-1), /"\$HOME\/\.local\/bin\/claude" auth login/);
+  assert.match(terminals.at(-1).options.shellArgs.at(-1), /\|\| \{ echo; echo "Yamori: setup did not finish/, 'a failed install stays open');
+  setupTerminal(context, api, 'codex', 'install', undefined, { platform: 'darwin', home: '/u', env: { SHELL: '/bin/zsh' } });
+  const codex = terminals.at(-1).options; assert.equal(codex.shellPath, '/bin/zsh'); assert.deepEqual([...codex.shellArgs].slice(0, 1), ['-ilc']);
+  assert.match(codex.shellArgs[1], /npm install -g @openai\/codex; elif command -v brew .*brew install --cask codex/); assert.match(codex.shellArgs[1], /&& hash -r && codex login/);
+  assert.equal(setupTerminal(context, api, 'codex', 'install', undefined, { platform: 'darwin', home: '/u', env: { SHELL: '/usr/bin/fish' } }).options.shellPath, '/bin/bash', 'unknown shells use bash');
+  assert.equal(context.subscriptions.length, terminals.length);
+});
+test('Claude Desktop’s own Claude Code is found, newest first, and status checks read sign-in without a model request', async () => {
+  const { readStatus, cliSource, isSetupProblem } = require('./engine');
+  const home = '/Users/a', base = home + '/Library/Application Support/Claude/claude-code';
+  const tree = { [base]: ['2.1.9', '2.1.325', 'notes.txt'], [base + '/2.1.325']: ['485fdac4332e'], [base + '/2.1.325/485fdac4332e']: ['claude.app', '.verified'], [base + '/2.1.325/485fdac4332e/claude.app']: ['Contents'],
+    [base + '/2.1.325/485fdac4332e/claude.app/Contents']: ['MacOS'], [base + '/2.1.325/485fdac4332e/claude.app/Contents/MacOS']: ['claude'], [base + '/2.1.9']: ['claude'] };
+  const newest = base + '/2.1.325/485fdac4332e/claude.app/Contents/MacOS/claude', older = base + '/2.1.9/claude';
+  const files = new Set([newest, older]);
+  const io = { readdir: async dir => { if (!tree[dir]) throw new Error('ENOENT'); return tree[dir].map(name => ({ name, isDirectory: () => !!tree[dir + '/' + name] || name === 'notes.txt' ? !!tree[dir + '/' + name] : false })); },
+    stat: async file => { if (!files.has(file)) throw new Error('ENOENT'); return { isFile: () => true }; }, access: async () => {} };
+  const system = { platform: 'darwin', home, env: { PATH: '/usr/bin' }, fs: io };
+  assert.equal(await findCLI('claude', '', system), newest, 'the newest Claude Desktop version wins');
+  files.delete(newest); assert.equal(await findCLI('claude', '', system), older);
+  files.add('/usr/bin/claude'); assert.equal(await findCLI('claude', '', system), '/usr/bin/claude', 'a command-line install comes first');
+  await assert.rejects(findCLI('codex', '', system), /Use Set up AI to install it \(or install the ChatGPT desktop app\)/);
+  assert.equal(cliSource(newest), 'Claude Desktop'); assert.equal(cliSource('/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'), 'ChatGPT app'); assert.equal(cliSource('/usr/bin/claude'), 'Command line');
+  const signedIn = readStatus('claude', { code: 0, out: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', email: 'reader@example.com', subscriptionType: 'max' }) });
+  assert.deepEqual(JSON.parse(JSON.stringify(signedIn)), { signedIn: true, account: 'reader@example.com · max plan' });
+  assert.equal(readStatus('claude', { code: 1, out: JSON.stringify({ loggedIn: false }) }).signedIn, false);
+  assert.equal(readStatus('claude', { code: 0, out: '{"loggedIn":true,"apiProvider":"bedrock"}' }).account, 'via bedrock');
+  assert.equal(readStatus('claude', { code: 1, out: "error: unknown command 'auth'" }).signedIn, null, 'an older CLI is never blocked');
+  assert.deepEqual(JSON.parse(JSON.stringify(readStatus('codex', { code: 0, out: 'Logged in using ChatGPT\n' }))), { signedIn: true, account: 'ChatGPT account' });
+  assert.equal(readStatus('codex', { code: 0, out: 'Logged in using an API key - sk-***' }).account, 'API key');
+  assert.deepEqual(JSON.parse(JSON.stringify(readStatus('codex', { code: 1, out: 'Not logged in' }))), { signedIn: false, problem: 'Not signed in' });
+  assert.equal(readStatus('codex', { timedOut: true, out: '' }).signedIn, null);
+  for (const message of ['Codex is not signed in.', 'Claude Code was not found on this computer. Use Set up AI…', 'Codex failed (1). 401 Unauthorized', 'Your login has expired']) assert.ok(isSetupProblem(message), message);
+  for (const message of ['The model returned invalid JSON.', 'The provider took too long. Retry or choose another provider.']) assert.ok(!isSetupProblem(message), message);
+  // The real status check on fixture CLIs: installed + signed in, signed out, missing.
+  const fsp = require('node:fs/promises'), path = require('node:path'), os = require('node:os'), dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'yamori-status-'));
+  try {
+    const cli = (name, body) => { const file = path.join(dir, name); return fsp.writeFile(file, body).then(() => file); };
+    const claudeIn = await cli('claude-in.js', 'console.log(JSON.stringify({loggedIn:true,email:"reader@example.com",subscriptionType:"pro"}))');
+    const codexOut = await cli('codex-out.js', 'if(process.argv.slice(2).join(" ")==="login status"){console.error("Not logged in");process.exit(1)}');
+    const a = await realProviderStatus('claude', claudeIn, { fresh: true });
+    assert.deepEqual([a.installed, a.signedIn, a.ready, a.account, a.source], [true, true, true, 'reader@example.com · pro plan', 'Command line']);
+    const b = await realProviderStatus('codex', codexOut, { fresh: true });
+    assert.deepEqual([b.installed, b.signedIn, b.ready, b.problem], [true, false, false, 'Not signed in']);
+    const c = await realProviderStatus('codex', '', { fresh: true, system: { platform: 'linux', home: dir, env: { PATH: dir }, fs: { stat: async () => { throw new Error('ENOENT'); }, access: async () => {} } } });
+    assert.deepEqual([c.installed, c.ready, c.problem], [false, false, 'Not installed']);
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+});
+test('setup comes before the app: no ready AI shows Setup, one click continues to the file, and readers switch AI', async () => {
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false });
+  try {
+    const setupView = (...args) => JSON.parse(JSON.stringify(h.exports.setupView(...args)));
+    // Cards: most ready first, exactly one primary action each, plain text.
+    const missing = { claude: { installed: false, signedIn: false, ready: false, problem: 'Not installed' }, codex: { installed: true, signedIn: false, ready: false, problem: 'Not signed in', source: 'ChatGPT app' } };
+    let view = setupView(missing, {});
+    assert.deepEqual(view.cards.map(card => card.id), ['codex', 'claude']);
+    assert.deepEqual(view.cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code']);
+    assert.deepEqual(view.cards[0].lines.map(line => line.text), ['Codex installed · from ChatGPT app', 'Not signed in']);
+    view = setupView({ claude: { installed: true, signedIn: true, ready: true, account: 'reader@example.com · max plan', source: 'Claude Desktop' }, codex: missing.codex }, { chosen: 'codex', pending: { label: 'explain plan.py' } });
+    assert.equal(view.cards[0].action.label, 'Use Claude'); assert.equal(view.cards[0].badge, 'Ready'); assert.equal(view.cards[0].lines[0].text, 'Claude Code installed · from Claude Desktop');
+    assert.match(view.notice, /ChatGPT isn’t ready \(Not signed in\)\. Claude is ready to use instead\./); assert.equal(view.next, 'explain plan.py');
+    assert.match(setupView({ claude: missing.claude, codex: { installed: false, ready: false } }).notice, /Neither is on this computer yet/);
+    // A first-time user (no AI chosen) gets Setup instead of an empty reader.
+    const state = new Map(); h.context.globalState.get = (k, f) => state.get(k) ?? f; h.context.globalState.update = async (k, v) => state.set(k, v);
+    const readersBefore = h.readers().length;
+    testStatus.codex = { provider: 'codex', installed: true, signedIn: false, ready: false, problem: 'Not signed in', path: '/usr/local/bin/codex', source: 'Command line' };
+    await h.commands.get('yamori.openAt')(new h.Uri(require('node:path').join(h.root, 'pipeline/plan.py')).toString(), 3);
+    const setupPanel = h.panels.find(panel => panel.type === 'yamoriSetup');
+    assert.ok(setupPanel, 'Setup opens'); assert.equal(h.readers().length, readersBefore, 'no reader before an AI is ready');
+    const shown = () => setupPanel.messages.filter(m => m.type === 'setup').at(-1).state;
+    assert.equal(shown().next, 'explain plan.py'); assert.equal(shown().cards[0].id, 'claude', 'the ready AI is offered first');
+    // Signing in to ChatGPT opens its terminal; finishing it continues by itself.
+    h.vscode.window.createTerminal = options => { const t = { options, show() { t.visible = true; }, dispose() {} }; (h.terminals ||= []).push(t); return t; };
+    await setupPanel.receive({ type: 'primary', provider: 'codex' });
+    assert.deepEqual([...h.terminals[0].options.shellArgs], ['login']); assert.equal(shown().cards.find(card => card.id === 'codex').action.label, 'Show the sign-in terminal');
+    // Use Claude instead: saved, and the waiting file opens at once.
+    await setupPanel.receive({ type: 'primary', provider: 'claude' });
+    assert.equal(state.get('provider'), 'claude'); assert.equal(state.get('setupDone'), true);
+    await h.until(() => h.readers().length === readersBefore + 1, 'the pending file opens');
+    assert.equal(h.last(h.readers().at(-1)).providerLabel, 'Claude Code');
+    // With an AI ready, opening files skips Setup.
+    const setupCount = h.panels.filter(panel => panel.type === 'yamoriSetup').length;
+    await h.commands.get('yamori.openAt')(new h.Uri(require('node:path').join(h.root, 'main.py')).toString(), 1);
+    assert.equal(h.panels.filter(panel => panel.type === 'yamoriSetup').length, setupCount);
+    // Set up AI from a reader switches open readers to the newly chosen AI.
+    delete testStatus.codex;
+    const reader = h.readers().at(-1);
+    await reader.receive({ type: 'setup' });
+    const again = h.panels.filter(panel => panel.type === 'yamoriSetup').at(-1);
+    await again.receive({ type: 'primary', provider: 'codex' });
+    assert.equal(again.messages.filter(m => m.type === 'setup').at(-1).state.done !== undefined, true, 'nothing pending: You’re set');
+    assert.equal(h.last(reader).providerLabel, 'Codex');
+  } finally { for (const key of Object.keys(testStatus)) delete testStatus[key]; await h.close(); }
 });
 test('process cancellation terminates a running request', async () => {
   const controller = new AbortController();
@@ -241,7 +334,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     replaceChildren(...children) { this.children = children; }
     setAttribute(name, value) { (this.attributes ||= {})[name] = value; } addEventListener(type, callback) { (this.events ||= {})[type] = callback; }
   }
-  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map'].map(id => [id, new Element('div')]));
+  const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'setup-ai'].map(id => [id, new Element('div')]));
   let receive;
   const document = { documentElement: { style: {} }, body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => [], importNode: node => node };
   const script = panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
@@ -254,7 +347,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   elements.files.events.click(); assert.equal(sent.at(-1).type, 'switchFile');
   assert.equal(elements.effort.textContent, 'Effort: medium ▾');
   elements.effort.events.click(); assert.equal(sent.at(-1).type, 'effort');
-  assert.equal(elements.refinement.textContent,'Refine: 2 ▾');elements.refinement.events.click();assert.equal(sent.at(-1).type,'refinement');
+  assert.equal(elements.refinement.textContent,'Refine: 1 ▾');elements.refinement.events.click();assert.equal(sent.at(-1).type,'refinement');
   const all = []; const visit = el => { all.push(el); (el.children || []).forEach(visit); }; visit(elements.content);
   const rows = all.filter(el => el.className?.startsWith('code-line'));
   assert.equal(rows.length, 5, 'actual newlines must not collapse into one text row');
@@ -369,15 +462,16 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   assert.equal(secondDraft.value, 'Count the equal signs.');
   assert.equal(sent.filter(message => message.type === 'updateBlock').length, beforeMap, 'navigating and editing start no inference');
   const beforeConnect = sent.length;
-  receive({ data: { type: 'state', state: { ...renderedState, providerLabel: 'Claude Code', error: 'Sign in required' } } });
+  receive({ data: { type: 'state', state: { ...renderedState, providerLabel: 'Codex', error: 'Codex is not signed in.', setupHint: true } } });
   all.length = 0; visit(elements.content);
-  const connect = all.find(el => el.textContent === 'Connect Claude');
-  assert.ok(connect); assert.ok(!sent.slice(beforeConnect).some(message => message.type === 'connectClaude'), 'an error never opens login automatically');
-  connect.events.click(); assert.equal(sent.at(-1).type, 'connectClaude');
-  receive({ data: { type: 'state', state: { ...renderedState, providerLabel: 'Claude Code', error: 'Sign in required', busy: true } } });
-  all.length = 0; visit(elements.content); assert.equal(all.find(el => el.textContent === 'Connect Claude').disabled, true);
-  receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', level: 'logic' } } });
-  all.length = 0; visit(elements.content); assert.ok(all.find(el => el.textContent === 'Connect Claude'), 'initial Claude screen offers setup');
+  const connect = all.find(el => el.textContent === 'Set up AI');
+  assert.ok(connect); assert.ok(!sent.slice(beforeConnect).some(message => message.type === 'setup'), 'an error never opens setup automatically');
+  connect.events.click(); assert.equal(sent.at(-1).type, 'setup');
+  receive({ data: { type: 'state', state: { ...renderedState, providerLabel: 'Claude Code', error: 'Sign in required', setupHint: true, busy: true } } });
+  all.length = 0; visit(elements.content); assert.equal(all.find(el => el.textContent === 'Set up AI').disabled, true);
+  receive({ data: { type: 'state', state: { ...renderedState, error: 'The model returned invalid JSON.' } } });
+  all.length = 0; visit(elements.content); assert.ok(!all.find(el => el.textContent === 'Set up AI'), 'other errors offer no setup');
+  elements['setup-ai'].events.click(); assert.equal(sent.at(-1).type, 'setup', 'AI ▾ always offers Set up AI');
 });
 
 test('extension workflow switches levels, reuses cache, marks edits stale and ignores cancelled results', async () => {
@@ -385,7 +479,7 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
   const path = require('node:path');
   const os = require('node:os');
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-test-'));
-  const commands = new Map(), state = new Map(), messages = [];
+  const commands = new Map(), state = new Map([['provider', 'codex']]), messages = [];
   let receive, change, calls = 0, deferred, copied, lastRevision, lastModel, lastEffort, nextPick;
   class Uri { constructor(value) { this.value = value; this.scheme = 'file'; this.fsPath = value.replace('file://', ''); } toString() { return this.value; } static parse(v) { return new Uri(v); } }
   class Range { constructor(a, b, c, d) { if (typeof a === 'object') { this.start = a; this.end = b; } else { this.start = { line: a, character: b }; this.end = { line: c, character: d }; } } }
@@ -748,7 +842,7 @@ test('generation and editing permit grounded internal algorithm knowledge for wh
 test('file tabs reuse one reader column and isolate generation, detail, edits, closure and prepared files', async () => {
   const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-tabs-test-'));
-  const commands = new Map(), settings = new Map(), panels = [], shown = [], launchers = [];
+  const commands = new Map(), settings = new Map([['provider', 'codex']]), panels = [], shown = [], launchers = [];
   let change, editorChanged, nextPick, calls = 0, holdA = true, holdB = false, pendingA, pendingB, startA, startB;
   const aStarted = new Promise(resolve => { startA = resolve; });
   let bStarted;
@@ -932,7 +1026,7 @@ test('disk changes, selective refresh, durable drafts and offline restarts reuse
   const fs = require('node:fs/promises'), fsSync = require('node:fs'), path = require('node:path'), os = require('node:os');
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-sync-workflow-')), file = path.join(temp, 'code.py');
   await fs.writeFile(file, 'def a():\n    return 10\n\ndef b():\n    return 2\n');
-  const commands = new Map(), settings = new Map(), panels = [], watchers = [], requests = [];
+  const commands = new Map(), settings = new Map([['provider', 'codex']]), panels = [], watchers = [], requests = [];
   let change, releaseGeneration, generationStarted, deferGeneration = false;
   class Uri { constructor(value) { this.value = value; this.scheme = 'file'; this.fsPath = require('node:url').fileURLToPath(value); } toString() { return this.value; } static parse(value) { return new Uri(value); } }
   class Range { constructor(a,b,c,d) { this.start={line:a,character:b};this.end={line:c,character:d}; } }
@@ -1277,7 +1371,7 @@ test('packaged validators work with no Ajv installation, schema compilation or d
 test('a refined view derived from another level does not invalidate that level again',async()=>{
   const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
   const temp=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-pingpong-'));
-  const commands=new Map(),state=new Map(),generated=[];let receive;
+  const commands=new Map(),state=new Map([['provider','codex']]),generated=[];let receive;
   class Uri{constructor(v){this.value=v;this.scheme='file';this.fsPath=v.replace('file://','');}toString(){return this.value;}static parse(v){return new Uri(v);}}
   class Range{constructor(a,b,c,d){if(typeof a==='object'){this.start=a;this.end=b;}else{this.start={line:a,character:b};this.end={line:c,character:d};}}}
   class Selection extends Range{get isEmpty(){return this.start.line===this.end.line&&this.start.character===this.end.character;}}
@@ -1544,7 +1638,7 @@ test('project guide lists folder reading steps and a folder-box map; drag, fold,
 });
 
 test('reader explanations turn project terms into text-only links that open their definitions', () => {
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'setup-ai']);
   const sent = []; let receive;
   const record = m => sent.push(JSON.parse(JSON.stringify(m)));
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: record }), katex: { renderToString: () => '<math></math>' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
@@ -1794,7 +1888,7 @@ test('folder reading paths start where a folder is entered, and folder boxes sta
 });
 
 test('the reader header names its actions plainly and the empty state offers the next steps', () => {
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
   const sent = []; let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const html = panelHTML();
@@ -1915,7 +2009,7 @@ test('the reader shows who is writing and each stage live, then a finished summa
   assert.equal(connectionOptions(globalState, 'codex', vscodeStub).effort, 'low');
   state.set('effortChoices', { 'claude:': 'auto' }); assert.equal(connectionOptions(globalState, 'claude', vscodeStub).effort, null, 'an explicit provider default is respected');
   // Panel: a live card while running, a one-line summary afterwards.
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
   let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage() {} }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const now = Date.now(), steps = [{ id: 'context', label: 'Read the code and its context', state: 'done', startedAt: now - 9000, endedAt: now - 9000, detail: '2 called definitions · project guide · lookups on' },
@@ -2035,7 +2129,8 @@ async function readerHarness(settings = {}, options = {}) {
     harness.requests.push(kind); harness.prompts.push(prompt); harness.models.push(model);
     harness.inFlight++; harness.peak = Math.max(harness.peak, harness.inFlight);
     await new Promise(resolve => setTimeout(resolve, options.noteDelay || 0)); harness.inFlight--;
-    if (options.failNotes) throw new Error('Codex is not signed in.');
+    const fail = harness.failNotes ?? options.failNotes;
+    if (fail) throw new Error(typeof fail === 'string' ? fail : 'Codex is not signed in.');
     if (kind === 'notes') return { raw: JSON.stringify({ files: [...prompt.matchAll(/FILE "([^"]+)" \(numbered/g)].map(match => ({ file: match[1], purpose: 'Purpose of ' + match[1], role: 'stage', terms: [] })) }) };
     if (schema === real.SIMULATION_SCHEMA) { harness.simulations = (harness.simulations || 0) + 1; return { raw: JSON.stringify({ inputs: [{ name: 'blocks', value: "['HOOK', 'x', 'ENDING']" }, { name: 'cover', value: "'assets/cover.png'" }], steps: [{ line: 5, note: 'Start with the hook loop', values: [{ name: 'loops', value: "[{'id': 'L1'}]" }] }, { line: 99, note: 'outside', values: [] }], output: { kind: 'return', value: "[{'id': 'L1'}, {'id': 'L2'}]" }, caveats: 'HOOK and ENDING come from models/script.py.' }), actualModel: 'sim-model' }; }
     return { raw: JSON.stringify({ overview: 'Writes video scripts.', clusters: [], readingPath: [{ file: 'main.py', why: 'Start.' }] }) };
@@ -2044,7 +2139,7 @@ async function readerHarness(settings = {}, options = {}) {
     harness.generated.push(rel);
     const view = { title: 'About ' + rel, summary: 'Explains ' + rel + '.', sections: [{ title: 'Block for ' + rel, startLine: 1, endLine: lines, pseudocode: 'Call _loop_hint for each loop, then add BRIDGE in write_blocks.', lineMap: [] }] };
     return { ...view, views: { overview: view }, requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort };
-  } };
+  }, ...(options.engine ? options.engine(harness) : {}) };
   const state = new Map([['provider', 'codex'], ['launcherHintShown', true]]), moduleStub = { exports: {} };
   harness.context = { subscriptions: [], globalStorageUri: { fsPath: storage }, globalState: { get: (k, f) => state.get(k) ?? f, update: async (k, v) => state.set(k, v) }, secrets: {} };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { require: id => id === 'vscode' ? vscode : id === './engine' ? engine : require(id), module: moduleStub, Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
@@ -2164,7 +2259,7 @@ test('editor hovers and CodeLens show what Yamori knows, with escaped text and o
 });
 
 test('the reader shows a tour bar, project-name links and jumps to a requested block', () => {
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
   const sent = []; let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const result = { title: 'Write blocks', summary: 's', sections: [{ title: 'First', startLine: 1, endLine: 3, pseudocode: 'Use _loop_hint on each loop.' }, { title: 'Second', startLine: 4, endLine: 6, pseudocode: 'Add <b>BRIDGE</b> text in write_blocks.' }] };
@@ -2205,12 +2300,25 @@ test('AI notes are written automatically when the guide maps a project: quietly,
     assert.deepEqual(JSON.parse(JSON.stringify(h.requests.slice(2))), ['notes'], 'only the changed file, without a new summary');
     assert.match(h.prompts.at(-1), /FILE "pipeline\/plan.py"/); assert.doesNotMatch(h.prompts.at(-1), /FILE "main.py"/);
   } finally { await h.close(); }
-  const failing = await readerHarness({ prefetchNext: false }, { failNotes: true });
+  const failing = await readerHarness({ prefetchNext: false }, { failNotes: 'The provider took too long. Retry or choose another provider.' });
   try {
-    await failing.until(() => /could not be written automatically: Codex is not signed in\. Press Write AI notes to retry\./.test(failing.guideState().error || ''), 'a failure is explained once');
+    await failing.until(() => /could not be written automatically: The provider took too long\. .*Press Write AI notes to retry\./.test(failing.guideState().error || ''), 'a failure is explained once');
     await failing.guide.receive({ type: 'rescan' }); await pause(1700);
     assert.equal(failing.requests.length, 1, 'no automatic retries after a failure');
   } finally { await failing.close(); }
+  // Signed out: notes wait for Set up AI instead of failing, then start by themselves.
+  const signedOut = await readerHarness({ prefetchNext: false }, { failNotes: true });
+  try {
+    await signedOut.until(() => signedOut.guideState().waitingForAI && !signedOut.guideState().notesBusy, 'a sign-in problem waits for setup');
+    assert.equal(signedOut.guideState().error, '', 'waiting is not shown as an error');
+    signedOut.failNotes = false;
+    await signedOut.guide.receive({ type: 'setup' });
+    const setupPanel = signedOut.panels.find(panel => panel.type === 'yamoriSetup');
+    assert.ok(setupPanel, 'Set up AI in the guide opens the setup screen');
+    await setupPanel.receive({ type: 'primary', provider: 'codex' });
+    await signedOut.until(() => signedOut.guideState().notes.done === 4 && !signedOut.guideState().notesBusy, 'notes start once the AI is ready');
+    assert.equal(signedOut.guideState().waitingForAI, false);
+  } finally { await signedOut.close(); }
   const big = await readerHarness({ prefetchNext: false }, { extraFiles: 125 });
   try {
     await big.until(() => big.warnings.length === 1, 'large projects ask first');
@@ -2219,11 +2327,13 @@ test('AI notes are written automatically when the guide maps a project: quietly,
     await big.guide.receive({ type: 'rescan' }); await pause(1700);
     assert.equal(big.requests.length, 0); assert.equal(big.warnings.length, 1, 'it asks only once');
   } finally { await big.close(); }
-  for (const [settings, options, label] of [[{ autoNotes: false }, {}, 'the setting'], [{}, { trusted: false }, 'Restricted Mode']]) {
-    const quiet = await readerHarness({ prefetchNext: false, ...settings }, options);
-    try { await pause(1700); assert.equal(quiet.requests.length, 0, label + ' keeps notes manual'); }
-    finally { await quiet.close(); }
-  }
+  const quiet = await readerHarness({ prefetchNext: false, autoNotes: false });
+  try { await pause(1700); assert.equal(quiet.requests.length, 0, 'the setting keeps notes manual'); }
+  finally { await quiet.close(); }
+  // Notes are tool-free requests that run no project code, so Restricted Mode writes them too.
+  const restricted = await readerHarness({ prefetchNext: false }, { trusted: false });
+  try { await restricted.until(() => restricted.requests.length >= 2 && !restricted.guideState().notesBusy, 'Restricted Mode writes notes automatically'); assert.ok(restricted.guideState().autoNotes); }
+  finally { await restricted.close(); }
 });
 
 test('quick jobs use a fast model: the Overview is written in parallel, Logic answers carry no companion, and line maps are compact', async () => {
@@ -2392,7 +2502,7 @@ test('a block runs its unit test for real once allowed, and simulates in Restric
 });
 
 test('the run cell shows In, Out and steps that highlight the pseudocode, with file values as emoji', () => {
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
   const sent = []; let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const result = { title: 'Totals', summary: 's', sections: [{ title: 'Add the items', startLine: 1, endLine: 5, pseudocode: 'Start the total at 0.\nFor each item:\n    Add it to the total.\nReturn the total with the file.', lineMap: [{ pseudocodeLine: 1, startLine: 2, endLine: 2 }, { pseudocodeLine: 2, startLine: 3, endLine: 3 }, { pseudocodeLine: 3, startLine: 4, endLine: 4 }, { pseudocodeLine: 4, startLine: 5, endLine: 5 }] }] };
@@ -2445,4 +2555,221 @@ test('monorepo sub-projects resolve `src.` imports and run tests from their own 
     assert.ok(h.warnings[0].includes(path.join(h.root, '.venv', 'bin', 'python')), 'the project\'s own .venv runs the test');
     assert.equal(h.last(reader).runs[0].outcome, 'passed', h.last(reader).runs[0].message);
   } finally { await h.close(); }
+});
+
+test('a sign-in started in Setup continues by itself once it works, and coming back to the window re-checks', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const terminals = [], panels = [], ready = [];
+  let closeTerminal, focusWindow;
+  const api = { Uri: { parse: value => value }, ViewColumn: { Active: -1, One: 1 }, workspace: { isTrusted: true, getConfiguration: () => ({ get: (_, fallback) => fallback }) },
+    window: { createTerminal(options) { const t = { options, show() {}, dispose() {} }; terminals.push(t); return t; }, onDidCloseTerminal(fn) { closeTerminal = fn; return { dispose() {} }; }, onDidChangeWindowState(fn) { focusWindow = fn; return { dispose() {} }; },
+      createWebviewPanel(type) { const panel = { type, messages: [], reveal() {}, dispose() { panel.disposed = true; panel.closed?.(); }, onDidDispose(fn) { panel.closed = fn; }, webview: { postMessage: m => panel.messages.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage(fn) { panel.receive = fn; } } }; panels.push(panel); return panel; } } };
+  const stub = { exports: {} };
+  vm.runInNewContext(await fs.readFile(path.join(__dirname, 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : require(id), Buffer, AbortController, setTimeout, clearTimeout, process, __dirname });
+  const values = new Map(), context = { subscriptions: [], globalState: { get: (k, f) => values.get(k) ?? f, update: async (k, v) => values.set(k, v) } };
+  const statuses = { claude: { installed: false, signedIn: false, ready: false, problem: 'Not installed' }, codex: { installed: true, signedIn: false, ready: false, problem: 'Not signed in', path: '/usr/local/bin/codex' } };
+  let checks = 0, opened = 0;
+  const setup = stub.exports.createSetup(context, { api, status: async owner => { checks++; return statuses[owner]; }, onReady: owner => ready.push(owner) });
+  assert.equal(await setup.ready(), false, 'no AI chosen yet');
+  await setup.show({ pending: { label: 'explain a.py', run: async () => { opened++; } } });
+  const panel = panels[0], last = () => panel.messages.at(-1).state;
+  assert.match(panel.webview.html, /<title>Set up Yamori<\/title>/); assert.doesNotMatch(panel.webview.html, /innerHTML/);
+  assert.deepEqual(last().cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code']);
+  await panel.receive({ type: 'primary', provider: 'codex' });
+  assert.deepEqual([...terminals[0].options.shellArgs], ['login']);
+  const before = checks; await focusWindow({ focused: true }); await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(checks > before, 'returning to the window re-checks'); assert.equal(opened, 0, 'still signed out: nothing continues');
+  statuses.codex = { installed: true, signedIn: true, ready: true, account: 'ChatGPT account', path: '/usr/local/bin/codex' };
+  closeTerminal(terminals[0]);
+  for (let i = 0; i < 100 && !opened; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(opened, 1, 'the waiting file opens'); assert.deepEqual(ready, ['codex']); assert.equal(values.get('provider'), 'codex'); assert.equal(panel.disposed, true);
+  assert.equal(await setup.ready(), true);
+  closeTerminal({}); assert.equal(terminals.length, 1, 'other terminals are ignored');
+  setup.dispose();
+});
+
+test('parts for parallel writing are whole definitions of similar size, planned locally', () => {
+  const { planParts } = projectMap;
+  const lines = n => Array.from({ length: n }, (_, i) => 'x' + i).join('\n');
+  // 120 lines: imports, three functions (one decorated), a small tail.
+  const text = lines(120).split('\n');
+  text[29] = '@cache'; text[30] = '# Build the plan.';
+  const defs = [{ name: 'load', kind: 'function', line: 11, end: 30 }, { name: 'plan', kind: 'function', line: 32, end: 70 }, { name: 'helper', kind: 'function', line: 40, end: 45 }, { name: 'LIMIT', kind: 'constant', line: 5, end: 5 }, { name: 'write', kind: 'function', line: 71, end: 115 }];
+  const parts = planParts(defs, text.join('\n'), 1, { maxParts: 5, minLines: 25 });
+  assert.deepEqual(JSON.parse(JSON.stringify(parts)), [
+    { startLine: 1, endLine: 29, names: ['load'] },
+    { startLine: 30, endLine: 70, names: ['plan'] },
+    { startLine: 71, endLine: 120, names: ['write'] }
+  ], 'decorators and comments stay with their definition; nested helpers stay inside; a short tail joins the last part');
+  assert.equal(planParts(defs, lines(40), 1), undefined, 'too small for two parts');
+  assert.equal(planParts(defs, text.join('\n'), 1, { maxParts: 1 }), undefined, 'one request means no parts');
+  // A class longer than a part splits into its methods; the header stays with the first.
+  const big = [{ name: 'Store', kind: 'class', line: 3, end: 200 }, ...[10, 60, 110, 160].map((line, i) => ({ name: 'm' + i, kind: 'function', line, end: line + 40 }))];
+  const split = planParts(big, lines(200), 1, { maxParts: 4, minLines: 25 });
+  assert.deepEqual(JSON.parse(JSON.stringify(split.map(part => [part.startLine, part.endLine, part.names]))), [[1, 59, ['Store.m0']], [60, 109, ['Store.m1']], [110, 159, ['Store.m2']], [160, 200, ['Store.m3']]]);
+  // A selection keeps original line numbers.
+  const offset = planParts(defs.map(def => ({ ...def, line: def.line + 100, end: def.end + 100 })), text.join('\n'), 101, { maxParts: 5, minLines: 25 });
+  assert.deepEqual(JSON.parse(JSON.stringify(offset.map(part => [part.startLine, part.endLine]))), [[101, 129], [130, 170], [171, 220]]);
+});
+
+test('parallel parts: at most N at once, stitched in order, kept inside their lines, retried once, else one whole-file request', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-parts-'));
+  try {
+    const log = path.join(dir, 'calls.jsonl'), binary = path.join(dir, 'claude.js'), marker = path.join(dir, 'failed-once');
+    await fs.writeFile(binary, `const a=process.argv.slice(2),fs=require('fs');if(a.includes('--help')){console.log('--safe-mode');process.exit(0)}
+let prompt='';process.stdin.on('data',d=>prompt+=d).on('end',()=>{const schema=JSON.parse(a[a.indexOf('--json-schema')+1]),model=a.includes('--model')?a[a.indexOf('--model')+1]:'';
+const part=prompt.match(/PARALLEL PART (\\d+) OF (\\d+): .*?source lines (\\d+)–(\\d+)/);
+const kind=schema.properties.blocks?'select':schema.properties.score?'review':/Detail: overview\\./.test(prompt)?'overview':part?'part':'whole';
+const started=Date.now();
+const finish=out=>setTimeout(()=>{fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({kind,model,part:part&&+part[1],started,ended:Date.now()})+'\\n');process.stdout.write(JSON.stringify({type:'result',structured_output:out,modelUsage:{[model||'claude-opus-test']:{}}}))},kind==='part'?150:20);
+if(kind==='part'&&(model==='broken-parts'||(part[1]==='2'&&!fs.existsSync(${JSON.stringify(marker)})))){fs.writeFileSync(${JSON.stringify(marker)},'');fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({kind:'failed',part:+part[1]})+'\\n');process.stderr.write('overloaded');process.exit(1)}
+if(kind==='select')return finish({blocks:[{index:0,reason:'hard'}]});
+if(kind==='review')return finish({score:1,faithful:true,issues:[]});
+if(kind==='overview')return finish({title:'Overview',summary:'Short.',sections:[{title:'All',startLine:1,endLine:90,pseudocode:'Do it',lineMap:[[1,1,90]]}],views:{}});
+if(kind==='whole')return finish({title:'Whole file',summary:'One request.',sections:[{title:'Everything',startLine:1,endLine:90,pseudocode:'Do everything',lineMap:[[1,1,90]]}]});
+const k=+part[1],s=+part[3],e=+part[4];
+finish({title:k===1?'Whole file':'Part '+k,summary:k===1?'Explains the file.':'p',sections:[{title:'Part '+k+' work',startLine:s-3,endLine:e,pseudocode:'Work on part '+k+'\\nThen finish',lineMap:[[1,s,s],[3,e+20,e+21]]},{title:'Outside',startLine:e+30,endLine:e+31,pseudocode:'Not mine',lineMap:[]}]});});`);
+    const read = async () => (await fs.readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const text = Array.from({ length: 90 }, (_, i) => 'line' + (i + 1)).join('\n');
+    const input = { uri: 'file:///work.py', name: 'work.py', language: 'python', startLine: 1, text };
+    const parts = [{ startLine: 1, endLine: 30, names: ['a'] }, { startLine: 31, endLine: 60, names: ['b'] }, { startLine: 61, endLine: 90, names: ['c'] }];
+    const phases = [];
+    const result = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, parts, parallel: 2, onProgress: update => phases.push(update) });
+    const calls = await read(), runs = calls.filter(call => call.kind === 'part');
+    assert.deepEqual(runs.map(call => call.part).sort(), [1, 2, 3]); assert.deepEqual(calls.filter(call => call.kind === 'failed').map(call => call.part), [2], 'part 2 failed once and was retried');
+    const overlap = Math.max(...runs.map(a => runs.filter(b => b.started <= a.started && b.ended > a.started).length));
+    assert.ok(overlap <= 2, 'never more than 2 parts at once (saw ' + overlap + ')'); assert.ok(overlap === 2, 'parts really run in parallel');
+    assert.equal(result.title, 'Whole file'); assert.equal(result.summary, 'Explains the file.'); assert.equal(result.parts, 3);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.sections.map(section => [section.title, section.startLine, section.endLine]))), [['Part 1 work', 1, 30], ['Part 2 work', 31, 60], ['Part 3 work', 61, 90]], 'in order, clamped to their part; sections outside are dropped');
+    assert.deepEqual(JSON.parse(JSON.stringify(result.sections[1].lineMap)), [{ pseudocodeLine: 1, startLine: 31, endLine: 31 }], 'links that leave the part are dropped');
+    assert.equal(result.views.overview.title, 'Overview', 'the fast Overview still runs alongside');
+    assert.ok(phases.some(update => update.stage === 'write' && /Writing 3 parts in parallel \(3\/3 done\)/.test(update.phase)));
+    assert.ok(phases.some(update => update.preview?.sections?.length >= 1 && update.preview.title === 'Whole file'), 'a combined preview streams');
+    // Parts that keep failing fall back to one whole-file request.
+    await fs.writeFile(log, ''); phases.length = 0;
+    const fallback = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'broken-parts', effort: 'low', parts, parallel: 3, onProgress: update => phases.push(update) });
+    assert.equal(fallback.title, 'Whole file'); assert.equal(fallback.sections[0].title, 'Everything'); assert.equal(fallback.parts, undefined);
+    assert.ok(phases.some(update => /^Parallel writing failed .*; writing the whole file in one request/.test(update.phase)));
+    // Background review: the draft returns at once; reviewDraft later uses the review model.
+    await fs.writeFile(log, '');
+    const draft = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, parts, parallel: 3, refinementSteps: 1, background: true });
+    assert.deepEqual(JSON.parse(JSON.stringify(draft.refinement)), { version: 1, status: 'pending', stepsRequested: 1, stepsCompleted: 0, selectedBlocks: [] });
+    assert.ok(!(await read()).some(call => call.kind === 'select' || call.kind === 'review'), 'no review before the draft is returned');
+    assert.equal(parseResult(JSON.stringify(draft), input).refinement.status, 'pending', 'a cached draft keeps its pending review');
+    const { reviewDraft } = require('./engine');
+    const reviewed = await reviewDraft({ initial: draft, source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, review: { model: 'sonnet', effort: 'low' }, steps: 1 });
+    const reviews = (await read()).filter(call => call.kind === 'review');
+    assert.equal(reviews.length, 2); assert.ok(reviews.every(call => call.model === 'sonnet'), 'reviewers use the cheaper review model');
+    assert.equal((await read()).find(call => call.kind === 'select').model, 'haiku');
+    assert.equal(reviewed.refinement.status, 'reviewed'); assert.equal(reviewed.refinement.reviewModel, 'sonnet'); assert.equal(reviewed.model, draft.model, 'the explanation keeps its writer');
+    assert.equal(parseResult(JSON.stringify(reviewed), input).refinement.reviewModel, 'sonnet');
+    // Stop aborts every part.
+    const stop = new AbortController(); setTimeout(() => stop.abort(), 60);
+    await assert.rejects(generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', parts, parallel: 3, signal: stop.signal }), /Cancelled/);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('reviews use one tier below the writer, never above it', async () => {
+  const { reviewModel } = require('./engine');
+  const plain = value => value && JSON.parse(JSON.stringify(value));
+  assert.deepEqual(plain(await reviewModel('claude', '', '')), { model: 'sonnet', effort: 'low' }, 'under Claude\'s default (Opus)');
+  assert.deepEqual(plain(await reviewModel('claude', '', 'opus')), { model: 'sonnet', effort: 'low' });
+  assert.equal(await reviewModel('claude', '', 'sonnet'), undefined, 'a Sonnet writer reviews with itself');
+  assert.equal(await reviewModel('claude', '', 'haiku'), undefined, 'never upgrade a smaller writer');
+  assert.equal(await reviewModel('claude', '', '', 'main'), undefined);
+  assert.deepEqual(plain(await reviewModel('claude', '', '', 'claude-sonnet-5-5')), { model: 'claude-sonnet-5-5', effort: 'low' });
+  const catalog = [{ id: 'gpt-6.1-sol', description: 'Latest workhorse', efforts: [{ reasoningEffort: 'low' }] }, { id: 'gpt-6-astra', description: 'Frontier', efforts: [] }, { id: 'gpt-6.1-terra', description: 'GPT-6.1 Terra Codex model', efforts: [{ reasoningEffort: 'low' }] }, { id: 'gpt-5.6-terra', description: 'Older balanced model', efforts: [] }, { id: 'gpt-6-luna', description: 'Fast', efforts: [] }];
+  assert.deepEqual(plain(await reviewModel('codex', '', '', 'auto', catalog)), { model: 'gpt-6.1-terra', effort: 'low' }, 'the newest balanced model under Codex\'s default');
+  assert.deepEqual(plain(await reviewModel('codex', '', 'gpt-6-astra', 'auto', catalog)), { model: 'gpt-6.1-terra', effort: 'low' });
+  assert.equal(await reviewModel('codex', '', 'gpt-6-luna', 'auto', catalog), undefined);
+  assert.equal(await reviewModel('codex', '', '', 'auto', [{ id: 'only-one', description: 'x' }]), undefined, 'no balanced model: the writer reviews');
+});
+
+test('background review: the draft is readable at once, improved blocks swap in later, and edits, refreshes and failures are handled', async () => {
+  const path = require('node:path'), fs = require('node:fs/promises');
+  const gates = [], opened = [];
+  const engine = h => ({
+    generate: async opts => {
+      opened.push({ level: opts.level, background: opts.background, parallel: opts.parallel, parts: opts.parts?.length || 0, review: opts.review, refine: opts.refinementSteps, refresh: !!opts.sourceRefresh });
+      const lines = opts.source.text.split('\n').length;
+      const view = { title: 'About', summary: 'Explains.', sections: [{ title: 'First block', startLine: 1, endLine: lines, pseudocode: 'Draft text', lineMap: [] }] };
+      return { ...view, requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, ...(opts.level === 'logic' && opts.background && opts.refinementSteps ? { refinement: { version: 1, status: 'pending', stepsRequested: opts.refinementSteps, stepsCompleted: 0, selectedBlocks: [] } } : {}) };
+    },
+    reviewDraft: args => new Promise((resolve, reject) => { const gate = { args, resolve, reject }; gates.push(gate); h.gates = gates; })
+  });
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false, reviewModel: 'review-test' }, { engine });
+  try {
+    // A bigger file is written as parallel parts.
+    const big = Array.from({ length: 4 }, (_, i) => `def step_${i}():\n` + Array.from({ length: 29 }, (_, j) => `    value_${j} = ${j}`).join('\n') + '\n    return value_0\n').join('\n');
+    await fs.writeFile(path.join(h.root, 'pipeline', 'big.py'), big);
+    await h.commands.get('yamori.openAt')(new h.Uri(path.join(h.root, 'pipeline/big.py')).toString(), 1);
+    const reader = h.readers().at(-1);
+    await h.until(() => h.last(reader).review?.state === 'running', 'the review runs in the background');
+    const shown = h.last(reader);
+    assert.equal(shown.busy, false, 'not busy while reviewing'); assert.equal(shown.result.sections[0].pseudocode, 'Draft text', 'the draft is readable at once');
+    assert.match(shown.review.text, /Reviewing difficult blocks in the background with review-test\. You can read now/);
+    assert.deepEqual(JSON.parse(JSON.stringify(opened[0])), { level: 'logic', background: true, parallel: 6, parts: 4, review: { model: 'review-test', effort: 'low' }, refine: 1, refresh: false });
+    assert.equal(shown.run.state, 'done'); assert.equal(shown.run.steps.find(step => step.id === 'review').state, 'active');
+    assert.deepEqual(JSON.parse(JSON.stringify(gates[0].args.review)), { model: 'review-test', effort: 'low' });
+    // A level switch does not stop it; finishing swaps the improved block in and caches it.
+    await reader.receive({ type: 'level', level: 'overview' });
+    assert.equal(gates[0].args.signal.aborted, false, 'switching level keeps the review going');
+    await reader.receive({ type: 'level', level: 'logic' });
+    gates[0].resolve({ ...gates[0].args.initial, sections: [{ ...gates[0].args.initial.sections[0], pseudocode: 'Reviewed text' }], refinement: { version: 1, status: 'reviewed', stepsRequested: 1, stepsCompleted: 1, acceptedStep: 1, lambda: 0.5, initialObjective: 6, finalObjective: 2, entropy: 1, readCost: 2, faithful: true, history: [], selectedBlocks: [0], reviewModel: 'review-test' } });
+    await h.until(() => h.last(reader).review?.state === 'done', 'the review finishes');
+    assert.equal(h.last(reader).result.sections[0].pseudocode, 'Reviewed text'); assert.equal(h.last(reader).review.text, 'Review improved 1 block: First block.');
+    assert.equal(h.last(reader).run.steps.find(step => step.id === 'review').state, 'done');
+    // A refresh abandons the review of what it replaces.
+    await h.commands.get('yamori.openAt')(new h.Uri(path.join(h.root, 'main.py')).toString(), 1);
+    const second = h.readers().at(-1);
+    await h.until(() => gates.length === 2 && h.last(second).review?.state === 'running', 'a second review starts');
+    await second.receive({ type: 'refresh' });
+    await h.until(() => gates[1].args.signal.aborted, 'Regenerate stops the old review');
+    // A fidelity failure keeps the draft with a warning and Retry review.
+    await h.commands.get('yamori.openAt')(new h.Uri(path.join(h.root, 'pipeline/plan.py')).toString(), 1);
+    const third = h.readers().at(-1);
+    await h.until(() => gates.length >= 3 && h.last(third).review?.state === 'running', 'a third review starts');
+    gates.at(-1).reject(Object.assign(new Error('Step 2 invents a retry.'), { code: 'YAMORI_FIDELITY' }));
+    await h.until(() => h.last(third).review?.state === 'failed', 'the failure is shown');
+    assert.equal(h.last(third).result.sections[0].pseudocode, 'Draft text');
+    assert.equal(h.last(third).result.refinement.status, 'incomplete'); assert.match(h.last(third).result.refinement.warning, /flagged possible inaccuracies .*Retry review\. Step 2 invents a retry\./);
+  } finally { for (const gate of gates) gate.resolve?.(gate.args.initial); await h.close(); }
+});
+
+test('the reader shows the background review status as a quiet line', () => {
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
+  let receive;
+  vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage() {} }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
+  receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', level: 'logic', name: 'a.py', documentKey: 'k', result: valid, review: { state: 'running', text: 'Reviewing difficult blocks in the background with sonnet.' } } } });
+  const line = all(elements.content).find(el => /review-status/.test(el.className || ''));
+  assert.ok(line); assert.equal(line.className, 'notice review-status running'); assert.equal(line.textContent, 'Reviewing difficult blocks in the background with sonnet.'); assert.equal(line.attributes.role, 'status');
+});
+
+test('a parallel draft never waits long for a slow Overview, and a cheaper reviewer’s stray link does not discard its rewrite', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-review-'));
+  try {
+    const binary = path.join(dir, 'claude.js');
+    await fs.writeFile(binary, `const a=process.argv.slice(2);if(a.includes('--help')){console.log('--safe-mode');process.exit(0)}
+let prompt='';process.stdin.on('data',d=>prompt+=d).on('end',()=>{const schema=JSON.parse(a[a.indexOf('--json-schema')+1]),model=a.includes('--model')?a[a.indexOf('--model')+1]:'';
+const out=o=>setTimeout(()=>process.stdout.write(JSON.stringify({type:'result',structured_output:o,modelUsage:{[model||'claude-opus-test']:{}}})),/Detail: overview\\./.test(prompt)?5000:10);
+if(schema.properties.blocks)return out({blocks:[{index:0,reason:'hard'}]});
+if(schema.properties.score)return out(/Reviewed text/.test(prompt)?{score:1,faithful:true,issues:[]}:{score:6,faithful:true,issues:[{section:0,view:'main',severity:'major',problem:'Unclear',suggestion:'Explain the count'}]});
+if(/Detail: overview\\./.test(prompt))return out({title:'O',summary:'O',sections:[{title:'All',startLine:1,endLine:60,pseudocode:'Do',lineMap:[]}],views:{}});
+if(/REFINEMENT PASS/.test(prompt)){const b=JSON.parse(prompt.match(/SELECTED BLOCKS DATA: (\\[.*?\\])\\n/)[1])[0];return out({title:'t',summary:'s',sections:[{...b,pseudocode:'Reviewed text\\n\\nCount the items',lineMap:[[1,b.startLine,b.startLine],[2,b.startLine,b.startLine],[3,b.endLine,b.endLine]]}]})}
+const p=prompt.match(/PARALLEL PART (\\d+) OF \\d+: .*?source lines (\\d+)–(\\d+)/);
+out({title:'File',summary:'Explains.',sections:[{title:'Part '+p[1],startLine:+p[2],endLine:+p[3],pseudocode:'Draft '+p[1],lineMap:[[1,+p[2],+p[2]]]}]});});`);
+    const text = Array.from({ length: 60 }, (_, i) => 'line' + (i + 1)).join('\n'), input = { uri: 'file:///w.py', name: 'w.py', language: 'python', startLine: 1, text };
+    const parts = [{ startLine: 1, endLine: 30, names: [] }, { startLine: 31, endLine: 60, names: [] }];
+    const started = Date.now();
+    const draft = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, parts, parallel: 2, refinementSteps: 1, background: true });
+    assert.ok(Date.now() - started < 4000, 'the draft did not wait 15 s for the Overview (' + (Date.now() - started) + ' ms)');
+    assert.equal(draft.views, undefined, 'a late Overview is written when that level is opened');
+    const { reviewDraft } = require('./engine');
+    const reviewed = await reviewDraft({ initial: draft, source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, review: { model: 'sonnet', effort: 'low' }, steps: 1 });
+    assert.equal(reviewed.refinement.acceptedStep, 1, 'the rewrite is kept');
+    assert.equal(reviewed.sections[0].pseudocode, 'Reviewed text\n\nCount the items'); assert.equal(reviewed.sections[1].pseudocode, 'Draft 2');
+    assert.deepEqual(JSON.parse(JSON.stringify(reviewed.sections[0].lineMap.map(link => link.pseudocodeLine))), [1, 3], 'only the link on a blank line was dropped');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

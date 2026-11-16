@@ -930,7 +930,50 @@ class ProjectStore {
   save(name, value) { return this.cache.write(this.file(name), value); }
 }
 
-module.exports = { GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
+// ---- Parts for parallel writing --------------------------------------------
+// Several requests can explain one file at the same time, one part each. Parts
+// are whole top-level definitions (one longer than a part splits into its
+// inner definitions, the header staying with the first), merged in order to similar
+// sizes. Pure and local; undefined when the file is too small for two parts.
+const PART_KINDS = new Set(['class', 'function', 'method', 'interface', 'type', 'enum']);
+function planParts(defs, text, startLine = 1, { maxParts = 6, minLines = 25 } = {}) {
+  const lines = String(text).split('\n'), first = startLine, last = startLine + lines.length - 1, total = lines.length;
+  if (maxParts < 2 || total < minLines * 2) return undefined;
+  const target = Math.max(minLines, Math.ceil(total / maxParts));
+  const blocks = (defs || []).filter(def => PART_KINDS.has(def.kind) && def.line >= first && def.line <= last)
+    .map(def => ({ name: def.name, line: def.line, end: Math.min(last, Math.max(def.line, def.end || def.line)) }));
+  const contains = (outer, inner) => outer !== inner && outer.line <= inner.line && outer.end >= inner.end && (outer.line !== inner.line || outer.end !== inner.end);
+  const containers = def => blocks.filter(other => contains(other, def));
+  const starts = [], named = [];
+  for (const def of blocks.filter(def => !containers(def).length)) {
+    const children = blocks.filter(other => containers(other).length === 1 && contains(def, other)).sort((a, b) => a.line - b.line);
+    if (def.end - def.line + 1 > target && children.length > 1) {
+      starts.push(def.line, ...children.slice(1).map(child => child.line));
+      named.push({ name: def.name + '.' + children[0].name, line: def.line }, ...children.slice(1).map(child => ({ name: def.name + '.' + child.name, line: child.line })));
+    } else { starts.push(def.line); named.push({ name: def.name, line: def.line }); }
+  }
+  // Decorators, attributes and doc comments directly above a definition belong to it.
+  const lift = line => {
+    while (line - 1 >= first && /^\s*(?:@|#|\/\/|\/\*|\*)/.test(lines[line - 1 - first])) line--;
+    return line;
+  };
+  const bounds = [...new Set(starts.map(lift).filter(line => line > first))].sort((a, b) => a - b);
+  const segments = [first, ...bounds].map((start, index, all) => [start, (all[index + 1] ?? last + 1) - 1]).filter(([a, b]) => b >= a);
+  const parts = [];
+  let current;
+  for (const [a, b] of segments) {
+    current = current ? { ...current, endLine: b } : { startLine: a, endLine: b };
+    if (current.endLine - current.startLine + 1 >= target) { parts.push(current); current = undefined; }
+  }
+  if (current) {
+    if (parts.length && current.endLine - current.startLine + 1 < minLines / 2) parts[parts.length - 1].endLine = current.endLine;
+    else parts.push(current);
+  }
+  if (parts.length < 2) return undefined;
+  return parts.map(part => ({ ...part, names: named.filter(item => item.line >= part.startLine && item.line <= part.endLine).map(item => item.name).slice(0, 16) }));
+}
+
+module.exports = { planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
 
 // Build step: copy the tree-sitter runtime and the bundled grammars from the
 // pinned development dependency. Run `npm run build:parser` after updating it.

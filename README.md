@@ -121,7 +121,10 @@ Yamori is an early preview. Its public extension ID is **`cowana-ai.yamori`**.
 
 1. Open a code file in Cursor or VS Code.
 2. Click the **Yamori gecko icon** at the top right of the script, or **Yamori** in the bottom status bar.
-3. Choose **Overview** or **Logic** in the reading panel, or open **Project guide** to see where to start.
+3. The first time, **Set up Yamori** shows which AI is on your computer and one button for each:
+   **Use Claude** / **Use ChatGPT** when it's ready, otherwise **Sign in** or **Install**.
+   Once it's ready, the file you clicked opens.
+4. Choose **Overview** or **Logic** in the reading panel, or open **Project guide** to see where to start.
 
 Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori),
 or search for **Yamori** by **Yamori** (`cowana-ai`) in VS Code’s Extensions panel.
@@ -147,10 +150,9 @@ Right-click a folder and choose **Yamori: Read a Folder or Project** to select
 multiple files. Files are prepared sequentially without opening a stack of tabs. Use **Yamori: Switch Files** or **Switch file…** to open a prepared explanation. Completed results remain cached
 if you stop.
 
-On the first install, Yamori shows a one-time **Open current file** action. The
-gecko in the editor toolbar adapts to light/dark themes, and **Yamori** stays
-available in the status bar. On your first open, it automatically selects an
-installed Codex or Claude CLI if you have not already chosen a provider.
+On the first install, Yamori opens **Set up Yamori** if no AI is ready yet, and
+otherwise shows a one-time **Open current file** action. The gecko in the editor
+toolbar adapts to light/dark themes, and **Yamori** stays available in the status bar.
 
 Yamori also works in **Restricted Mode** and with standalone local files; you
 do not need to trust a project to see the gecko icon or explain its source.
@@ -161,30 +163,37 @@ Custom behavior whose definition is unavailable stays explicitly unknown. VS Cod
 workspace trust setting stays unchanged; Yamori does not run project code there
 (see [Run a function with its tests](#run-a-function-with-its-tests) for trusted folders).
 
-### Connect a provider
+### Set up an AI
 
-Yamori uses a local CLI's existing sign-in. It does not request or copy your
-subscription tokens.
+Yamori uses an AI you already have: **Claude** (through Claude Code) or **ChatGPT**
+(through Codex), with that tool's own sign-in and your plan's limits. It never asks
+for an API key and never copies your tokens.
 
-| Provider | Setup |
-| --- | --- |
-| **Codex** | Install Codex and sign in with `codex login`. Yamori also detects the macOS app-bundled CLI. |
-| **Claude Code** | Run **Yamori: Connect Claude**. It opens Claude Code’s browser sign-in in a visible editor terminal. If the CLI is missing, choose **Install and sign in** to run Anthropic’s official installer first. |
+**Set up Yamori** opens by itself the first time you click the gecko without a ready
+AI (or run **Yamori: Set Up AI**, or **AI ▾ → Set up AI…** in a reading tab). For each
+AI it checks, without any model request, whether it is installed and signed in
+(`claude auth status`, `codex login status`), then offers one button:
 
-Choose the provider at the top of the panel. Existing eligible subscription access
-uses the provider's allowance; API-key authentication can use API billing.
-Account limits still apply. Optional executable paths are available under
-**Settings → Yamori** if automatic detection cannot find your CLI.
+| What it finds | Button | What happens |
+| --- | --- | --- |
+| Installed and signed in | **Use Claude** / **Use ChatGPT** | Saved as your AI; the file you clicked opens. |
+| Installed, signed out | **Sign in to Claude** / **Sign in with ChatGPT** | A terminal opens the tool's browser sign-in. When it finishes, or when you come back to VS Code, Yamori checks again and continues by itself. |
+| Not installed | **Install Claude Code** / **Install Codex** | A visible terminal runs Anthropic's official installer, or `npm install -g @openai/codex` (Homebrew if npm is missing), then the sign-in. If a step fails, the terminal stays open with its messages. |
 
-For Claude, a **Connect Claude** button also appears on an empty reading panel
-or after an error. Finish the browser sign-in, then press **Refresh**. Selecting
-a Claude model only chooses the model; it does not sign you in.
+It finds the CLIs where people already have them:
+- **Claude Desktop** downloads its own copy of Claude Code; Yamori uses it and its
+  sign-in, so a separate install isn't needed.
+- **The ChatGPT desktop app** and the Codex app include Codex.
+- Command-line installs on `PATH`, `~/.local/bin`, Homebrew and npm.
 
-**Claude Desktop alone is not enough:** Yamori needs the separate Claude Code
-CLI for programmatic generation. The connection action can install it with your
-approval, then let Claude handle the account sign-in. See Anthropic’s
-[setup guide](https://code.claude.com/docs/en/setup) and
-[CLI reference](https://code.claude.com/docs/en/cli-reference).
+If both are ready, the one you chose is marked **In use**. If your chosen AI stops
+working (signed out, uninstalled), opening a file shows the setup screen again, and it
+suggests the other AI when that one is ready. Errors caused by sign-in or a missing
+CLI show a **Set up AI** button in the reading tab. Optional executable paths are
+under **Settings → Yamori** if detection cannot find your CLI. Selecting a model only
+chooses the model; it does not sign you in. See Anthropic's
+[setup guide](https://code.claude.com/docs/en/setup) and OpenAI's
+[Codex CLI](https://github.com/openai/codex) for details.
 
 On Windows, Yamori detects native installs in `%USERPROFILE%\\.local\\bin`,
 executables on `PATH`, and standard npm launchers in `%APPDATA%\\npm`, including
@@ -253,10 +262,15 @@ become links and hovers, and explanations know each neighbour's purpose.
   **Stop** pauses it and finished files are kept.
 - After a rescan, only new or changed files are noted again. The project overview is
   rewritten only when new files appear.
-- Projects with more than 120 files without notes ask once first. A failure, such
-  as a signed-out CLI, is shown once and not retried until you press **Write AI notes**.
-- Turn it off with `yamori.autoNotes`; it is always off in Restricted Mode, where the
-  button still works. Files are
+- They also start when you open a file of a mapped project, so the guide tab doesn't
+  need to stay open.
+- No AI ready yet (signed out, not installed)? Notes wait instead of failing: the guide
+  says "AI notes start once an AI is connected" and its button becomes **Set up AI**.
+  When setup finishes, notes start by themselves.
+- Projects with more than 120 files without notes ask once first. Other failures are
+  shown once and not retried until you press **Write AI notes**.
+- Notes are tool-free requests that never run project code, so they also run in
+  Restricted Mode. Turn them off with `yamori.autoNotes` (a user setting). Files are
 batched (about 40 KB of input per request); large files are sent as an outline.
 Notes run with tools disabled, Stop is always available, finished batches are
 saved, and only changed files are re-noted later. Notes are model-written
@@ -384,8 +398,8 @@ Haiku, or the model Codex's own catalog describes as fast (for example
   (it runs in parallel and is usually ready first, so the Logic answer is shorter)
 - picking the blocks worth reviewing
 
-Logic explanations, block edits, refreshes and reviews always use your main model.
-Set `yamori.fastModel` to `off` to use your main model everywhere, or to an exact
+Logic explanations and block edits use your main model; reviews use the review
+model below. Set `yamori.fastModel` to `off` to use your main model for quick jobs, or to an exact
 model ID. Step links are written as compact `[line, start, end]` triples: as
 objects they made up 35–42% of every answer.
 
@@ -399,9 +413,57 @@ explanation. The panel distinguishes your next-request settings from the model
 that generated the current result. Effort is labeled as requested because CLI
 policies can cap or override it.
 
+### Speed: parallel parts and background review
+
+A new Logic explanation of a bigger file is written by several requests at once,
+and reviewed after you can already read it. Measured on a 354-line Python file
+(Claude, Opus at low effort, one review step):
+
+| | Before | Now |
+| --- | --- | --- |
+| First block on screen | 3.5 s | 3.4 s |
+| Whole draft readable | 49.5 s | **17.4 s** |
+| Finished, including review | 85 s (edit and source actions locked until then) | 53 s, in the background |
+
+**Parallel parts** (`yamori.parallelRequests`, default 6):
+- Yamori splits the file locally with tree-sitter, no AI, into parts made of whole
+  functions and classes. A definition longer than a part splits into its inner
+  definitions. Decorators and doc comments stay with their definition.
+- Each request explains one part with the whole file as context, and is told which
+  other parts exist so it names them instead of re-explaining them. Part 1 also
+  writes the title and summary.
+- Blocks appear as each part finishes; the draft is ready about when the slowest part is.
+- A section that strays outside its part is trimmed to it. A failed part is retried
+  once; if it fails again, Yamori writes the whole file in one request as before.
+- Used for Logic on Python, JavaScript/TypeScript, Go, Java and Rust files big
+  enough for two parts (about 50 lines). Set 1 to always use one request. Parts
+  read the whole file each, so they use more of your plan for the same output.
+
+**Background review:**
+- Once the draft is shown, the review runs on its own: picking difficult blocks, two
+  reviewers, and a rewrite. A line in the tab says "Reviewing difficult blocks in the
+  background…", and you can read, scroll and switch levels meanwhile.
+- Improved blocks swap in when it finishes ("Review improved 2 blocks: …"), and the
+  cache is updated.
+- If you edit a block, refresh or regenerate first, the review result is dropped.
+  Changed code also drops it.
+- If the reviewers find inaccuracies they can't fix, the draft stays with a warning
+  and **Retry review**.
+- Closing VS Code mid-review is fine: the draft is cached as pending and reviewed
+  again the next time you open it.
+
+**Cheaper review model** (`yamori.reviewModel`, default `auto`): the reviewers and
+the rewrite run one tier below your writer, never above it. That's Sonnet under Opus
+or Claude's default, and Codex's balanced catalog model (`gpt-6.1-terra` today) under
+its default. If you already chose a smaller writer, reviews use it. `main` uses your
+writer's model, or enter an exact model ID. A stray step link in the rewrite is
+dropped instead of discarding the whole rewrite.
+
 ## Refine the difficult parts
 
-Yamori can improve a new explanation before showing it:
+Yamori can improve a new explanation after showing it (see
+[Speed](#speed-parallel-parts-and-background-review)); block edits and
+refreshes are still reviewed before they replace the text:
 
 1. A selector picks only blocks with difficult reasoning: a numerical identity,
    subtle state changes, a complex algorithm or a missing conceptual bridge.
@@ -418,11 +480,12 @@ not measured entropy or a proof of correctness**. Reviews cover the selected
 blocks; skipping an easy block does not certify it as correct.
 
 Open the AI menu → **Refine**, or run **Yamori: Choose Refinement Steps**.
-The default is **2 steps**, configurable from **0–5** through
+The default is **1 step**, configurable from **0–5** through
 `yamori.refinementSteps`. Setting 0 skips selection and review. A new explanation
 uses two model requests when nothing needs refinement, or up to **3N + 4** when
 blocks are selected. More steps use more time and subscription capacity. A malformed evaluator response may add one bounded repair request for that evaluator. All
-sessions use your chosen provider, model and effort, with tools disabled.
+sessions use your chosen provider with tools disabled; reviewers and the rewrite use
+`yamori.reviewModel`, and picking blocks uses the fast model.
 
 The first draft streams immediately so you can start reading while selection
 and reviews run. It stays labeled as a draft, with source/edit actions disabled
@@ -636,13 +699,13 @@ npx @vscode/vsce package --no-dependencies
 | [test.js](test.js) | Offline provider, UI and extension-workflow checks. |
 | [demo.py](demo.py) | A small example to read with Yamori. |
 
-**Validation:** 97 automated tests cover the project guide and lookups (tree-sitter extraction for
+**Validation:** 106 automated tests cover the project guide and lookups (tree-sitter extraction for
 every bundled grammar, import resolution per language, entry points and reading
 paths, incremental rescans, deterministic layouts, bounded explanation context,
 note validation, folder reading orders, folder boxes that stay structured at any
 size, Start here and map messages, glossary links, the MCP server over stdio with
 mapped-only and bounded reads, Claude and Codex lookup flags and approvals, the
-no-lookup fallback, unit-test discovery and association, the Python runner on real tests (inputs, every executed line, outputs, failures, unittest, fixtures that need pytest, file and image descriptions), real runs gated by trust and a once-per-folder question, AI simulations limited to the function's lines, the notebook cell with emoji values and step highlighting, fast models for quick jobs (a parallel Overview, compact step links, three note batches at a time, Codex's catalog fast model), automatic AI notes (quiet, changed files only, asks first for large projects, no retry loops, manual in Restricted Mode), the map-first guide with Details on demand, the reader's tour bar and one-step-ahead preparation (only in a tour, only when not cached, off with its setting), project-name links that open the defining block, editor hovers with escaped text and only Yamori's commands trusted, CodeLens that hides on changed code, the plain-language reader controls, the live progress card and its stages (thinking token counts, never thinking text), effort defaults, the folder-grouped file
+no-lookup fallback, unit-test discovery and association, the Python runner on real tests (inputs, every executed line, outputs, failures, unittest, fixtures that need pytest, file and image descriptions), real runs gated by trust and a once-per-folder question, AI simulations limited to the function's lines, the notebook cell with emoji values and step highlighting, fast models for quick jobs (a parallel Overview, compact step links, three note batches at a time, Codex's catalog fast model), parallel parts (local part planning from whole definitions, at most N requests at once, sections kept inside their part, one retry then a whole-file fallback, a draft that never waits long for a slow Overview), background review (draft readable at once, improved blocks swapped in and cached, dropped after edits or refreshes, kept through level switches, fidelity warnings with Retry review, pending drafts resumed), the review model one tier below the writer, the setup screen (Claude Desktop's bundled Claude Code, sign-in status from each CLI without a model request, one action per AI, visible install and sign-in terminals, continuing by itself once sign-in works, setup before the first explanation, switching open readers), automatic AI notes (quiet, changed files only, asks first for large projects, no retry loops, waiting for setup instead of failing, also in Restricted Mode), the map-first guide with Details on demand, the reader's tour bar and one-step-ahead preparation (only in a tour, only when not cached, off with its setting), project-name links that open the defining block, editor hovers with escaped text and only Yamori's commands trusted, CodeLens that hides on changed code, the plain-language reader controls, the live progress card and its stages (thinking token counts, never thinking text), effort defaults, the folder-grouped file
 picker and an end-to-end guide → notes → explanation flow that rejects symlinked
 files outside the project), strict schema validation, field-path errors,
 cache compatibility, loading without development dependencies or runtime schema
