@@ -70,6 +70,32 @@ const FLOW_SCHEMA = { type: 'object', additionalProperties: false, properties: {
   }, required: ['file', 'title', 'startLine', 'endLine', 'pseudocode', 'lineMap'] } },
   caveats: { type: 'string', maxLength: 500 }
 }, required: ['summary', 'sections', 'caveats'] };
+// Planning mode: compact on purpose (a plan is drafted on a budget).
+const PLAN_SCHEMA = { type: 'object', additionalProperties: false, properties: {
+  question: { type: 'string', maxLength: 600 },
+  summary: { type: 'string', maxLength: 400 },
+  steps: { type: 'array', minItems: 0, maxItems: 12, items: { type: 'object', additionalProperties: false, properties: {
+    file: { type: 'string', minLength: 1, maxLength: 500 }, lines: { type: 'array', items: { type: 'integer', minimum: 0 }, minItems: 2, maxItems: 2 },
+    title: { type: 'string', minLength: 1, maxLength: 120 }, change: { type: 'string', minLength: 1, maxLength: 400 }, why: { type: 'string', maxLength: 250 }
+  }, required: ['file', 'lines', 'title', 'change', 'why'] } }
+}, required: ['question', 'summary', 'steps'] };
+const PATCH_FIELDS = { file: { type: 'string', minLength: 1, maxLength: 500 }, lines: { type: 'array', items: { type: 'integer', minimum: 0 }, minItems: 2, maxItems: 2 }, title: { type: 'string', minLength: 1, maxLength: 120 }, change: { type: 'string', minLength: 1, maxLength: 400 }, why: { type: 'string', maxLength: 250 } };
+const PLAN_PATCH_SCHEMA = { type: 'object', additionalProperties: false, properties: {
+  message: { type: 'string', maxLength: 1200 }, question: { type: 'string', maxLength: 600 }, summary: { type: 'string', maxLength: 400 },
+  updates: { type: 'array', maxItems: 60, items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', minLength: 1, maxLength: 24 }, ...PATCH_FIELDS }, required: ['id', ...Object.keys(PATCH_FIELDS)] } },
+  additions: { type: 'array', maxItems: 12, items: { type: 'object', additionalProperties: false, properties: { afterId: { type: 'string', maxLength: 24 }, ...PATCH_FIELDS }, required: ['afterId', ...Object.keys(PATCH_FIELDS)] } },
+  removals: { type: 'array', maxItems: 60, items: { type: 'string', minLength: 1, maxLength: 24 } }
+}, required: ['message', 'question', 'summary', 'updates', 'additions', 'removals'] };
+// A stable transport schema avoids changing the provider's cached prefix between turns.
+const PLAN_SESSION_SCHEMA = { type: 'object', additionalProperties: false, properties: {
+  draft: { anyOf: [PLAN_SCHEMA, { type: 'null' }] }, patch: { anyOf: [PLAN_PATCH_SCHEMA, { type: 'null' }] }
+}, required: ['draft', 'patch'] };
+// One step's before and after, in pseudocode. `before` is empty when it was supplied.
+const STEP_DETAIL_SCHEMA = { type: 'object', additionalProperties: false, properties: {
+  before: { type: 'string', maxLength: 3000 }, after: { type: 'string', minLength: 1, maxLength: 3000 }
+}, required: ['before', 'after'] };
+// A cheap ranking of files for a goal, used only when the free match is weak.
+const RANK_SCHEMA = { type: 'object', additionalProperties: false, properties: { files: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 500 } } }, required: ['files'] };
 // Cache compatibility: older approved blocks may not have step links. Extra
 // metadata is ignored by the canonical parser rather than invalidating old work.
 const section = SCHEMA.properties.sections.items;
@@ -87,7 +113,7 @@ const EXPLANATION_DATA = {
     views: { type: 'object' }
   }
 };
-module.exports = { SCHEMA, REVIEW_SCHEMA, SELECTION_SCHEMA, EXPLANATION_DATA, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, SIMULATION_SCHEMA, FLOW_SCHEMA };
+module.exports = { SCHEMA, REVIEW_SCHEMA, SELECTION_SCHEMA, EXPLANATION_DATA, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, SIMULATION_SCHEMA, FLOW_SCHEMA, PLAN_SCHEMA, PLAN_PATCH_SCHEMA, PLAN_SESSION_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA };
 
 // Build-only dependencies: production loads the generated standalone validators.
 if (require.main === module) {
@@ -102,7 +128,12 @@ if (require.main === module) {
   ajv.addSchema(MAP_SUMMARY_SCHEMA, 'mapSummary');
   ajv.addSchema(SIMULATION_SCHEMA, 'simulation');
   ajv.addSchema(FLOW_SCHEMA, 'flow');
-  const code = standalone(ajv, { explanation: 'explanation', review: 'review', selection: 'selection', notes: 'notes', mapSummary: 'mapSummary', simulation: 'simulation', flow: 'flow' });
+  ajv.addSchema(PLAN_SCHEMA, 'plan');
+  ajv.addSchema(PLAN_PATCH_SCHEMA, 'planPatch');
+  ajv.addSchema(PLAN_SESSION_SCHEMA, 'planSession');
+  ajv.addSchema(STEP_DETAIL_SCHEMA, 'stepDetail');
+  ajv.addSchema(RANK_SCHEMA, 'rank');
+  const code = standalone(ajv, { explanation: 'explanation', review: 'review', selection: 'selection', notes: 'notes', mapSummary: 'mapSummary', simulation: 'simulation', flow: 'flow', plan: 'plan', planPatch: 'planPatch', planSession: 'planSession', stepDetail: 'stepDetail', rank: 'rank' });
   const license = fs.readFileSync(path.join(path.dirname(require.resolve('ajv/package.json')), 'LICENSE'), 'utf8');
   esbuild.buildSync({ stdin: { contents: code, resolveDir: __dirname, sourcefile: 'ajv-validators.js' },
     bundle: true, minify: true, platform: 'node', target: 'node20', format: 'cjs',

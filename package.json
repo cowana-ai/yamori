@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code, with a project map that shows where to start.",
-  "version": "0.23.0",
+  "version": "0.25.0",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -28,7 +28,10 @@
         "yamori.parallelRequests",
         "yamori.agentTools",
         "yamori.autoNotes",
-        "yamori.pythonPath"
+        "yamori.pythonPath",
+        "yamori.pseudocodeMirror",
+        "yamori.planBudget",
+        "yamori.planModel"
       ]
     }
   },
@@ -38,6 +41,11 @@
         "command": "yamori.read",
         "title": "Yamori: Read as Pseudocode",
         "icon": "$(yamori-gecko)"
+      },
+      {
+        "command": "yamori.plan",
+        "title": "Yamori: Plan Changes",
+        "icon": "$(lightbulb)"
       },
       {
         "command": "yamori.browse",
@@ -58,6 +66,14 @@
       {
         "command": "yamori.setup",
         "title": "Yamori: Set Up AI"
+      },
+      {
+        "command": "yamori.connectAgents",
+        "title": "Yamori: Connect Claude Code & Codex"
+      },
+      {
+        "command": "yamori.disconnectAgents",
+        "title": "Yamori: Disconnect Claude Code & Codex"
       },
       {
         "command": "yamori.connectClaude",
@@ -103,11 +119,21 @@
           "command": "yamori.read",
           "when": "resourceScheme == file || resourceScheme == untitled",
           "group": "navigation@1"
+        },
+        {
+          "command": "yamori.plan",
+          "when": "resourceScheme == file || resourceScheme == untitled",
+          "group": "navigation@2"
         }
       ],
       "editor/context": [
         {
           "command": "yamori.read",
+          "when": "resourceScheme == file",
+          "group": "yamori"
+        },
+        {
+          "command": "yamori.plan",
           "when": "resourceScheme == file",
           "group": "yamori"
         }
@@ -150,6 +176,12 @@
         "key": "ctrl+alt+p",
         "mac": "cmd+alt+p",
         "when": "editorTextFocus && !editorReadonly"
+      },
+      {
+        "command": "yamori.plan",
+        "key": "ctrl+alt+shift+p",
+        "mac": "cmd+alt+shift+p",
+        "when": "editorTextFocus"
       }
     ],
     "configuration": {
@@ -186,6 +218,29 @@
           "default": "auto",
           "description": "Model for the reviewers and the review rewrite, which run in the background after the draft is shown. auto uses one tier below your writer, never above it: Sonnet under Opus or Claude's default, or Codex's balanced catalog model (Terra) under its default; if you already chose a smaller writer, reviews use it. main uses your writer's model; or enter an exact model ID."
         },
+        "yamori.planBudget": {
+          "type": "integer",
+          "default": 6000,
+          "minimum": 2000,
+          "maximum": 20000,
+          "description": "Most tokens of project knowledge sent to the AI when drafting a plan in the Project guide's Plan tab. The slice is outlines and the few pseudocode blocks that match the goal, never source files; it is cut at this limit and the panel says what was left out."
+        },
+        "yamori.planModel": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "main",
+            "fast"
+          ],
+          "enumDescriptions": [
+            "Draft with the quick model and ask your default model only if a fixed rule rejects the draft, or for a broad goal.",
+            "Always use your default model.",
+            "Always use the quick model."
+          ],
+          "description": "Which model drafts plans. auto uses the quick model first and your default model only when needed; main and fast force one.",
+          "scope": "application"
+        },
         "yamori.agentTools": {
           "type": "boolean",
           "default": true,
@@ -216,6 +271,11 @@
           "default": "",
           "scope": "machine",
           "description": "Python interpreter for running a function's unit tests in the explanation (Run with a test). Empty uses the Python extension's interpreter for the project, then a .venv, then python3. Real runs execute your project's test code; Yamori asks once per folder and never runs code in Restricted Mode."
+        },
+        "yamori.pseudocodeMirror": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep plain-text copies of explained files' pseudocode in <project>/.yamori/pseudocode/, with an index of the project, for agents that read files directly. Off by default: Yamori's agent tools do not need it. Turning it on keeps .yamori/ out of git through .git/info/exclude. Off in Restricted Mode."
         }
       }
     },
@@ -231,7 +291,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/schemas.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/mcp.js && node --check src/storage/cache.js",
+    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js",
     "build:validation": "node src/ai/schemas.js",
     "build:parser": "node src/project/graph.js"
   },
@@ -274,6 +334,8 @@
   ],
   "devDependencies": {
     "@vscode/tree-sitter-wasm": "0.3.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "ajv": "8.20.0",
     "esbuild": "0.28.2"
   }

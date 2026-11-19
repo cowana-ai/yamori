@@ -43,10 +43,12 @@ function analyzeSource(before, after, value, previousStale = []) {
   const plan = linePlan(before.fullText ?? before.text, after.fullText ?? after.text);
   const offset = before.fullText ? 0 : before.startLine - 1;
   const affected = new Set(previousStale), removed = [], meaningful = plan.changed.filter(change => change.meaningful);
+  const afterLines = linesOf(after.fullText ?? after.text);
+  const addsDefinition = change => change.oldEnd < change.oldStart && /^(?:async\s+)?(?:def|class|function|export\s+(?:default\s+)?function)\b/.test(afterLines.slice(change.newStart - 1, change.newEnd).find(line => line.trim() && !/^\s*(#|\/\/|@)/.test(line)) || '');
   let shared = plan.unknown || selectedWithoutBaseline;
   const sections = value.sections.map((section, index) => {
     const start = section.startLine - offset, end = section.endLine - offset;
-    const touches = meaningful.some(change => change.oldEnd < change.oldStart ? change.oldStart >= start && change.oldStart <= end + 1 : change.oldStart <= end && change.oldEnd >= start);
+    const touches = meaningful.some(change => change.oldEnd < change.oldStart ? change.oldStart >= start && (change.oldStart !== start || !addsDefinition(change)) && (change.oldStart <= end || change.oldStart === end + 1 && !addsDefinition(change)) : change.oldStart <= end && change.oldEnd >= start);
     if (touches || shared) affected.add(index);
     if (Array.from({ length: Math.max(0, end - start + 1) }, (_, n) => start + n).every(line => plan.removed.has(line))) removed.push(index);
     let startLine = Math.max(after.startLine, Math.min(after.endLine, plan.map(start) + (after.fullText ? 0 : after.startLine - 1)));
@@ -72,6 +74,13 @@ function analyzeSource(before, after, value, previousStale = []) {
   // Changes outside named blocks may alter globals, imports or introduce a new
   // idea. Be conservative instead of declaring unrelated-looking blocks fresh.
   for (const change of meaningful) {
+    if (addsDefinition(change) && !sections.some(section => change.newStart <= section.endLine && change.newEnd >= section.startLine)) {
+      const code = afterLines.slice(change.newStart - 1, change.newEnd).join('\n');
+      const name = code.match(/\b(?:def|class|function)\s+([A-Za-z_]\w*)/)?.[1];
+      affected.add(sections.length);
+      sections.push({ title: 'New code' + (name ? ': ' + name : ''), startLine: change.newStart, endLine: change.newEnd, pseudocode: '# New source block. Update this block to explain its behavior.', lineMap: [] });
+      continue;
+    }
     if (!value.sections.some((section, index) => change.oldStart + offset >= section.startLine && Math.max(change.oldStart, change.oldEnd) + offset <= section.endLine + (change.oldEnd < change.oldStart && change.newStart >= sections[index].startLine && change.newEnd <= sections[index].endLine ? 1 : 0))) shared = true;
     if (change.newEnd >= change.newStart && !sections.some(section => change.newStart >= section.startLine && change.newEnd <= section.endLine)) shared = true;
   }
@@ -87,7 +96,7 @@ function analyzeSource(before, after, value, previousStale = []) {
     const section = sections[index]; if (!section) continue;
     const oldSection = value.sections[index];
     const text = sourceLines.slice(section.startLine - after.startLine, section.endLine - after.startLine + 1).join('\n');
-    const previousText = oldLines.slice(oldSection.startLine - before.startLine, oldSection.endLine - before.startLine + 1).join('\n');
+    const previousText = oldSection ? oldLines.slice(oldSection.startLine - before.startLine, oldSection.endLine - before.startLine + 1).join('\n') : '';
     const names = [...namesIn(text), ...namesIn(previousText)];
     if (!names.length) {
       const assigned = [...(text + '\n' + previousText).matchAll(/^\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*(?:\[[^\n]*?\])?\s*(?:=|\+=|-=)/gm)].map(match => match[1].split('.').at(-1));

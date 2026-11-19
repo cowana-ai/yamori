@@ -57,6 +57,11 @@ cell: **In**, **Out**, and every executed line with the values it changed. Files
 images show as emoji with details on hover. In Restricted Mode, or for JS/TS tests,
 an AI simulation stands in, clearly labelled as one.
 
+### [Your agents can share their explanations](docs/agents.md)
+One command adds Yamori's knowledge server to your own Claude Code and Codex. They can
+look up the project map and Yamori's pseudocode, and when they read a file to
+understand it, save pseudocode for it, so you see it in Yamori without generating it.
+
 ### [Fast by design](docs/models.md#speed-parallel-parts-and-background-review)
 Bigger files are written as parallel parts, so the draft is ready when the slowest
 part is: **17 s instead of 50 s** on a 354-line file. Review runs in the background
@@ -98,6 +103,7 @@ Open **Project guide** to see where to start reading a whole project.
 - [Project guide](docs/project-guide.md): Start here, the map, AI notes, search and flows
 - [Run a function with its tests](docs/tests.md): real runs, AI simulations, values as emoji
 - [Models, speed and review](docs/models.md): models and effort, parallel parts, background review
+- [Yamori for your own agents](docs/agents.md): Connect, `.yamori/` pseudocode, tools, agent-written pseudocode
 - [Development](docs/development.md): layout, building, testing
 - [Release history](HISTORY.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Credits](docs/credits.md)
 
@@ -106,3 +112,7 @@ Open **Project guide** to see where to start reading a whole project.
 [MIT](LICENSE). The gecko samurai mascot is separate artwork and not covered by the
 code license. Bundled third-party components and their licenses are listed in
 [Credits](docs/credits.md).
+
+## Plan before you code
+
+Open **Project guide → Plan** to turn a goal into editable steps on the project map. Choose starting files, inspect affected code and tests, drag steps into order, and ask for before-and-after pseudocode only where needed. Context is budgeted and cached explanations are checked for freshness. Press **Approve & implement** to let the selected Codex or Claude agent apply the plan and run checks. Successful plans clear from the canvas and stay in local history; failed or stopped runs keep the plan. You can also copy the plan as an agent prompt or export Markdown. [Planning guide](docs/project-guide.md#plan-a-change).

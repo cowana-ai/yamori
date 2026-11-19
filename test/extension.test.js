@@ -334,6 +334,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     constructor(tag) { this.tag = tag; this.children = []; this.style = {}; }
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
+    insertBefore(child, reference) { const index = this.children.indexOf(reference); if (reference != null && index < 0) throw new Error('NotFoundError: reference is not a child'); if (reference == null) this.append(child); else this.children.splice(index, 0, child); }
     setAttribute(name, value) { (this.attributes ||= {})[name] = value; } addEventListener(type, callback) { (this.events ||= {})[type] = callback; }
   }
   const elements = Object.fromEntries(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'setup-ai'].map(id => [id, new Element('div')]));
@@ -1548,11 +1549,13 @@ function fakeDocument(ids, extra = {}) {
     constructor(tag) { this.tag = tag; this.children = []; this.attributes = {}; this.events = {}; this.style = {}; this.dataset = {}; this.hidden = false; const classes = new Set(); this.classList = { add: c => classes.add(c), remove: c => classes.delete(c), toggle: (c, on) => { (on ?? !classes.has(c)) ? classes.add(c) : classes.delete(c); }, contains: c => classes.has(c), toString: () => [...classes].join(' ') }; }
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
+    insertBefore(child, reference) { const index = this.children.indexOf(reference); if (reference != null && index < 0) throw new Error('NotFoundError: reference is not a child'); if (reference == null) this.append(child); else this.children.splice(index, 0, child); }
     setAttribute(name, value) { this.attributes[name] = value; if (name === 'class') { this.attributes.class.split(' ').forEach(c => c && this.classList.add(c)); } }
     getAttribute(name) { return this.attributes[name]; }
     removeAttribute(name) { delete this.attributes[name]; }
     addEventListener(type, callback) { this.events[type] = callback; }
     focus() { this.focused = true; }
+    setSelectionRange(start, end, direction) { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; }
   }
   const elements = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   const document = { documentElement: { style: {} }, body: new Element('body'), getElementById: id => elements[id], createElement: tag => new Element(tag), createElementNS: (_, tag) => new Element(tag), createTextNode: text => ({ textContent: text }), querySelectorAll: () => extra.all || [], querySelector: () => undefined, importNode: node => node, addEventListener() {} };
@@ -1568,7 +1571,7 @@ test('project guide lists folder reading steps and a folder-box map; drag, fold,
   assert.equal(edgePath({ x: 0, y: 0, w: 100, h: 36 }, { x: 0, y: 104, w: 100, h: 36 }), 'M50 36 C50 70 50 70 50 104');
   assert.ok(fitTransform([{ x: 0, y: 0, w: 100, h: 40 }, { x: 300, y: 200, w: 100, h: 40 }], 800, 600).k <= 1.4);
   assert.deepEqual(byFolder(['b/x.py', 'main.py', 'a/y.py', 'a/z.py']), [['a', ['a/y.py', 'a/z.py']], ['b', ['b/x.py']], ['', ['main.py']]]);
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = [], sent = { at: i => messages.at(i), get length() { return messages.length; } }; let receive;
   vm.runInNewContext(pageScript(html), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON });
@@ -1742,7 +1745,7 @@ test('opening the project map scans locally, AI notes use the estimated requests
     assert.deepEqual(Object.keys(index), ['pipeline/plan.py']); assert.equal(index['pipeline/plan.py'].logic.title, 'Plan');
     assert.ok(last().guide.steps.find(step => step.id === 'pipeline/plan.py').explained, 'explained files are marked in the guide');
     const server = require('../src/project/mcp').createServer({ store: path.dirname(path.join(storage, 'cache', 'projects', require('../src/ai/engine').hash('file://' + root).slice(0, 32), 'x')), root });
-    assert.match(server.call('get_explanation', { path: 'pipeline/plan.py' }).content[0].text, /"title": "Plan"/, 'the agent can read Yamori explanations of other files');
+    assert.match((await server.call('get_explanation', { path: 'pipeline/plan.py' })).content[0].text, /"title": "Plan"/, 'the agent can read Yamori explanations of other files');
     const reader = panels.find(panel => panel.type === 'yamori'), readerState = reader.messages.filter(m => m.type === 'state').at(-1).state;
     assert.equal(readerState.glossary.find(term => term.term === 'L1').defined, 'pipeline/plan.py:5');
     shown.length = 0;
@@ -1787,7 +1790,7 @@ test('Yamori MCP server answers over stdio with read-only lookups limited to map
     const replies = new Map(output.trim().split('\n').map(line => JSON.parse(line)).map(reply => [reply.id, reply]));
     assert.equal(replies.size, 13, 'notifications get no reply');
     assert.equal(replies.get(1).result.protocolVersion, '2025-11-25'); assert.equal(replies.get(1).result.serverInfo.name, 'yamori');
-    assert.deepEqual(replies.get(2).result.tools.map(tool => tool.name), ['project_overview', 'list_files', 'file_info', 'find_symbol', 'glossary', 'get_explanation', 'read_source']);
+    assert.deepEqual(replies.get(2).result.tools.map(tool => tool.name), ['get_plan', 'project_overview', 'start_here', 'project_map', 'list_files', 'file_info', 'find_symbol', 'search_name', 'glossary', 'tests_for', 'get_pseudocode', 'search_pseudocode', 'read_source'], 'inside Yamori\'s own requests the server is read-only: no save_pseudocode');
     const text = id => replies.get(id).result.content[0].text;
     assert.match(text(3), /^Untrusted project data from Yamori/); assert.match(text(3), /function plan_loops \(line 3\)/); assert.match(text(3), /"file": "main.py"/);
     assert.match(text(4), /"file": "models\/script.py",\s*"line": 1/); assert.match(text(4), /pipeline\/plan.py/);
@@ -1795,7 +1798,7 @@ test('Yamori MCP server answers over stdio with read-only lookups limited to map
     assert.match(text(6), /"title": "Write blocks"/);
     assert.match(text(7), /File models\/script.py, lines 1-2 of 12:\n1: HOOK = "HOOK"\n2: ENDING = "ENDING"/);
     assert.equal(replies.get(8).result.isError, true); assert.match(text(8), /not a file in the Yamori project map/);
-    assert.equal(replies.get(9).result.isError, true); assert.match(text(9), /outside the mapped project/);
+    assert.equal(replies.get(9).result.isError, true); assert.match(text(9), /not a file in the Yamori project map/, 'rescanning drops the escaping symlink before a read is attempted');
     assert.doesNotMatch(output, /do-not-send/, 'files outside the project never reach the agent');
     assert.match(text(10), /lines 1-200 of 501:/, 'source reads are bounded');
     assert.match(text(11), /Writes video scripts\./); assert.match(text(12), /"pipeline": \[/); assert.doesNotMatch(text(12), /models\//);
@@ -1892,18 +1895,20 @@ test('folder reading paths start where a folder is entered, and folder boxes sta
 });
 
 test('the reader header names its actions plainly and the empty state offers the next steps', () => {
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'plan', 'ai-summary', 'setup-ai']);
   const sent = []; let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const html = panelHTML();
-  for (const label of ['Switch file…', 'Project guide', 'Overview', 'Logic']) assert.ok(html.includes('>' + label + '<'), label);
+  elements.plan.events.click(); assert.equal(sent.at(-1).type, 'plan');
+  elements.map.events.click(); assert.equal(sent.at(-1).type, 'map');
+  for (const label of ['Switch file…', 'Read', 'Map', 'Plan', 'Overview', 'Logic']) assert.ok(html.includes('>' + label + '<'), label);
   assert.ok(!/▤|▦|>Detailed</.test(html), 'no cryptic icons or removed levels');
   receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', requestedModel: 'opus', level: 'logic' } } });
   assert.equal(elements['ai-summary'].textContent, 'AI: Claude Code · opus ▾');
   const actions = all(elements.content).filter(el => el.tag === 'button');
-  assert.deepEqual(actions.map(el => el.textContent).slice(0, 3), ['Explain current file', 'Switch file…', 'Open project guide']);
+  assert.deepEqual(actions.map(el => el.textContent).slice(0, 3), ['Explain current file', 'Switch file…', 'Plan a change']);
   actions[1].events.click(); assert.equal(sent.at(-1).type, 'switchFile');
-  actions[2].events.click(); assert.equal(sent.at(-1).type, 'map');
+  actions[2].events.click(); assert.equal(sent.at(-1).type, 'plan');
   receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'pipeline/plan.py · lines 3–9', result: valid } } });
   assert.deepEqual(elements.source.children.map(el => el.textContent), ['pipeline › ', 'plan.py', ' · lines 3–9']);
   elements.source.events.click(); assert.equal(sent.at(-1).type, 'showSource');
@@ -2013,7 +2018,7 @@ test('the reader shows who is writing and each stage live, then a finished summa
   assert.equal(connectionOptions(globalState, 'codex', vscodeStub).effort, 'low');
   state.set('effortChoices', { 'claude:': 'auto' }); assert.equal(connectionOptions(globalState, 'claude', vscodeStub).effort, null, 'an explicit provider default is respected');
   // Panel: a live card while running, a one-line summary afterwards.
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'plan', 'ai-summary', 'setup-ai']);
   let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage() {} }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const now = Date.now(), steps = [{ id: 'context', label: 'Read the code and its context', state: 'done', startedAt: now - 9000, endedAt: now - 9000, detail: '2 called definitions · project guide · lookups on' },
@@ -2128,7 +2133,7 @@ async function readerHarness(settings = {}, options = {}) {
   harness.vscode = vscode;
   const real = require('../src/ai/engine');
   harness.models = []; harness.inFlight = 0; harness.peak = 0;
-  const engine = { ...real, requestStructured: async ({ prompt, schema, model }) => {
+  const engine = { ...real, requestStructured: async ({ prompt, schema, model, planning, tools }) => {
     const kind = schema === real.NOTES_SCHEMA ? 'notes' : schema === real.MAP_SUMMARY_SCHEMA ? 'summary' : 'other';
     harness.requests.push(kind); harness.prompts.push(prompt); harness.models.push(model);
     harness.inFlight++; harness.peak = Math.max(harness.peak, harness.inFlight);
@@ -2263,7 +2268,7 @@ test('editor hovers and CodeLens show what Yamori knows, with escaped text and o
 });
 
 test('the reader shows a tour bar, project-name links and jumps to a requested block', () => {
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'plan', 'ai-summary', 'setup-ai']);
   const sent = []; let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const result = { title: 'Write blocks', summary: 's', sections: [{ title: 'First', startLine: 1, endLine: 3, pseudocode: 'Use _loop_hint on each loop.' }, { title: 'Second', startLine: 4, endLine: 6, pseudocode: 'Add <b>BRIDGE</b> text in write_blocks.' }] };
@@ -2403,11 +2408,13 @@ test('AI notes use the fast model and run three batches at a time', async () => 
   } finally { await h.close(); }
 });
 
-test('main-model answers keep strict step links; fast-model answers drop only the bad link', () => {
+test('strict validation rejects bad links; recoverable validation drops them and preserves block boundaries', () => {
   const answer = { title: 't', summary: 's', sections: [{ title: 'a', startLine: 10, endLine: 11, pseudocode: 'Set x\n\nPrint x', lineMap: [[1, 10, 10], [2, 10, 10], [3, 11, 11], [3, 10, 10], [9, 10, 10]] }] };
-  assert.throws(() => parseResult(JSON.stringify(answer), source), /Invalid step source references/, 'the main model gets no silent repairs');
+  assert.throws(() => parseResult(JSON.stringify(answer), source), /Invalid step source references/, 'strict validation is still available to catch invalid references');
   const lenient = parseResult(JSON.stringify(answer), source, { dropInvalidLinks: true });
   assert.deepEqual(lenient.sections[0].lineMap.map(link => link.pseudocodeLine), [1, 3], 'blank, duplicate and out-of-range links are dropped');
+  assert.equal(lenient.sections[0].omittedSourceLinks, 3);
+  assert.equal(parseResult(JSON.stringify(lenient), source).sections[0].omittedSourceLinks, 3, 'the notice survives caching');
   assert.throws(() => parseResult(JSON.stringify({ ...answer, sections: [{ ...answer.sections[0], startLine: 1 }] }), source, { dropInvalidLinks: true }), /invalid source references/, 'block ranges stay strict');
 });
 
@@ -2506,7 +2513,7 @@ test('a block runs its unit test for real once allowed, and simulates in Restric
 });
 
 test('the run cell shows In, Out and steps that highlight the pseudocode, with file values as emoji', () => {
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'plan', 'ai-summary', 'setup-ai']);
   const sent = []; let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const result = { title: 'Totals', summary: 's', sections: [{ title: 'Add the items', startLine: 1, endLine: 5, pseudocode: 'Start the total at 0.\nFor each item:\n    Add it to the total.\nReturn the total with the file.', lineMap: [{ pseudocodeLine: 1, startLine: 2, endLine: 2 }, { pseudocodeLine: 2, startLine: 3, endLine: 3 }, { pseudocodeLine: 3, startLine: 4, endLine: 4 }, { pseudocodeLine: 4, startLine: 5, endLine: 5 }] }] };
@@ -2742,7 +2749,7 @@ test('background review: the draft is readable at once, improved blocks swap in 
 });
 
 test('the reader shows the background review status as a quiet line', () => {
-  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'ai-summary', 'setup-ai']);
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'plan', 'ai-summary', 'setup-ai']);
   let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage() {} }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', level: 'logic', name: 'a.py', documentKey: 'k', result: valid, review: { state: 'running', text: 'Reviewing difficult blocks in the background with sonnet.' } } } });
@@ -2781,7 +2788,7 @@ out({title:'File',summary:'Explains.',sections:[{title:'Part '+p[1],startLine:+p
 test('guide search: a visible header box highlights every file that mentions a name, and Explain traces its flow with AI', async () => {
   const path = require('node:path');
   const flows = [];
-  const engine = h => ({ requestStructured: async ({ prompt, schema, model }) => {
+  const engine = h => ({ requestStructured: async ({ prompt, schema, model, planning, tools }) => {
     const real = require('../src/ai/engine');
     if (schema !== real.FLOW_SCHEMA) return { raw: JSON.stringify({ files: [] }) };
     flows.push(prompt);
@@ -2821,7 +2828,7 @@ test('guide search: a visible header box highlights every file that mentions a n
     assert.ok(h.panels.some(panel => panel.type === 'yamoriSetup')); assert.equal(flows.length, 1);
   } finally { delete testStatus.codex; await h.close(); }
   // The page: hits glow and carry counts; the side panel lists them and the flow.
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = []; let receive;
   vm.runInNewContext(pageScript(require('../src/views/guide').mapHTML()), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON, setTimeout, clearTimeout });
@@ -2854,4 +2861,1109 @@ test('guide search: a visible header box highlights every file that mentions a n
   assert.deepEqual(messages.at(-1), { type: 'explainFlow' });
   elements.search.value = 'L1'; elements['search-form'].events.submit({ preventDefault() {} });
   assert.deepEqual(messages.at(-1), { type: 'search', query: 'L1' }); assert.equal(elements['map-view'].hidden, false, 'searching shows the map');
+});
+
+// ---- Yamori for your own agents: the standing server, the mirror, hooks and Connect ----
+async function agentProject() {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-agent-')), root = path.join(temp, 'video'), cache = path.join(temp, 'cache');
+  for (const [rel, text] of Object.entries(videoProject)) { await fs.mkdir(path.dirname(path.join(root, rel)), { recursive: true }); await fs.writeFile(path.join(root, rel), text); }
+  await fs.mkdir(path.join(root, '.git', 'info'), { recursive: true }); await fs.writeFile(path.join(root, '.git', 'info', 'exclude'), '# local\n');
+  return { temp, root, cache, cleanup: () => fs.rm(temp, { recursive: true, force: true }) };
+}
+const mcpSession = async (root, cache, messages) => {
+  const path = require('node:path');
+  const input = messages.map(message => JSON.stringify(message)).join('\n') + '\n';
+  const output = await runProcess(process.execPath, [path.join(__dirname, '..', 'src', 'project', 'mcp.js'), '--cache', cache], input, { cwd: root });
+  return new Map(output.trim().split('\n').map(line => JSON.parse(line)).map(reply => [reply.id, reply]));
+};
+const tool = (id, name, args = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+const hello = (client = 'claude-code') => ({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: client, version: '1' } } });
+
+test('the standing knowledge server maps a project by itself, shows pseudocode with line marks, and saves an agent\'s pseudocode for the user', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const p = await agentProject();
+  try {
+    const section = { title: 'Plan the loops', startLine: 3, endLine: 6, pseudocode: 'Start with L1: the big question\n# L1 opens in HOOK, closes in ENDING\nAdd one loop per block', lineMap: [[1, 4, 4], [3, 5, 6], [2, 4, 4], [9, 1, 1]] };
+    let replies = await mcpSession(path.join(p.root, 'pipeline'), p.cache, [hello(), { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      tool(3, 'get_pseudocode', { path: 'pipeline/plan.py' }), tool(4, 'pseudocode_guide'),
+      tool(5, 'save_pseudocode', { path: 'pipeline/plan.py', title: 'Plan open loops', summary: 'Numbers the loops a script opens.', sections: [section] }),
+      tool(6, 'get_pseudocode', { path: 'pipeline/plan.py' }), tool(7, 'search_pseudocode', { query: 'big question' }), tool(8, 'search_name', { query: 'plan_loops' }),
+      tool(9, 'start_here', {}), tool(10, 'project_map', { folder: 'pipeline' }), tool(11, 'tests_for', { path: 'pipeline/plan.py' }), tool(12, 'save_pseudocode', { path: '../outside.py', title: 't', summary: 's', sections: [section] }),
+      tool(13, 'get_pseudocode', { path: 'pipeline/plan.py', outline: true }), tool(14, 'get_pseudocode', { path: 'pipeline/plan.py', line: 4 }), tool(15, 'get_pseudocode', { path: 'pipeline/plan.py', name: 'plan_loops' }), tool(16, 'get_pseudocode', { path: 'pipeline/plan.py', name: 'nope' })]);
+    const text = id => replies.get(id).result.content[0].text.replace(/^Untrusted[^\n]*\n/, '');
+    assert.match(replies.get(1).result.instructions, /If you already know the lines you need, just read them/); assert.doesNotMatch(replies.get(1).result.instructions, /Before reading a source file/, 'no obligation to check Yamori first');
+    assert.ok(replies.get(2).result.tools.some(item => item.name === 'save_pseudocode'), 'the standing server can save');
+    assert.match(text(3), /^pipeline\/plan\.py · source ~\d+ tok \(\d+ lines\) · no Yamori pseudocode yet\.\nOutline from definitions \(~\d+ tok\):\nfunction plan_loops · L3/, 'a missing file comes with sizes and an outline from definitions');
+    assert.match(text(4), /VOICE AND INFORMATION DENSITY/, 'the guide is Yamori\'s own writing rules');
+    assert.match(text(5), /Saved logic pseudocode for pipeline\/plan\.py: 1 block, 2 line links, marked as written by Claude Code/);
+    assert.match(text(6), /## 1 · Plan the loops · L3–6\nL4 +Start with L1: the big question\n +# L1 opens in HOOK, closes in ENDING\nL5–6 +Add one loop per block/, 'each step carries its source lines');
+    assert.match(text(6), /current · written by Claude Code during an agent session/);
+    assert.match(text(7), /pipeline\/plan\.py · logic · Plan the loops · L4: Start with L1: the big question/);
+    assert.match(text(8), /"file": "pipeline\/plan\.py"/); assert.match(text(9), /"steps"/); assert.match(text(10), /pipeline\/plan\.py/);
+    assert.equal(replies.get(12).result.isError, true, 'saving outside the project is refused');
+    assert.match(text(6), /Size: pseudocode ~\d+ tok · source ~\d+ tok \(\d+ lines\) · outline below ~\d+ tok\./, 'the whole file states both sizes');
+    assert.match(text(6), /## Outline\n 1 · Plan the loops · L3–6 · ~\d+ tok\n/);
+    assert.match(text(13), /^pipeline\/plan\.py · source ~\d+ tok \(\d+ lines\) · logic pseudocode ~\d+ tok · outline:\n 1 · Plan the loops · L3–6 · ~\d+ tok$/, 'the outline alone');
+    assert.match(text(14), /· this block ~\d+ tok vs their source lines ~\d+ tok\n\n## 1 · Plan the loops · L3–6\nL4/, 'one block for a line, with its cost');
+    assert.equal(text(15), text(14), 'a definition name finds the same block');
+    assert.match(text(16), /no definition named "nope"\. Outline:/);
+    // Nothing is written into the project unless the mirror is switched on.
+    assert.equal(await fs.stat(path.join(p.root, '.yamori')).then(() => true, () => false), false, 'no .yamori/ by default');
+    assert.doesNotMatch(await fs.readFile(path.join(p.root, '.git', 'info', 'exclude'), 'utf8'), /\.yamori/, 'and no git exclude');
+    // Yamori's own current pseudocode is never replaced; outdated text is.
+    const projects = path.join(p.cache, 'projects'), dir = path.join(projects, JSON.parse(await fs.readFile(path.join(projects, 'index.json'), 'utf8'))[await fs.realpath(p.root)].dir);
+    const all = JSON.parse(await fs.readFile(path.join(dir, 'explanations.json'), 'utf8'));
+    all['pipeline/plan.py'].logic.author = { kind: 'yamori' };
+    await fs.writeFile(path.join(dir, 'explanations.json'), JSON.stringify(all));
+    replies = await mcpSession(p.root, p.cache, [hello('codex'), tool(2, 'save_pseudocode', { path: 'pipeline/plan.py', title: 'Other', summary: 's', sections: [section] })]);
+    assert.match(replies.get(2).result.content[0].text, /Yamori already has current logic pseudocode for pipeline\/plan\.py; it was kept/);
+    await fs.appendFile(path.join(p.root, 'pipeline', 'plan.py'), '\nEXTRA = 1\n');
+    replies = await mcpSession(p.root, p.cache, [hello('codex'), tool(2, 'get_pseudocode', { path: 'pipeline/plan.py' }), tool(3, 'save_pseudocode', { path: 'pipeline/plan.py', title: 'Newer', summary: 's', sections: [section] })]);
+    assert.match(replies.get(2).result.content[0].text, /OUTDATED: the source changed/, 'the server rescans and marks outdated pseudocode');
+    assert.match(replies.get(3).result.content[0].text, /marked as written by Codex/);
+    assert.equal(await fs.stat(path.join(dir, 'agent-activity.jsonl')).then(() => true, () => false), false, 'no activity log is kept');
+    // Opt-in mirror: the extension's flag file makes the server write the text copies.
+    await fs.writeFile(path.join(dir, 'mirror.on'), '');
+    replies = await mcpSession(p.root, p.cache, [hello('codex'), tool(2, 'save_pseudocode', { path: 'pipeline/plan.py', title: 'Newest', summary: 's', sections: [section] })]);
+    const mirror = await fs.readFile(path.join(p.root, '.yamori', 'pseudocode', 'pipeline', 'plan.py.md'), 'utf8');
+    replies = await mcpSession(p.root, p.cache, [hello('codex'), tool(2, 'get_pseudocode', { path: 'pipeline/plan.py' })]);
+    assert.equal(mirror.trim(), replies.get(2).result.content[0].text.replace(/^Untrusted[^\n]*\n/, '').trim(), 'the file agents grep is the same text');
+    assert.match(await fs.readFile(path.join(p.root, '.yamori', 'INDEX.md'), 'utf8'), /- pipeline\/plan\.py · \d+ lines · source ~\d+ tok · pseudocode ~\d+ tok \(outline ~\d+\) · \.yamori\/pseudocode\/pipeline\/plan\.py\.md/, 'the index shows both sizes');
+    assert.equal((await fs.readFile(path.join(p.root, '.git', 'info', 'exclude'), 'utf8')).split('\n').filter(line => line === '.yamori/').length, 1, '.yamori/ is excluded from git once');
+  } finally { await p.cleanup(); }
+});
+
+test('shared store writes under a lock keep every change, and projects are found from nested folders', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const p = await agentProject();
+  try {
+    const dir = path.join(p.temp, 'store');
+    await Promise.all(Array.from({ length: 12 }, (_, i) => projectMap.updateStoreFile(dir, 'explanations', all => ({ ...all, ['f' + i]: { logic: { n: i } } }))));
+    assert.equal(Object.keys(JSON.parse(await fs.readFile(path.join(dir, 'explanations.json'), 'utf8'))).length, 12, 'no concurrent save is lost');
+    const first = await projectMap.locateProject(path.join(p.root, 'pipeline'), p.cache);
+    assert.equal(first.root, await fs.realpath(p.root), 'the nearest folder with .git is the project'); assert.equal(first.known, false);
+    await projectMap.recordStore(p.cache, first.root, first.dir, 'file:///video');
+    const again = await projectMap.locateProject(path.join(p.root, 'pipeline'), p.cache);
+    assert.deepEqual([again.known, again.dir, again.key], [true, first.dir, 'file:///video']);
+    assert.equal(await projectMap.storeDirFor(p.cache, p.root, 'file:///other'), first.dir, 'VS Code reuses the store the server created');
+  } finally { await p.cleanup(); }
+});
+
+test('hooks written by an earlier version stay silent, and the server adds nothing to an agent\'s context by itself', async () => {
+  const path = require('node:path');
+  const p = await agentProject();
+  try {
+    const launcher = path.join(__dirname, '..', 'src', 'project', 'mcp.js');
+    for (const mode of ['--brief', '--hook read']) {
+      const out = await runProcess(process.execPath, [launcher, '--cache', p.cache, ...mode.split(' ')], JSON.stringify({ cwd: p.root, session_id: 'x', tool_name: 'Read', tool_input: { file_path: path.join(p.root, 'main.py') } }), { cwd: p.root });
+      assert.equal(out, '', mode + ' prints nothing');
+    }
+    const { AGENT_RULES } = require('../src/project/mcp');
+    assert.match(AGENT_RULES, /If you already know the lines you need, just read them/); assert.doesNotMatch(AGENT_RULES, /\.yamori|before reading|\bmust\b|first/i, 'no obligation to check Yamori');
+  } finally { await p.cleanup(); }
+});
+
+test('the reader shows pseudocode an agent saved, with no AI request, and the guide picks up the server\'s writes live', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false, pseudocodeMirror: true }); // the opt-in mirror, on
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    const projects = path.join(h.temp, 'storage', 'cache', 'projects'), index = JSON.parse(await fs.readFile(path.join(projects, 'index.json'), 'utf8'));
+    const dir = path.join(projects, index[await fs.realpath(h.root)].dir);
+    const text = await fs.readFile(path.join(h.root, 'pipeline', 'plan.py'), 'utf8'), digest = require('../src/ai/engine').hash(text);
+    await projectMap.updateStoreFile(dir, 'explanations', all => ({ ...all, 'pipeline/plan.py': { logic: { title: 'Plan loops (agent)', summary: 'Numbers loops.', sections: [{ title: 'Plan', startLine: 1, endLine: 3, pseudocode: 'Plan the loops', lineMap: [{ pseudocodeLine: 1, startLine: 3, endLine: 3 }] }], hash: digest, savedAt: Date.now(), author: { kind: 'agent', name: 'Claude Code' } } } }));
+    await h.until(() => h.guideState().cards?.['pipeline/plan.py']?.explained, 'the guide reloads the server\'s write');
+    const before = h.generated.length;
+    await h.commands.get('yamori.openAt')(new h.Uri(path.join(h.root, 'pipeline/plan.py')).toString(), 1);
+    const reader = h.readers().at(-1);
+    await h.until(() => h.last(reader)?.result?.title === 'Plan loops (agent)', 'the agent\'s pseudocode opens');
+    assert.equal(h.generated.length, before, 'no AI request');
+    assert.equal(h.last(reader).writtenBy, 'Claude Code');
+    assert.deepEqual(JSON.parse(JSON.stringify(h.last(reader).result.sections[0].lineMap)), [{ pseudocodeLine: 1, startLine: 3, endLine: 3 }]);
+    let mirrored = '';
+    for (let i = 0; i < 100 && !/written by Claude Code/.test(mirrored); i++) { await new Promise(resolve => setTimeout(resolve, 20)); mirrored = await fs.readFile(path.join(h.root, '.yamori', 'pseudocode', 'pipeline', 'plan.py.md'), 'utf8').catch(() => ''); }
+    assert.match(mirrored, /written by Claude Code during an agent session/, 'the extension keeps the mirror too');
+  } finally { await h.close(); }
+});
+
+test('Connect only registers the server with both CLIs, removes what earlier versions added, and leaves the user\'s own settings alone', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-home-')), storage = path.join(home, 'storage'), runs = [];
+  try {
+    await fs.mkdir(path.join(home, '.claude'), { recursive: true });
+    const mine = { model: 'opus', hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'mine.sh' }] }] } };
+    const old = { ...mine, hooks: { ...mine.hooks, SessionStart: [{ hooks: [{ type: 'command', command: 'ELECTRON_RUN_AS_NODE=1 "/x/node" "/s/bin/yamori-mcp.js" --brief' }] }], PreToolUse: [...mine.hooks.PreToolUse, { matcher: 'Read', hooks: [{ type: 'command', command: '"/x/node" "/s/bin/yamori-mcp.js" --hook read' }] }] } };
+    await fs.writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify(old));
+    const block = '\n<!-- yamori:start v2 -->\n## Yamori project knowledge\n\nread pseudocode first\n<!-- yamori:end -->\n';
+    await fs.writeFile(path.join(home, '.claude', 'CLAUDE.md'), '# My rules\n\nBe brief.\n' + block);
+    const api = { workspace: { isTrusted: true, getConfiguration: () => ({ get: (_, fallback) => fallback }) }, window: { showWarningMessage: async (message, options, action) => { runs.push(['ask', message]); return action; }, showInformationMessage: async message => { runs.push(['info', message]); } } };
+    const stub = { exports: {} };
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: path.join(__dirname, '..', 'src') });
+    const values = new Map(), context = { globalStorageUri: { fsPath: storage }, extensionUri: { fsPath: path.join(__dirname, '..') }, globalState: { get: k => values.get(k), update: async (k, v) => values.set(k, v) } };
+    const run = async (cli, args) => { runs.push([path.basename(cli), ...args]); return ''; };
+    const discover = async owner => '/usr/local/bin/' + owner;
+    const results = await stub.exports.connectAgents(context, api, { run, discover, home, platform: 'darwin' });
+    assert.deepEqual(JSON.parse(JSON.stringify(results)), ['Claude Code: connected', 'Codex: connected']);
+    assert.match(runs.find(row => row[0] === 'ask')[1], /This only registers the server .* your settings and instruction files are not changed\./);
+    const launcher = path.join(storage, 'bin', 'yamori-mcp.js');
+    const claudeAdd = runs.find(row => row[0] === 'claude' && row[2] === 'add'), codexAdd = runs.find(row => row[0] === 'codex' && row[2] === 'add');
+    assert.deepEqual(claudeAdd.slice(1, 8), ['mcp', 'add', '--scope', 'user', 'yamori', '-e', 'ELECTRON_RUN_AS_NODE=1']); assert.equal(claudeAdd.at(-1), launcher);
+    assert.deepEqual(codexAdd.slice(1, 6), ['mcp', 'add', 'yamori', '--env', 'ELECTRON_RUN_AS_NODE=1']); assert.equal(codexAdd.at(-1), launcher);
+    // What an earlier version wrote is gone; everything of the user's stays.
+    assert.deepEqual(JSON.parse(JSON.stringify(JSON.parse(await fs.readFile(path.join(home, '.claude', 'settings.json'), 'utf8')))), mine);
+    assert.equal(await fs.readFile(path.join(home, '.claude', 'CLAUDE.md'), 'utf8'), '# My rules\n\nBe brief.\n');
+    assert.equal(await fs.stat(path.join(home, '.codex', 'AGENTS.md')).then(() => true, () => false), false, 'no instruction file is created');
+    assert.equal(values.get('agentsConnected'), true);
+    await stub.exports.connectAgents(context, api, { run, discover, home, platform: 'darwin', disconnect: true });
+    assert.ok(runs.some(row => row[0] === 'claude' && row[2] === 'remove') && values.get('agentsConnected') === false);
+    // The launcher really starts the server from the installed extension.
+    const replies = await runProcess(process.execPath, [launcher, '--cache', path.join(storage, 'cache')], JSON.stringify(hello()) + '\n', { cwd: path.join(__dirname, '..', 'examples') });
+    assert.equal(JSON.parse(replies.trim()).result.serverInfo.name, 'yamori');
+  } finally { await fs.rm(home, { recursive: true, force: true }); }
+});
+
+test('agents\' saves are checked against the source: an invented name is refused with its cause, other findings are reported, project names pass', async () => {
+  const path = require('node:path');
+  const p = await agentProject();
+  try {
+    const block = (pseudocode, lineMap = [[1, 3, 3]]) => ({ title: 'Plan the loops', startLine: 3, endLine: 8, pseudocode, lineMap });
+    const save = (id, pseudocode) => tool(id, 'save_pseudocode', { path: 'pipeline/plan.py', title: 'Plan open loops', summary: 'Numbers the loops.', sections: [block(pseudocode)] });
+    const replies = await mcpSession(p.root, p.cache, [hello(),
+      tool(2, 'save_pseudocode', { path: 'pipeline/plan.py', title: 'Plan', summary: 's', sections: [block('Build the list with plan_loops, then call refresh_cache_index.')] }),
+      tool(3, 'get_pseudocode', { path: 'pipeline/plan.py' }),
+      save(4, 'Start with L1, opened by HOOK and closed by ENDING.\nCall write_blocks for each loop (it lives in another file).\nUse 3000 loops.'),
+      save(5, 'Start with L1, opened by HOOK and closed by ENDING.\nFor each middle block add a loop numbered from 2.'),
+      tool(6, 'save_pseudocode', { path: 'pipeline/plan.py', level: 'overview', title: 'Plan', summary: 's', sections: [block('Plan loops.')] })]);
+    const text = id => replies.get(id).result.content[0].text.replace(/^Untrusted[^\n]*\n/, '');
+    assert.equal(replies.get(2).result.isError, true);
+    assert.match(text(2), /^Not saved\. These names are not in this file or anywhere in the project: block 1: `refresh_cache_index`\. Correct them to names that exist, or describe them in plain words/);
+    assert.match(text(3), /no Yamori pseudocode yet/, 'nothing was saved');
+    assert.ok(!replies.get(4).result.isError, 'write_blocks exists elsewhere in the project, so it passes');
+    assert.match(text(4), /^Saved logic pseudocode for pipeline\/plan\.py: 1 block/);
+    assert.match(text(4), /Checked against the source, worth a look \(saved anyway\):\n- block 1: States numbers that are not in the source: 3000\./);
+    assert.match(text(5), /Checked against the source:/, 'the second save replaces the agent\'s own');
+    assert.equal(replies.get(6).result.isError, undefined);
+  } finally { await p.cleanup(); }
+});
+
+test('the reader checks pseudocode against its source with fixed rules, and shows only what is worth a look', async () => {
+  const path = require('node:path');
+  const engine = h => ({ generate: async opts => {
+    const rel = path.relative(h.root, h.vscode.Uri.parse(opts.source.uri).fsPath), lines = opts.source.text.split('\n').length;
+    const bad = rel === 'pipeline/plan.py';
+    const view = { title: 'About ' + rel, summary: 'Explains ' + rel + '.', sections: [{ title: 'Block for ' + rel, startLine: 1, endLine: lines,
+      pseudocode: bad ? 'Make the list with plan_loops, then call ghost_function on it.' : 'Call _loop_hint for each loop, then add BRIDGE in write_blocks.', lineMap: [] }] };
+    return { ...view, views: { overview: view }, requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort };
+  } });
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.commands.get('yamori.openAt')(new h.Uri(path.join(h.root, 'pipeline/plan.py')).toString(), 1);
+    const flagged = h.readers().at(-1);
+    await h.until(() => h.last(flagged).checks, 'the check runs once the project\'s names are known');
+    assert.deepEqual(JSON.parse(JSON.stringify(h.last(flagged).checks)), { 0: ['`ghost_function` is not in the source or the project.'] });
+    await h.commands.get('yamori.openAt')(new h.Uri(path.join(h.root, 'pipeline/write.py')).toString(), 1);
+    const clean = h.readers().at(-1);
+    await h.until(() => h.last(clean).result && !h.last(clean).busy, 'explained');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(h.last(clean).checks, undefined, 'names from the source and from other project files raise nothing');
+  } finally { await h.close(); }
+});
+
+test('the reader shows a block\'s check as a quiet note and nothing otherwise', () => {
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'plan', 'ai-summary', 'setup-ai']);
+  let receive;
+  vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage() {} }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
+  const result = { ...valid, sections: [{ ...valid.sections[0], pseudocode: 'Call ghost_function' }] };
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'a.py', documentKey: 'k', result, checks: { 0: ['`ghost_function` is not in the source or the project.'] } } } });
+  const boxes = all(elements.content).filter(el => el.className === 'block-check');
+  assert.equal(boxes.length, 1); assert.equal(boxes[0].attributes.role, 'note');
+  assert.ok(all(boxes[0]).some(el => el.className === 'block-check-title' && el.textContent === 'Check against the source'));
+  assert.ok(all(boxes[0]).some(el => el.textContent === '`ghost_function` is not in the source or the project.'));
+  assert.match(boxes[0].title, /fixed rules, not AI/);
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'a.py', documentKey: 'k', result } } });
+  assert.equal(all(elements.content).filter(el => el.className === 'block-check').length, 0, 'no check data: no note');
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'a.py', documentKey: 'k', result, partial: true, checks: { 0: ['x'] } } } });
+  assert.equal(all(elements.content).filter(el => el.className === 'block-check').length, 0, 'not while a draft is still streaming');
+});
+
+// ---- Planning mode ----
+const planEngine = (calls, queue) => () => ({ requestStructured: async ({ prompt, schema, model, planning, tools }) => {
+  const real = require('../src/ai/engine');
+  const kind = schema === real.PLAN_SCHEMA ? 'plan' : schema === real.STEP_DETAIL_SCHEMA ? 'detail' : schema === real.RANK_SCHEMA ? 'rank' : 'other';
+  calls.push({ kind, model, prompt, planning, tools });
+  const next = queue.shift(); if (!next) throw new Error('unexpected ' + kind + ' request');
+  return { raw: JSON.stringify(next), actualModel: model || 'main-model', ...(kind === 'plan' ? { usage: { input: 1000, cacheWrite: 0, cacheRead: 200, output: 150 } } : {}) };
+} });
+const GOOD_PLAN = { summary: 'Skip the hook when numbering loops.', steps: [
+  { file: 'pipeline/plan.py', lines: [3, 8], title: 'Number loops after the hook', change: 'Start numbering at L2 after the hook', why: 'The hook is not a loop' },
+  { file: 'pipeline/write.py', lines: [4, 5], title: 'Match the hints', change: 'Do not hint the hook loop', why: 'Keeps hints in step' }] };
+const BAD_PLAN = { summary: 'x', steps: [{ file: 'pipeline/missing.py', lines: [1, 5], title: 't', change: 'Edit it', why: '' }] };
+
+test('planning: free starting points, a cheap draft that escalates once only when a fixed rule rejects it, edits that cost nothing, and details on demand', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const calls = [], queue = [];
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: planEngine(calls, queue) });
+  const plan = () => h.guideState().plan;
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    // 1. Starting points: instant, free, editable.
+    await h.guide.receive({ type: 'planFind', goal: 'plan the loops and skip the hook' });
+    assert.equal(calls.length, 0, 'finding starting points uses no AI');
+    assert.equal(plan().candidates.files[0].file, 'pipeline/plan.py'); assert.ok(plan().plan.starting.includes('pipeline/plan.py'));
+    assert.ok(plan().estimate.sent > 0 && plan().estimate.files >= 1, 'the token estimate is known before drafting');
+    await h.guide.receive({ type: 'planEdit', plan: { ...plan().plan, starting: ['pipeline/plan.py', 'pipeline/write.py'] } });
+    await h.until(() => plan().estimate?.files === 2, 'the estimate follows the chosen files');
+    assert.equal(calls.length, 0, 'editing the starting files uses no AI');
+    // 2. A bad quick draft: the gate names its cause, the default model is asked once.
+    queue.push(BAD_PLAN, GOOD_PLAN);
+    await h.guide.receive({ type: 'planDraft' });
+    assert.deepEqual(calls.map(call => [call.kind, call.model]), [['plan', 'fast-test'], ['plan', '']], 'quick model first, then the default model');
+    assert.match(calls[1].prompt, /PROBLEMS TO FIX:\n- Step 1 names a file that is not in the project: pipeline\/missing\.py\./);
+    assert.ok(calls[0].prompt.indexOf('You plan a code change') < calls[0].prompt.indexOf('GOAL:'));
+    assert.doesNotMatch(calls[0].prompt, /def plan_loops|loops\.append/, 'no source goes to the AI');
+    const drafted = plan();
+    assert.deepEqual([drafted.plan.steps.length, drafted.plan.models.escalated, drafted.plan.models.draft], [2, true, 'main-model']);
+    assert.deepEqual([drafted.plan.tokens.used, drafted.plan.calls.map(call => call.stage)], [2300, ['quick model', 'default model']], 'real usage from both calls is added up');
+    const [first, second] = drafted.plan.steps;
+    assert.ok(drafted.impact[first.id].usedBy.some(link => link.file === 'main.py'), 'impact comes from the import graph'); assert.ok(drafted.ripple.includes('main.py'));
+    // 3. Editing costs nothing and is saved.
+    await h.guide.receive({ type: 'planEdit', plan: { ...drafted.plan, steps: [{ ...second, title: 'Match the hints (edited)' }, { ...first, note: 'ask Sam', status: 'done' }, { file: 'nope/gone.py', title: 'dropped', change: 'x' }] } });
+    assert.equal(calls.length, 2, 'no AI request for edits');
+    await h.until(() => plan().plan.steps[0]?.title === 'Match the hints (edited)', 'the cleaned plan is posted');
+    assert.deepEqual(plan().plan.steps.map(step => step.title), ['Match the hints (edited)', 'Number loops after the hook'], 'unknown files are dropped');
+    const projects = path.join(h.temp, 'storage', 'cache', 'projects'), index = JSON.parse(await fs.readFile(path.join(projects, 'index.json'), 'utf8')), store = path.join(projects, index[await fs.realpath(h.root)].dir);
+    await h.until(async () => true, 'tick');
+    let saved; for (let i = 0; i < 80 && !saved?.current?.steps?.[0]?.title.includes('edited'); i++) { await new Promise(resolve => setTimeout(resolve, 25)); saved = JSON.parse(await fs.readFile(path.join(store, 'plan.json'), 'utf8').catch(() => 'null')); }
+    assert.equal(saved.current.steps[0].title, 'Match the hints (edited)', 'the plan is saved with the project');
+    // 4. Before and after: quick model, default model only if the check finds an invented name.
+    const editedFirst = plan().plan.steps[1];
+    queue.push({ before: '', after: 'Call ghost_helper on each loop.' }, { before: '', after: 'Number the loops from L2.' });
+    await h.guide.receive({ type: 'planDetail', id: editedFirst.id });
+    assert.deepEqual(calls.slice(2).map(call => [call.kind, call.model]), [['detail', 'fast-test'], ['detail', '']], 'an invented name escalates the detail once');
+    assert.match(calls[2].prompt, /SOURCE LINES 3–8/); assert.match(calls[2].prompt, /GOAL: "plan the loops and skip the hook"/);
+    assert.equal(plan().plan.steps[1].after, 'Number the loops from L2.');
+    // 5. Improve: the default model, keeping the user's edits.
+    queue.push({ summary: 'Improved.', steps: [{ file: 'pipeline/plan.py', lines: [3, 8], title: 'Number loops after the hook (clearer)', change: 'Start numbering at L2', why: 'y' }] });
+    await h.guide.receive({ type: 'planImprove' });
+    const improvedCall = calls.at(-1); assert.deepEqual([improvedCall.kind, improvedCall.model], ['plan', '']);
+    assert.match(improvedCall.prompt, /CURRENT PLAN \(to improve; keep what is good, fix what is not\):[\s\S]*"yourNote":"ask Sam"/);
+    const improved = plan().plan; assert.deepEqual([improved.steps.length, improved.steps[0].id, improved.steps[0].status, improved.steps[0].note, improved.models.improved], [1, editedFirst.id, 'done', 'ask Sam', true]);
+    // 6. Using the plan.
+    const copied = []; h.vscode.env.clipboard.writeText = async text => { copied.push(text); };
+    await h.guide.receive({ type: 'planCopy' }); await h.guide.receive({ type: 'planCopy', only: 1 }); await h.guide.receive({ type: 'planCopy', only: 9 });
+    assert.match(copied[0], /^Goal: plan the loops and skip the hook\n\nDo these steps in order\./); assert.match(copied[1], /Do this step only\./); assert.match(copied[2], /Do these steps in order/, 'a bad step number falls back to the whole plan');
+    const target = path.join(h.temp, 'plan.md'); h.vscode.window.showSaveDialog = async () => ({ fsPath: target });
+    await h.guide.receive({ type: 'planExport' }); assert.match(await fs.readFile(target, 'utf8'), /^# Plan: plan the loops and skip the hook/);
+    // 7. Start over keeps the old plan in history.
+    await h.guide.receive({ type: 'planClear' });
+    assert.equal(plan().plan, undefined);
+    assert.deepEqual(plan().conversation, [], 'a fresh plan has a fresh transcript; old messages stay in history');
+    assert.equal(plan().busy, undefined); assert.equal(plan().question, undefined);
+    let after; for (let i = 0; i < 80 && !after?.history?.length; i++) { await new Promise(resolve => setTimeout(resolve, 25)); after = JSON.parse(await fs.readFile(path.join(store, 'plan.json'), 'utf8').catch(() => 'null')); }
+    assert.equal(after.history.length, 1); assert.equal(after.current, undefined);
+  } finally { await h.close(); }
+});
+
+test('planning: a good quick draft is kept (no escalation), a broad goal goes straight to the default model, forced modes are obeyed, and an unready AI opens setup first', async () => {
+  const calls = [], queue = [];
+  const quick = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: planEngine(calls, queue) });
+  try {
+    await quick.until(() => quick.guideState().files > 0, 'mapped');
+    await quick.guide.receive({ type: 'planFind', goal: 'plan the loops and skip the hook' });
+    // Three starting files reach other files: the default model drafts straight away.
+    await quick.guide.receive({ type: 'planEdit', plan: { ...quick.guideState().plan.plan, starting: ['pipeline/plan.py', 'pipeline/write.py', 'models/script.py'] } });
+    await quick.until(() => quick.guideState().plan.estimate?.route?.first === 'main', 'the route is shown before drafting');
+    assert.match(quick.guideState().plan.estimate.route.reason, /^it reaches \d+ other files?$/);
+    // One narrow starting file: the quick model.
+    await quick.guide.receive({ type: 'planEdit', plan: { ...quick.guideState().plan.plan, starting: ['pipeline/write.py'] } });
+    await quick.until(() => quick.guideState().plan.estimate?.route?.first === 'fast', 'a narrow change starts cheap');
+    assert.match(quick.guideState().plan.estimate.route.reason, /^a small change: /);
+    queue.push(GOOD_PLAN); await quick.guide.receive({ type: 'planDraft' });
+    assert.deepEqual(calls.map(call => call.model), ['fast-test'], 'a draft that passes the gate costs one cheap request');
+    assert.deepEqual([quick.guideState().plan.plan.models.escalated, quick.guideState().plan.plan.steps.length], [false, 2]);
+    assert.ok(!quick.guideState().plan.notes.some(note => note.kind === 'problem'), 'a passing draft has no problems; any soft notes cost nothing more');
+    // Broad: five starting files.
+    await quick.guide.receive({ type: 'planClear' });
+    await quick.guide.receive({ type: 'planFind', goal: 'plan the loops and skip the hook' });
+    await quick.guide.receive({ type: 'planEdit', plan: { ...quick.guideState().plan.plan, starting: ['main.py', 'models/script.py', 'pipeline/plan.py', 'pipeline/write.py', 'tests/test_plan.py'] } });
+    queue.push(GOOD_PLAN); calls.length = 0; await quick.guide.receive({ type: 'planDraft' });
+    assert.deepEqual(calls.map(call => call.model), [''], 'a broad goal skips the cheap attempt');
+    // The setup gate: no AI request before an AI is ready.
+    await quick.guide.receive({ type: 'planClear' });
+    await quick.guide.receive({ type: 'planFind', goal: 'plan the loops' });
+    await quick.guide.receive({ type: 'planEdit', plan: { ...quick.guideState().plan.plan, starting: ['pipeline/write.py'] } });
+    testStatus.codex = { provider: 'codex', installed: false, signedIn: false, ready: false, problem: 'Not installed' };
+    calls.length = 0; await quick.guide.receive({ type: 'planDraft' });
+    assert.equal(calls.length, 0); assert.ok(quick.panels.some(panel => panel.type === 'yamoriSetup'));
+  } finally { delete testStatus.codex; await quick.close(); }
+  const forcedMain = await readerHarness({ prefetchNext: false, autoNotes: false, planModel: 'main' }, { engine: planEngine(calls, queue) });
+  try {
+    await forcedMain.until(() => forcedMain.guideState().files > 0, 'mapped');
+    await forcedMain.guide.receive({ type: 'planFind', goal: 'plan the loops and skip the hook' });
+    queue.push(GOOD_PLAN); calls.length = 0; await forcedMain.guide.receive({ type: 'planDraft' });
+    assert.deepEqual(calls.map(call => call.model), [''], 'forced to the default model');
+  } finally { await forcedMain.close(); }
+  const forcedFast = await readerHarness({ prefetchNext: false, autoNotes: false, planModel: 'fast' }, { engine: planEngine(calls, queue) });
+  try {
+    await forcedFast.until(() => forcedFast.guideState().files > 0, 'mapped');
+    await forcedFast.guide.receive({ type: 'planFind', goal: 'plan the loops and skip the hook' });
+    queue.push(BAD_PLAN); calls.length = 0; await forcedFast.guide.receive({ type: 'planDraft' });
+    assert.deepEqual(calls.map(call => call.model), ['fast-test'], 'forced to the quick model: no escalation');
+    assert.match(forcedFast.guideState().plan.notes.map(note => note.text).join(' '), /not in the project/, 'the problem is shown, and the user can edit');
+  } finally { await forcedFast.close(); }
+});
+
+test('the Plan tab: the same map with numbered steps, ripples and suggestions, and every part of the plan editable, draggable and undoable', async () => {
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current'];
+  const { document, elements, all } = fakeDocument(ids);
+  const documentEvents = {}; document.addEventListener = (type, fn) => { documentEvents[type] = fn; };
+  const messages = [], savedView = {}; let receive;
+  const sandbox = { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))), getState: () => savedView, setState: value => Object.assign(savedView, value) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON, setTimeout, clearTimeout };
+  vm.runInNewContext(pageScript(require('../src/views/guide').mapHTML()), sandbox);
+  const { graph } = await scanFixture(videoProject), map = projectMap.layoutGrouped(graph, { collapsed: [] });
+  const cards = Object.fromEntries(Object.entries(graph.files).map(([rel, file]) => [rel, { lines: file.lines, defs: [] }]));
+  const planInfo = (rev, extra = {}) => ({ rev, plan: { id: 'p1', goal: 'skip the hook', summary: 'Skip the hook.', starting: ['pipeline/plan.py'], dismissed: [], steps: [
+    { id: 'a', file: 'pipeline/plan.py', startLine: 3, endLine: 8, title: 'Number loops', change: 'Start at L2', why: 'The hook is not a loop', note: '', status: 'todo' },
+    { id: 'b', file: 'pipeline/write.py', startLine: 4, endLine: 5, title: 'Match hints', change: 'Skip the hook hint', why: '', note: '', status: 'todo' }],
+    models: { draft: 'fast-test', escalated: false }, tokens: { sent: 3200, whole: 9800, used: 0 }, calls: [] },
+    impact: { a: { usedBy: [{ file: 'main.py' }], uses: [], tests: [{ id: 'tests/test_plan.py::test_first_loop' }], risk: ['No unit test calls the functions in these lines.'] }, b: { usedBy: [], uses: [], tests: [], risk: [] } },
+    ripple: ['main.py'], candidates: { files: [{ file: 'pipeline/plan.py', score: 6, why: ['name: plan'] }, { file: 'models/script.py', score: 3, why: ['defines: hook'] }], weak: false },
+    estimate: { sent: 3200, whole: 9800, percent: 67, omitted: 0, files: 1, budget: 6000 }, notes: [{ kind: 'order', text: 'Step 1 uses write.py, which step 2 changes.' }], settings: { mode: 'auto' }, ...extra });
+  const push = plan => receive({ data: { type: 'map', state: { files: 5, links: 6, notes: { done: 0, total: 4 }, folders: [], map, guide: { folder: '', steps: [] }, cards, glossary: [], plan } } });
+  const panel = elements['plan-panel'], node = id => all(elements.nodes).find(el => el.attributes?.['data-id'] === id);
+  const stepCards = () => all(panel).filter(el => el.attributes?.['data-step']);
+  const titles = () => stepCards().map(card => all(card).find(el => el.className === 'step-title').value);
+  const button = (label, from = panel) => [...all(from), ...(from === panel ? all(elements['plan-actions']) : [])].find(el => el.tag === 'button' && (el.textContent === label || el.attributes?.['aria-label'] === label));
+  push(planInfo(1));
+  assert.equal(panel.hidden, true, 'the plan panel waits for the Plan tab');
+  elements['tab-plan'].events.click();
+  assert.deepEqual([panel.hidden, elements['map-view'].hidden, elements['start-view'].hidden, elements['tab-plan'].attributes['aria-selected'], elements['tab-map'].attributes['aria-selected']], [false, false, true, 'true', 'false']);
+  assert.ok(button('Approve & implement'), 'approval is directly above the canvas');
+  button('Approve & implement').events.click(); assert.deepEqual(messages.at(-1), { type: 'planExecute', id: 'p1' });
+  // The map: numbered steps, ripple, suggestions, everything else fades.
+  const badge = id => all(node(id)).find(el => el.attributes?.class === 'plan-badge');
+  assert.ok(node('pipeline/plan.py').classList.contains('planned')); assert.equal(all(badge('pipeline/plan.py')).find(el => el.textContent === '1').textContent, '1'); assert.equal(all(badge('pipeline/write.py')).find(el => el.textContent === '2').textContent, '2');
+  assert.equal(node('main.py'), undefined, 'the canvas only shows files with planned changes');
+  assert.equal(node('models/script.py'), undefined, 'suggested files do not clutter the change canvas');
+  assert.equal(node('tests/test_plan.py'), undefined, 'unaffected files stay off the canvas');
+  // Shared idea labels track a file drag without pulling the other connected file.
+  push(planInfo(10, { plan: { ...planInfo(10).plan, steps: planInfo(10).plan.steps.map(step => ({ ...step, title: 'Reuse shared input' })) } }));
+  const xy = el => el.attributes.transform.match(/translate\(([-.\d]+) ([-.\d]+)\)/).slice(1).map(Number);
+  const cloud = () => all(elements.nodes).find(el => el.attributes?.['data-idea'] === 'a');
+  const startIdea = xy(cloud()), stationary = xy(node('pipeline/write.py')), scale = vm.runInNewContext('view.k', sandbox), beforeDrag = messages.length;
+  node('pipeline/plan.py').events.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 1 });
+  elements.canvas.events.pointermove({ clientX: 60, clientY: 30 });
+  const afterIdea = xy(cloud());
+  assert.ok(Math.abs(afterIdea[0] - startIdea[0] - 30 / scale) < 0.00001, 'a shared label follows the center of its two file connections');
+  assert.ok(Math.abs(afterIdea[1] - startIdea[1] - 15 / scale) < 0.00001);
+  assert.deepEqual(xy(node('pipeline/write.py')), stationary, 'dragging one rectangle does not move another rectangle');
+  elements.canvas.events.pointerup({ pointerId: 1 }); sandbox.drawMap();
+  assert.deepEqual(xy(cloud()), afterIdea, 'labels keep their dragged position when the map redraws');
+  cloud().events.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 2 });
+  elements.canvas.events.pointermove({ clientX: 20, clientY: 10 });
+  elements.canvas.events.pointerup({ pointerId: 2 });
+  assert.ok(xy(cloud())[0] > afterIdea[0], 'idea labels can also be dragged independently');
+  assert.ok(!messages.slice(beforeDrag).some(message => message.type === 'planSource'), 'dragging never opens change details');
+  vm.runInNewContext('planOffsets.clear(); planIdeaOffsets.clear();', sandbox); push(planInfo(1));
+  const idea = all(elements.nodes).find(el => el.attributes?.['data-idea'] === 'b');
+  assert.ok(idea, 'key change phrases appear around their file boxes');
+  assert.ok(all(idea).some(el => el.textContent === 'Match hints'));
+  const beforeIdea = messages.length; idea.events.click({ stopPropagation() {} });
+  assert.ok(!messages.slice(beforeIdea).some(message => message.type === 'planSource'), 'selecting an overview idea stays local');
+  assert.ok(node('pipeline/write.py').classList.contains('idea-related'));
+  assert.ok(node('pipeline/plan.py').classList.contains('dim'), 'unrelated files fade while the whole map stays visible');
+  assert.ok(all(elements.edges).some(el => el.classList?.contains('hot')), 'the matching idea-to-file line lights up');
+  all(elements.nodes).find(el => el.attributes?.['data-idea'] === 'b').events.click({ stopPropagation() {} });
+  assert.equal(messages.at(-1).type, 'planSource'); assert.equal(messages.at(-1).step, 'b');
+  button('Close plan details').events.click(); sandbox.closePlanFiles();
+  // Clicking a plan square first offers files; opening a file shows its changes.
+  const beforeFiles = messages.length;
+  node('pipeline/plan.py').events.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 1 });
+  elements.canvas.events.pointerup({ pointerId: 1 });
+  const menu = all(node('pipeline/plan.py')).find(el => el.attributes?.class === 'plan-files-inline');
+  assert.ok(menu, 'small file rectangles expand inside the square on the canvas');
+  assert.equal(all(document.body).some(el => el.className === 'plan-files-menu'), false, 'no separate popup is created');
+  assert.equal(panel.attributes['data-inspecting'], 'false', 'the inspector waits for a file choice');
+  assert.ok(messages.slice(beforeFiles).some(message => message.type === 'revealSource' && message.id === 'pipeline/plan.py'), 'clicking an existing plan file opens its source');
+  const pathText = all(node('pipeline/plan.py')).find(el => el.attributes?.class === 'plan-file-path');
+  assert.equal(pathText.children.map(el => el.textContent).join(''), 'pipeline/plan.py', 'relative paths are visible on the canvas');
+  assert.ok(!messages.slice(beforeFiles).some(message => message.type === 'planSource'), 'opening the dropdown does not request source');
+  const files = all(menu).filter(el => el.attributes?.class?.startsWith('plan-file-mini'));
+  assert.deepEqual(files.map(el => el.attributes.transform), ['translate(12 92)'], 'changes fall directly below their own file square');
+  assert.deepEqual(files.map(el => el.attributes['data-file']), ['pipeline/plan.py']);
+  assert.deepEqual(files.map(el => el.attributes['data-change']), ['a']);
+  sandbox.showPlanFiles('pipeline/write.py');
+  const otherMenu = all(node('pipeline/write.py')).find(el => el.attributes?.class === 'plan-files-inline');
+  const otherChanges = all(otherMenu).filter(el => el.attributes?.class?.startsWith('plan-file-mini'));
+  assert.deepEqual(otherChanges.map(el => el.attributes['data-change']), ['b'], 'the other square shows different changes scoped to its own file');
+  assert.ok(all(otherMenu).some(el => el.textContent === 'Match hints'));
+  assert.ok(!all(otherMenu).some(el => el.textContent === 'Number loops'));
+  sandbox.showPlanFiles('pipeline/plan.py');
+  all(node('pipeline/plan.py')).find(el => el.attributes?.['data-change'] === 'a').events.click({ stopPropagation() {} }); assert.equal(menu.hidden, true);
+  assert.equal(panel.attributes['data-inspecting'], 'true');
+  assert.ok(all(panel).some(el => el.attributes?.['aria-label'] === 'Jump to change'), 'file details provide a visible change picker');
+  assert.equal(all(panel).find(el => el.className === 'step-navigation').hidden, false, 'change navigation is visible');
+  button('Close plan details').events.click();
+  // The panel.
+  const goal = all(panel).find(el => el.id === 'plan-goal'); assert.equal(goal.value, '', 'the composer is empty; the original goal stays in the transcript');
+  assert.ok(all(panel).some(el => el.textContent === 'skip the hook'), 'the goal is preserved as a message');
+  assert.deepEqual(titles(), ['Number loops', 'Match hints']);
+  const chips = all(stepCards()[0]).filter(el => el.tag === 'span' && /used by|test|No unit test/.test(el.textContent || '')).map(el => el.textContent);
+  assert.deepEqual(chips, ['used by 1', '1 test', 'No unit test calls the functions in these lines.'], 'impact and risk come with each step');
+  assert.ok(all(panel).some(el => el.className === 'plan-models' && el.textContent === 'Drafted by fast-test · sent about 3.2k tokens vs 9.8k for whole files'));
+  assert.ok(all(panel).some(el => el.textContent === '• Step 1 uses write.py, which step 2 changes.'));
+  // Editing a title: typing keeps local state; finishing saves, and the next action sends it.
+  const titleInput = all(stepCards()[0]).find(el => el.className === 'step-title'); titleInput.value = 'Renumber loops'; titleInput.events.input(); titleInput.events.change();
+  button('Copy plan').events.click();
+  assert.deepEqual(messages.slice(-2).map(m => m.type), ['planEdit', 'planCopy']); assert.equal(messages.at(-2).plan.steps[0].title, 'Renumber loops');
+  // Reorder with the buttons, undo and redo.
+  button('Move down', stepCards()[0]).events.click(); assert.deepEqual(titles(), ['Match hints', 'Renumber loops']);
+  assert.ok(badge('pipeline/plan.py') && all(badge('pipeline/plan.py')).some(el => el.textContent === '2'), 'the map badge follows the order');
+  button('Undo').events.click(); assert.deepEqual(titles(), ['Renumber loops', 'Match hints']);
+  button('Redo').events.click(); assert.deepEqual(titles(), ['Match hints', 'Renumber loops']); button('Undo').events.click();
+  // Step editors start folded: the outline stays readable without a wall of fields.
+  const disclosures = stepCards().map(card => all(card).find(el => el.className === 'step-disclosure'));
+  assert.ok(disclosures.every(el => el && !el.open));
+  disclosures[0].open = true; disclosures[0].events.toggle();
+  // Drag and drop.
+  const dragged = stepCards(); dragged[0].events.dragstart({ target: { closest: selector => selector === '.handle' }, dataTransfer: { setData() {} } }); dragged[1].events.dragover({ preventDefault() {} }); dragged[1].events.drop({ preventDefault() {} });
+  assert.deepEqual(titles(), ['Match hints', 'Renumber loops'], 'dropping the first card on the second moves it'); button('Undo').events.click();
+  // Done, skip, delete: each undoable.
+  button('Mark as done', stepCards()[0]).events.click(); assert.match(stepCards()[0].className, /\bdone\b/);
+  button('Skip this step', stepCards()[1]).events.click(); assert.match(stepCards()[1].className, /\bskipped\b/);
+  button('Delete this step', stepCards()[0]).events.click(); assert.deepEqual(titles(), ['Match hints']); button('Undo').events.click(); assert.equal(stepCards().length, 2);
+  // Click a file on the map: add it as a step or a starting file.
+  sandbox.select('models/script.py', false, true);
+  assert.ok(all(panel).some(el => el.className === 'path' && el.textContent === 'models/script.py'), 'the selected file is shown in the panel');
+  button('Add as a step').events.click(); assert.deepEqual(titles().slice(-1), ['Change script.py']);
+  assert.deepEqual(messages.filter(m => m.type === 'planDetail').length, 0);
+  const added = stepCards().at(-1); assert.equal(all(added).find(el => el.attributes?.['aria-label'] === 'File for step 3').value, 'models/script.py');
+  sandbox.select('main.py', false, true); button('Add as starting file').events.click(); button('Undo').events.click(); sandbox.select('main.py', false, true);
+  assert.ok(button('Add as starting file'), 'undo removed the starting file again');
+  // File-level comments and rejection apply to all of this file's proposed steps.
+  sandbox.select('pipeline/plan.py', false, true);
+  assert.ok(!all(panel).some(el => el.attributes?.['aria-label'] === 'Comment on proposed file'), 'no permanent comment box');
+  sandbox.window.getSelection = () => ({ toString: () => 'Start numbering' });
+  const proposal = all(stepCards()[0]).filter(el => el.className === 'step-label')[1];
+  assert.equal(stepCards()[0].draggable, false, 'selecting proposal text does not start card dragging');
+  assert.equal(all(stepCards()[0]).find(el => el.className === 'handle').draggable, true, 'the handle can still reorder');
+  let prevented = false; stepCards()[0].events.dragstart({ target: { closest: () => null }, preventDefault() { prevented = true; } }); assert.equal(prevented, true);
+  proposal.events.mouseup(); const oldAction = all(proposal).find(el => el.className === 'selection-comment');
+  sandbox.window.getSelection = () => ({ isCollapsed: true, toString: () => '' });
+  documentEvents.selectionchange(); assert.equal(oldAction.hidden, true, 'the comment action hides when highlighting is cleared');
+  sandbox.window.getSelection = () => ({ toString: () => 'Start numbering' });
+  proposal.events.mouseup(); const addComment = all(proposal).filter(el => el.className === 'selection-comment' && !el.hidden).at(-1).children[0];
+  const beforeComment = proposal.children.length;
+  proposal.events.mouseup({ target: { closest: () => true } });
+  assert.equal(proposal.children.length, beforeComment, 'mouseup on the comment action does not replace it before click');
+  addComment.events.click();
+  const opened = all(proposal).filter(el => el.className === 'selection-comment' && !el.hidden).at(-1);
+  sandbox.window.getSelection = () => ({ isCollapsed: true, toString: () => '' });
+  documentEvents.selectionchange(); assert.equal(opened.hidden, false, 'an opened comment draft survives losing the selection');
+  const annotation = all(proposal).find(el => el.attributes?.['aria-label'] === 'Comment on selected text');
+  annotation.value = 'Keep this file unchanged for now.'; button('Save comment', proposal).events.click();
+  button('Reject file').events.click();
+  assert.ok(stepCards().filter(card => all(card).some(el => el.value === 'pipeline/plan.py')).every(card => /skipped/.test(card.className)));
+  button('Restore file').events.click();
+  assert.ok(button('Reject file'));
+  // A text edit in progress is not interrupted by a state update with the same revision; a new revision replaces the plan.
+  const typing = all(stepCards()[0]).find(el => el.className === 'step-title'); typing.value = 'half-typed'; typing.events.input();
+  push(planInfo(1)); assert.equal(all(stepCards()[0]).find(el => el.className === 'step-title'), typing, 'the same input stays in place'); assert.equal(typing.value, 'half-typed');
+  push(planInfo(2, { plan: { ...planInfo(2).plan, summary: '<img src=x onerror=alert(1)>', steps: [{ ...planInfo(2).plan.steps[0], title: '<b>Bold?</b>' }] } }));
+  assert.deepEqual(titles(), ['<b>Bold?</b>']); assert.ok(all(panel).some(el => el.className === 'plan-summary' && el.textContent === '<img src=x onerror=alert(1)>'), 'text only, never markup');
+  // Details are closeable without clearing the plan; the conversation is a separate terminal.
+  assert.ok(all(panel).some(el => el.className === 'plan-terminal'));
+  button('Close plan details').events.click();
+  assert.equal(panel.attributes['data-inspecting'], 'false');
+  assert.ok(stepCards().length, 'closing the inspector does not delete the plan');
+  // Before and after, busy state and Stop.
+  button('Generate pseudocode').events.click(); assert.deepEqual(messages.at(-1), { type: 'planDetail', id: 'a' });
+  push({ ...planInfo(3), busy: { stage: 'detail', text: 'Writing before and after for “Number loops”…' } });
+  assert.ok(button('Generate pseudocode').disabled && button('Improve with default model').disabled, 'no second request while one runs'); button('Stop').events.click(); assert.equal(messages.at(-1).type, 'planStop');
+  push({ ...planInfo(4), error: 'Could not draft the plan: boom' }); assert.equal(all(panel).find(el => el.className === 'plan-err').attributes.role, 'alert');
+  // Without a plan: write a goal, find starting points.
+  push({ rev: 5 }); const empty = all(panel).find(el => el.id === 'plan-goal'), find = button('Create plan');
+  assert.equal(empty.value, ''); assert.equal(find.disabled, true);
+  empty.value = 'let a short be 60 seconds'; empty.events.input(); assert.equal(find.disabled, false); find.events.click(); assert.deepEqual(messages.at(-1), { type: 'planGoal', goal: 'let a short be 60 seconds' });
+  const rendered = sandbox.renderPlanPseudocode('## Load the model · L10–20\nL12    **Return** weights\nL13    # Why: stable output', { file: 'pipeline/plan.py' });
+  assert.ok(all(rendered).some(el => el.className === 'important' && el.children.some(child => child.textContent === 'Return')));
+  assert.ok(all(rendered).some(el => /algo-line note/.test(el.className)), 'notes are rendered as notes');
+  const linked = all(rendered).find(el => el.className === 'pseudo-source'); linked.events.click();
+  assert.deepEqual(messages.at(-1), { type: 'revealSource', id: 'pipeline/plan.py', line: 12 });
+  // Existing long cached snippets stay intact but only five actions appear initially.
+  const compact = sandbox.renderPlanPseudocode(Array.from({ length: 12 }, (_, i) => 'Action ' + (i + 1)).join('\n') + '\n# Why: needed context', { file: 'pipeline/plan.py' });
+  assert.equal(compact.children.filter(el => /algo-line/.test(el.className)).length, 5);
+  const overflow = all(compact).find(el => el.className === 'pseudo-overflow');
+  assert.equal(overflow.hidden, true); assert.equal(overflow.children.length, 7);
+  const more = all(compact).find(el => el.className === 'pseudo-expand');
+  assert.equal(more.textContent, 'Show 7 more lines'); more.events.click();
+  assert.equal(overflow.hidden, false); assert.equal(more.attributes['aria-expanded'], 'true');
+  more.events.click(); assert.equal(overflow.hidden, true);
+  assert.ok(all(compact).some(el => el.className === 'pseudo-notes'), 'context notes have their own disclosure');
+  const commentStep = { id: 'a', file: 'pipeline/plan.py', startLine: 3, endLine: 8, title: 'Number loops', change: 'Start at L2', why: '', status: 'todo', before: 'Set `count` to 1\nReturn count', after: 'Set `count` to 0\nReturn count\nSave count' };
+  push(planInfo(6, { plan: { ...planInfo(6).plan, steps: [commentStep] } }));
+  sandbox.select('pipeline/plan.py', false, true);
+  const snippet = all(panel).find(el => el.className === 'snippet-block');
+  assert.equal(all(panel).filter(el => el.className === 'snippet-block').length, 1, 'one unified pseudocode view');
+  assert.ok(!all(panel).some(el => el.textContent === 'Compare with current' || el.textContent === 'Proposed logic'));
+  assert.ok(!all(snippet).some(el => el.attributes?.['aria-label'] === 'Compare with current'), 'no before editor');
+  const diffRows = all(snippet).filter(el => el.className?.startsWith('algo-line'));
+  assert.match(diffRows[0].className, /diff-change/);
+  assert.doesNotMatch(diffRows[1].className, /diff-(?:add|change)/);
+  assert.match(diffRows[2].className, /diff-add/);
+  assert.ok(all(snippet).some(el => el.attributes?.['aria-label'] === 'Added line'), 'signs identify changes without relying on color');
+  sandbox.window.getSelection = () => ({ toString: () => 'count' });
+  snippet.events.mouseup(); button('Add comment', snippet).events.click();
+  const comment = all(snippet).find(el => el.attributes?.['aria-label'] === 'Comment on selected text');
+  comment.value = 'Use the number of valid items.';
+  button('Save comment', snippet).events.click();
+  assert.ok(all(panel).some(el => el.className === 'saved-comment' && el.textContent.includes('Use the number of valid items.')), 'highlighted pseudocode comments appear on the plan');
+  push({ rev: 7 });
+  const proposalInfo = planInfo(21); proposalInfo.plan.steps.push({ id: 'create-new', file: 'train_lstm.py', newFile: true, startLine: 0, endLine: 0, title: 'Create standalone training', change: 'Train separately.', why: '', status: 'todo' });
+  push(proposalInfo); assert.ok(node('train_lstm.py'), 'a new-file proposal appears on the canvas without a source graph entry');
+  const beforeNewFileClick = messages.length;
+  node('train_lstm.py').events.pointerdown({ button: 0, clientX: 0, clientY: 0, pointerId: 3 });
+  elements.canvas.events.pointerup({ pointerId: 3 });
+  const newChange = all(node('train_lstm.py')).find(el => el.attributes?.['data-change'] === 'create-new');
+  assert.ok(newChange, 'clicking a proposed file expands its own changes');
+  assert.ok(!messages.slice(beforeNewFileClick).some(message => message.type === 'revealSource'), 'new file proposals are never opened as existing source');
+  newChange.events.click({ stopPropagation() {} });
+  assert.equal(panel.attributes['data-inspecting'], 'true');
+  // The host replies to planSource, rebuilding the graph without this proposed file.
+  push({ ...proposalInfo, snippet: { step: 'create-new', file: 'train_lstm.py', newFile: true, text: 'Proposed new file.' } });
+  assert.equal(panel.attributes['data-inspecting'], 'true', 'the source reply must not close new-file details');
+  assert.equal(vm.runInNewContext('selected', sandbox), 'train_lstm.py');
+  assert.ok(all(panel).some(el => el.textContent === 'train_lstm.py · New file'));
+  assert.ok(!all(panel).some(el => /L0[–-]0/.test(el.textContent || '')), 'new files never show fictional source lines');
+  const unlinked = sandbox.renderPlanPseudocode('L12    Proposed action', { file: 'train_lstm.py', newFile: true });
+  assert.ok(!all(unlinked).some(el => el.className === 'pseudo-source'));
+  sandbox.select(undefined); push({ rev: 22 });
+  const colored = sandbox.renderPlanPseudocode('Set `batch_size` to 64\nCall predict(x)\nx ← 3\nReturn x\n# Why: avoid overflow', { file: 'pipeline/plan.py' });
+  assert.ok(all(colored).some(el => el.className === 'pseudo-titlebar'));
+  assert.ok(all(colored).some(el => el.className === 'pseudo-variable' && el.textContent === 'batch_size'));
+  assert.ok(all(colored).some(el => el.className === 'pseudo-variable' && el.textContent === 'x'));
+  assert.ok(all(colored).some(el => el.className === 'pseudo-function' && el.textContent === 'predict'));
+  assert.ok(!all(colored).some(el => el.className === 'pseudo-variable' && el.textContent === 'Set'), 'ordinary prose stays neutral');
+  // Native terminal path: input submits a planning message, never a shell command.
+  const terminalOutput = [];
+  const composer = () => all(panel).find(el => el.id === 'plan-goal');
+  const terminalData = data => { const goal = composer(); if (data === '\r') goal.events.keydown({ key: 'Enter', preventDefault() {} }); else { goal.value += data; goal.setSelectionRange(goal.value.length, goal.value.length); goal.events.input(); } };
+  sandbox.requestAnimationFrame = fn => fn();
+  sandbox.window.YamoriTerminal = {
+    Terminal: class { open() {} loadAddon() {} onData() { throw new Error('xterm must never edit the prompt'); } reset() {} write(text) { terminalOutput.push(text); } writeln(text) { terminalOutput.push(text); } },
+    FitAddon: class { fit() {} }
+  };
+  sandbox.drawPlan();
+  assert.equal(all(panel).find(el => el.className === 'plan-terminal').attributes['data-native'], 'true');
+  terminalData('Explain this plan'); terminalData('\r');
+  assert.deepEqual(messages.at(-1), { type: 'planGoal', goal: 'Explain this plan' });
+  assert.ok(terminalOutput.length);
+  const wrappedInput = 'α😀 long wrapped input '.repeat(30) + '\nSecond line';
+  const outputBeforeInput = terminalOutput.length;
+  terminalData(wrappedInput);
+  assert.equal(composer().value, wrappedInput);
+  assert.equal(terminalOutput.length, outputBeforeInput, 'typing never repaints wrapped prompt text into xterm');
+  const sendsBeforeNewline = messages.length;
+  composer().events.keydown({ key: 'Enter', shiftKey: true });
+  composer().events.keydown({ key: 'Enter', isComposing: true });
+  assert.equal(messages.length, sendsBeforeNewline, 'newlines and IME composition do not accidentally send');
+  document.activeElement = composer(); composer().setSelectionRange(5, 14, 'forward'); sandbox.drawPlan();
+  assert.equal(composer().value, wrappedInput, 'activity redraw preserves the draft');
+  assert.deepEqual([composer().selectionStart, composer().selectionEnd], [5, 14], 'activity redraw preserves the selection');
+  document.activeElement = composer();
+  const resize = () => all(panel).find(el => el.attributes?.['aria-label'] === 'Resize planning terminal');
+  const originalHeight = Number(resize().attributes['aria-valuenow']);
+  resize().events.pointerdown({ button: 0, pointerId: 1, clientY: 400, preventDefault() {}, stopPropagation() {} });
+  resize().events.pointermove({ pointerId: 1, clientY: 300, preventDefault() {}, stopPropagation() {} });
+  resize().events.pointerup({ type: 'pointerup', pointerId: 1 });
+  assert.equal(savedView.terminalHeight, originalHeight + 100, 'dragging upward expands the terminal and saves its size');
+  assert.equal(composer().value, wrappedInput, 'resizing keeps long multiline input');
+  resize().events.keydown({ key: 'ArrowDown', preventDefault() {}, stopPropagation() {} });
+  assert.equal(savedView.terminalHeight, originalHeight + 76, 'keyboard resizing is supported');
+  const maxHeight = sandbox.setTerminalHeight(100000, true);
+  assert.ok(maxHeight < 100000, 'terminal size is clamped to the viewport');
+  resize().events.dblclick(); assert.equal(savedView.terminalHeight, 280, 'double-click restores the default height');
+  terminalData('\r');
+  assert.deepEqual(messages.at(-1), { type: 'planGoal', goal: wrappedInput }, 'wrapped Unicode and multiline text is sent exactly once');
+
+  terminalData('discard this unfinished input');
+  const fresh = button('New plan');
+  assert.ok(all(elements['plan-actions']).includes(fresh), 'new plan is always above the canvas');
+  assert.equal(elements['plan-actions'].hidden, false);
+  fresh.events.click(); assert.equal(messages.at(-1).type, 'planClear');
+  push({ rev: 23 }); terminalData('a completely different goal'); terminalData('\r');
+  assert.deepEqual(messages.at(-1), { type: 'planGoal', goal: 'a completely different goal' }, 'fresh plan discards unfinished terminal input');
+  push({ ...planInfo(24), busy: { stage: 'draft', text: 'Waiting for your answer' }, question: 'Which dataset?' });
+  terminalData('Training data'); terminalData('\r');
+  assert.deepEqual(messages.at(-1), { type: 'planAnswer', answer: 'Training data' }, 'the terminal accepts native questions while the provider turn is running');
+  const questionGoal = all(panel).find(el => el.id === 'plan-goal'); questionGoal.value = 'Validation data'; questionGoal.events.input();
+  assert.equal(button('Send').disabled, false, 'the fallback composer also accepts answers during a running turn');
+  // Token-bearing saved plans must finish rendering the inspector, including on source replies.
+  const measured = planInfo(25); measured.plan.tokens.used = 1400;
+  measured.plan.calls = [{ usage: { input: 1000, cacheWrite: 100, output: 300, cacheRead: 9000 } }];
+  push(measured); sandbox.select('pipeline/plan.py', false, true); sandbox.drawPlan();
+  assert.ok(button('Generate pseudocode'), 'usage must not interrupt rendering of change details');
+  assert.ok(all(panel).some(el => el.className === 'plan-detail-content' && el.attributes['aria-label'] === 'Change details'), 'details have their own scroll region below fixed navigation');
+  assert.equal(button('Show full proposal'), undefined, 'proposals are fully readable without an extra click');
+  const visibleChange = stepCards().find(card => !card.hidden);
+  assert.ok(visibleChange, 'the selected change is visible');
+  assert.equal(all(visibleChange).find(el => el.className === 'step-disclosure').tag, 'section', 'inspector text is never gated by a hidden disclosure');
+  const inspectorContent = all(panel).find(el => el.className === 'plan-detail-content');
+  assert.ok(inspectorContent.children.indexOf(visibleChange) < inspectorContent.children.findIndex(el => el.className === 'file-feedback'), 'description comes before file rejection');
+  assert.ok(all(panel).some(el => el.className === 'step-reading' && el.textContent === 'Start at L2'));
+  assert.match(all(panel).find(el => el.className === 'plan-usage').textContent, /1.1k input · 300 output · 9k cached/);
+  push({ ...measured, rev: 26, busy: { text: 'Reading pipeline/write.py', usage: { input: 200, output: 50, cacheRead: 500 }, characters: 450 }, activity: ['Thinking', 'Reading pipeline/write.py'] });
+  assert.ok(all(panel).some(el => el.className === 'plan-live-phase' && el.textContent === 'Reading pipeline/write.py'));
+  assert.match(all(panel).find(el => el.className === 'plan-usage').textContent, /1.3k input · 350 output · 9.5k cached/);
+  assert.ok(all(panel).some(el => el.className === 'plan-live-metric' && /450 characters/.test(el.textContent)));
+  assert.ok(all(panel).some(el => el.textContent === 'Activity'));
+  push({ ...measured, rev: 27, snippet: { step: 'a', text: 'source reply' } });
+  assert.ok(button('Generate pseudocode'), 'source updates preserve the inspector');
+  // Back to the map: the plan panel goes away, the map stays.
+  elements['tab-map'].events.click(); assert.deepEqual([panel.hidden, elements['map-view'].hidden], [true, false]);
+  assert.equal(elements['plan-actions'].hidden, true, 'plan actions do not clutter Map');
+  assert.ok(!node('pipeline/plan.py').classList.contains('planned'), 'plan overlays belong to the Plan tab');
+  assert.doesNotMatch(require('../src/views/guide').mapHTML().replace(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'vendor', 'terminal.min.js'), 'utf8'), ''), /innerHTML|insertAdjacentHTML|outerHTML/);
+});
+
+test('planning: editing during a draft keeps user changes when the old response arrives', async () => {
+  let finish;
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: () => ({ requestStructured: () => new Promise(resolve => { finish = resolve; }) }) });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.guide.receive({ type: 'planFind', goal: 'plan the loops' });
+    const request = h.guide.receive({ type: 'planDraft' });
+    await h.until(() => !!finish, 'draft started');
+    await h.guide.receive({ type: 'planEdit', plan: { ...h.guideState().plan.plan, goal: 'My revised goal' } });
+    finish({ raw: JSON.stringify(GOOD_PLAN), actualModel: 'test' });
+    await request;
+    await h.until(() => h.guideState().plan.plan.goal === 'My revised goal', 'user edits are posted');
+    assert.equal(h.guideState().plan.plan.goal, 'My revised goal');
+    assert.equal(h.guideState().plan.plan.steps.length, 0, 'the cancelled response does not overwrite user work');
+    assert.match(h.guideState().plan.error, /edited the plan/);
+  } finally { await h.close(); }
+});
+
+test('planning: a goal discovers files and drafts directly; clicking a step returns real numbered source', async () => {
+  const calls = [], queue = [GOOD_PLAN];
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: planEngine(calls, queue) });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.guide.receive({ type: 'planGoal', goal: 'plan the loops and skip the hook' });
+    const plan = h.guideState().plan.plan;
+    assert.ok(plan.steps.length, 'a goal alone produces a plan without a file picker');
+    assert.equal(calls[0].planning, true, 'the provider receives the planning session flag');
+    assert.ok(calls[0].tools, 'the planning session can investigate through read-only project tools');
+    assert.match(calls[0].prompt, /PROJECT FILE INDEX/);
+    await h.guide.receive({ type: 'planSource', step: plan.steps[0].id });
+    const snippet = h.guideState().plan.snippet;
+    assert.equal(snippet.file, plan.steps[0].file);
+    assert.match(snippet.text, /^3: /);
+    assert.ok(snippet.text.includes('def '), 'the snippet comes from source, not a model prediction');
+  } finally { await h.close(); }
+});
+
+test('planning: a clarification pauses for an answer and rejected files stay out of later drafts', async () => {
+  const calls = [], queue = [{ summary: 'Need the intended numbering.', question: 'Should the hook count as a loop?', steps: [] }, GOOD_PLAN, GOOD_PLAN];
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: planEngine(calls, queue) });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.guide.receive({ type: 'planGoal', goal: 'plan the loops' });
+    assert.equal(h.guideState().plan.question, 'Should the hook count as a loop?');
+    assert.equal(calls.length, 1, 'the agent waits rather than assuming an answer');
+    await h.guide.receive({ type: 'planAnswer', answer: 'No, skip the hook.' });
+    assert.match(calls[1].prompt, /No, skip the hook/);
+    assert.equal(h.guideState().plan.plan.goal, 'plan the loops', 'answering never rewrites the goal');
+    assert.ok(h.guideState().plan.plan.messages.some(message => message.role === 'user' && message.text === 'No, skip the hook.'));
+    assert.ok(h.guideState().plan.conversation.some(message => message.text === 'Should the hook count as a loop?'));
+    let plan = h.guideState().plan.plan;
+    const rejected = plan.steps[0].file;
+    await h.guide.receive({ type: 'planEdit', plan: { ...plan, dismissed: [rejected], steps: plan.steps.map(step => ({ ...step, status: step.file === rejected ? 'skipped' : step.status, note: 'Keep the existing numbering here.' })) } });
+    await h.guide.receive({ type: 'planImprove' });
+    plan = h.guideState().plan.plan;
+    assert.ok(!plan.steps.some(step => step.file === rejected), 'a rejected file cannot return through a model response');
+    assert.match(calls.at(-1).prompt, /REJECTED FILES/);
+    assert.match(calls.at(-1).prompt, /Keep the existing numbering here/);
+  } finally { await h.close(); }
+});
+
+
+test('planning follow-ups reuse the session and apply only validated patches; questions keep the plan intact', async () => {
+  const real = require('../src/ai/engine'), requests = []; let reply = GOOD_PLAN;
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: () => ({ requestStructured: async options => {
+    requests.push(options); options.session.ready = true;
+    return { raw: JSON.stringify(reply), actualModel: 'test', usage: { input: 10, cacheRead: 100, output: 5 } };
+  } }) });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.guide.receive({ type: 'planGoal', goal: 'plan the loops and skip the hook' });
+    const original = structuredClone(h.guideState().plan.plan), id = original.steps[0].id;
+    original.steps[0].note = 'Keep this decision'; original.steps[1].after = 'Keep this cached snippet';
+    await h.guide.receive({ type: 'planEdit', plan: original });
+    reply = { message: 'The hook is an introduction, not a numbered loop.', summary: '', question: '', updates: [], additions: [], removals: [] };
+    await h.guide.receive({ type: 'planChat', text: 'Why skip the hook?' });
+    assert.equal(requests.at(-1).schema, real.PLAN_PATCH_SCHEMA);
+    assert.equal(requests[0].session, requests[1].session, 'the prior investigation is retained');
+    assert.ok(!requests.at(-1).prompt.includes('PROJECT FILE INDEX'), 'a retained follow-up does not resend the initial project index');
+    assert.deepEqual(h.guideState().plan.plan.steps, original.steps, 'a question leaves every proposed step unchanged');
+    assert.match(h.guideState().plan.conversation.at(-1).text, /introduction/);
+    reply = { ...reply, message: 'Updated one step.', updates: [{ id, file: original.steps[0].file, lines: [3, 8], title: 'Count only body loops', change: 'Number body loops from L2', why: 'Skip the hook.' }] };
+    await h.guide.receive({ type: 'planChat', text: 'Rename the first idea and keep the rest.' });
+    assert.equal(h.guideState().plan.plan.steps[0].id, id); assert.equal(h.guideState().plan.plan.steps[0].note, 'Keep this decision');
+    assert.deepEqual(h.guideState().plan.plan.steps[1], original.steps[1]);
+    const retained = requests.at(-1).session;
+    h.vscode.workspace.textDocuments = [{ isDirty: true, version: 2, uri: new h.Uri(require('node:path').join(h.root, 'pipeline', 'plan.py')) }];
+    reply = { ...reply, message: 'The explanation is unchanged.', updates: [] };
+    await h.guide.receive({ type: 'planChat', text: 'Check the edited source context.' });
+    assert.notEqual(requests.at(-1).session, retained, 'dirty project source invalidates the retained investigation');
+    assert.ok(requests.at(-1).prompt.includes('PROJECT FILE INDEX'), 'a replacement session receives the project context');
+    const before = structuredClone(h.guideState().plan.plan.steps);
+    reply = { ...reply, updates: [{ id: 'not-a-real-step', file: original.steps[0].file, lines: [3, 8], title: 'Invalid step', change: 'Do something', why: '' }] };
+    await h.guide.receive({ type: 'planChat', text: 'Try an invalid change' });
+    assert.deepEqual(h.guideState().plan.plan.steps, before); assert.match(h.guideState().plan.error, /saved steps were kept/);
+    await h.guide.receive({ type: 'planClear' }); assert.equal(requests[0].session.ready, false);
+  } finally { await h.close(); }
+});
+
+test('retained Codex planning keeps one thread and reports per-turn token deltas, resetting on model changes and cancellation', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-session-test-')), binary = path.join(dir, 'codex'), log = path.join(dir, 'rpc.jsonl');
+  const program = `#!${process.execPath}
+const fs=require('node:fs'),args=process.argv.slice(2);if(args[0]==='mcp'){console.log(JSON.stringify([{name:'node_repl',enabled:true}]));process.exit(0);}
+if(!args.includes('mcp_servers.node_repl.enabled=false')){console.error('MCP overrides must use valid bare key paths');process.exit(1);}
+const rl=require('node:readline').createInterface({input:process.stdin});let turns=0;const out=e=>process.stdout.write(JSON.stringify(e)+'\\n');
+rl.on('line',s=>{const r=JSON.parse(s);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({method:r.method,model:r.params?.model,schema:r.params?.outputSchema,mode:r.params?.collaborationMode})+'\\n');
+if(r.method==='initialize')out({id:r.id,result:{}});
+if(r.method==='thread/start')out({id:r.id,result:{thread:{id:'one-thread'},model:r.params.model||'fake-model'}});
+if(r.method==='turn/start'){out({id:r.id,result:{turn:{id:'t'}}});if(r.params.input[0].text.includes('ABORT'))return;turns++;
+out({method:'item/completed',params:{item:{type:'agentMessage',text:JSON.stringify(r.params.input[0].text.includes('requested patch JSON') ? {draft:null,patch:{message:'Patched',question:'',summary:'',updates:[],additions:[],removals:[]}} : {draft:{question:'',summary:'OK',steps:[]},patch:null})}}});out({method:'thread/tokenUsage/updated',params:{tokenUsage:{total:{inputTokens:turns*1000,cachedInputTokens:turns*500,outputTokens:turns*100}}}});out({method:'turn/completed',params:{turn:{status:'completed'}}});}
+});`;
+  await fs.writeFile(binary, program, { mode: 0o755 }); const session = {}, real = require('../src/ai/engine'), previousCodeHome = process.env.CODEX_HOME;
+  await fs.writeFile(path.join(dir, 'config.toml'), '[mcp_servers.node_repl]\ncommand = "fake"\n'); process.env.CODEX_HOME = dir;
+  try {
+    const opts = { provider: 'codex', cliPath: binary, model: 'fake-model', effort: 'medium', planning: true, session, schema: real.PLAN_SCHEMA, onProgress() {} };
+    const a = await real.requestStructured({ ...opts, prompt: 'First' }), b = await real.requestStructured({ ...opts, schema: real.PLAN_PATCH_SCHEMA, prompt: 'Follow up' });
+    assert.deepEqual(a.usage, b.usage); assert.equal(b.usage.input, 500); assert.equal(b.usage.cacheRead, 500); assert.equal(b.usage.output, 100);
+    let events = (await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse); assert.equal(events.filter(e => e.method === 'thread/start').length, 1); assert.equal(events.filter(e => e.method === 'turn/start').length, 2);
+    assert.deepEqual(events.filter(e => e.method === 'turn/start').map(e => e.schema)[0], events.filter(e => e.method === 'turn/start').map(e => e.schema)[1]);
+    assert.ok(events.filter(e => e.method === 'turn/start').every(e => e.mode?.mode === 'plan'));
+    assert.deepEqual(events.find(e => e.method === 'turn/start').mode.settings, { model: 'fake-model', reasoning_effort: 'medium', developer_instructions: null });
+    await real.requestStructured({ ...opts, model: 'different-model', prompt: 'New model' });
+    events = (await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse); assert.equal(events.filter(e => e.method === 'thread/start').length, 2);
+    const controller = new AbortController(), pending = real.requestStructured({ ...opts, model: 'different-model', prompt: 'ABORT', signal: controller.signal });
+    setTimeout(() => controller.abort(), 80); await assert.rejects(pending, /Cancelled/); assert.equal(session.ready, false);
+  } finally { real.disposePlanningSession(session); if (previousCodeHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousCodeHome; await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('Claude planning creates a resumable session and continues it without disabling persistence', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os'), real = require('../src/ai/engine');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-claude-session-')), binary = path.join(dir, 'claude'), log = path.join(dir, 'args.jsonl'), session = {};
+  const program = `#!${process.execPath}
+const fs=require('node:fs'),args=process.argv.slice(2);if(args.includes('--help')){console.log('--safe --setting-sources --permission-prompts');process.exit(0);}
+fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(args)+'\\n');const flag=args.includes('--resume')?'--resume':'--session-id';
+console.log(JSON.stringify({structured_output:flag==='--resume'?{draft:null,patch:{message:'Patched',question:'',summary:'',updates:[],additions:[],removals:[]}}:{draft:{question:'',summary:'OK',steps:[]},patch:null},session_id:args[args.indexOf(flag)+1],modelUsage:{'test-claude':{}},usage:{input_tokens:10,cache_read_input_tokens:20,output_tokens:5}}));`;
+  await fs.writeFile(binary, program, { mode: 0o755 });
+  try {
+    const opts = { provider: 'claude', cliPath: binary, planning: true, session, model: 'test-claude', schema: real.PLAN_SCHEMA };
+    await real.requestStructured({ ...opts, prompt: 'Draft' }); await real.requestStructured({ ...opts, schema: real.PLAN_PATCH_SCHEMA, prompt: 'Revise' });
+    const args = (await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.ok(args[0].includes('--session-id')); assert.ok(args[1].includes('--resume'));
+    assert.equal(args[0][args[0].indexOf('--session-id')+1], args[1][args[1].indexOf('--resume')+1]);
+    assert.ok(args.every(row => !row.includes('--no-session-persistence')));
+    assert.ok(args.every(row => row[row.indexOf('--permission-mode') + 1] === 'plan'), 'draft and resumed Claude sessions use native Plan mode');
+    assert.ok(args.every(row => row[row.indexOf('--tools') + 1] === ''), 'native Plan mode does not enable file-writing tools');
+  } finally { real.disposePlanningSession(session); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('confirming a separate new training script updates the plan without creating a source file', async () => {
+  const real = require('../src/ai/engine'), calls = []; let reply = GOOD_PLAN;
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: () => ({ requestStructured: async options => {
+    calls.push(options); if (options.session) options.session.ready = true;
+    return { raw: JSON.stringify(options.schema === real.STEP_DETAIL_SCHEMA ? { before: '', after: 'Train the proposed recurrent network\nSave its checkpoint' } : reply), actualModel: 'test', usage: { input: 10, output: 5 } };
+  } }) });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.guide.receive({ type: 'planGoal', goal: 'Train the model' });
+    const original = structuredClone(h.guideState().plan.plan.steps);
+    reply = { message: '', question: 'Should the standalone script be a new train_lstm.py at the project root?', summary: '', updates: [], additions: [], removals: [] };
+    await h.guide.receive({ type: 'planChat', text: 'No, I need a separate script.' }); assert.match(h.guideState().plan.question, /train_lstm/);
+    reply = { ...reply, message: 'Added a standalone script proposal.', question: '', additions: [{ afterId: '', file: 'train_lstm.py', lines: [0, 0], title: 'Create standalone training', change: 'Train the model in its own script.', why: 'Leave the existing entry point alone.' }] };
+    await h.guide.receive({ type: 'planAnswer', answer: 'yes' });
+    assert.equal(h.guideState().plan.error, ''); const added = h.guideState().plan.plan.steps.at(-1);
+    assert.equal(added.file, 'train_lstm.py'); assert.equal(added.newFile, true);
+    assert.deepEqual(h.guideState().plan.plan.steps.slice(0, -1), original);
+    await h.guide.receive({ type: 'planSource', step: added.id }); assert.equal(h.guideState().plan.snippet.newFile, true);
+    const before = calls.length; await h.guide.receive({ type: 'planDetail', id: added.id });
+    assert.equal(calls.length, before + 1); assert.match(calls.at(-1).prompt, /NEW FILE PROPOSAL/); assert.doesNotMatch(calls.at(-1).prompt, /SOURCE LINES 0/);
+    await assert.rejects(require('node:fs/promises').access(require('node:path').join(h.root, 'train_lstm.py')));
+  } finally { await h.close(); }
+});
+
+
+test('native Codex Plan mode preserves the resolved model and effort, routes questions, and keeps cancelled turns stopped', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const { createCodexPlanningSession, codexPlanMode } = require('../src/ai/planning-session');
+  const { spawn } = require('node:child_process');
+  assert.throws(() => codexPlanMode('', 'low'), /did not report a model/);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-native-plan-')), binary = path.join(dir, 'codex'), log = path.join(dir, 'rpc.jsonl');
+  const program = `#!${process.execPath}
+const fs=require('node:fs'), rl=require('node:readline').createInterface({input:process.stdin}), out=r=>process.stdout.write(JSON.stringify(r)+'\\n');
+rl.on('line',s=>{const r=JSON.parse(s);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(r)+'\\n');
+if(r.method==='initialize')out({id:r.id,result:{}});
+if(r.method==='thread/start')out({id:r.id,result:{thread:{id:'native'},model:'resolved-model'}});
+if(r.method==='turn/start'){out({id:r.id,result:{turn:{id:'turn'}}});out({id:901,method:'item/tool/requestUserInput',params:{threadId:'native',turnId:'turn',questions:[{id:'dataset',header:'Data',question:'Which dataset?'}]}});}
+if(r.id===901 && r.result){out({method:'item/completed',params:{item:{type:'agentMessage',text:JSON.stringify(r.result)}}});out({method:'turn/completed',params:{turn:{status:'completed'}}});}
+});`;
+  await fs.writeFile(binary, program, { mode: 0o755 });
+  const start = () => createCodexPlanningSession(binary, { spawn, args: [], cwd: dir, effort: 'high', version: 'test', timeout: 1000, config: {} });
+  const session = start();
+  try {
+    const reply = await session.request({ prompt: 'Plan', schema: {}, onQuestion: async request => { assert.equal(request.questions[0].id, 'dataset'); await new Promise(resolve => setTimeout(resolve, 1100)); return { answers: { dataset: { answers: ['training data'] } } }; } });
+    assert.deepEqual(JSON.parse(reply), { answers: { dataset: { answers: ['training data'] } } });
+    const events = (await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.deepEqual(events.find(e => e.method === 'turn/start').params.collaborationMode, { mode: 'plan', settings: { model: 'resolved-model', reasoning_effort: 'high', developer_instructions: null } });
+    let asked, answer; const ready = new Promise(resolve => { asked = resolve; });
+    const controller = new AbortController(), pending = session.request({ prompt: 'Again', schema: {}, signal: controller.signal, onQuestion: () => { asked(); return new Promise(resolve => { answer = resolve; }); } });
+    await ready; controller.abort(); await assert.rejects(pending, /Cancelled/);
+    answer({ answers: { dataset: { answers: ['late'] } } }); await new Promise(resolve => setTimeout(resolve, 20));
+    const after = (await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(after.filter(e => e.id === 901 && e.result).length, 1, 'a late answer never resumes a cancelled turn');
+  } finally { session.dispose(); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('native planning questions are answered in the same running request and dismissal cancels cleanly', async () => {
+  let calls = 0, response, ask = false;
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: () => ({ requestStructured: async options => {
+    calls++;
+    if (ask) response = await options.onQuestion({ questions: [{ id: 'location', question: 'Where should the new model live?', options: [{ label: 'Separate file', description: 'Keep the existing pipeline' }, { label: 'Existing file', description: 'Extend it' }] }] });
+    return { raw: JSON.stringify(GOOD_PLAN), usage: { input: 10, output: 5 } };
+  } }) });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.guide.receive({ type: 'planFind', goal: 'plan the loops and skip the hook' });
+    ask = true; const drafting = h.guide.receive({ type: 'planDraft' });
+    await h.until(() => h.guideState().plan.question?.includes('Where should'), 'native question appears while drafting');
+    assert.ok(h.guideState().plan.busy); assert.match(h.guideState().plan.question, /1\. Separate file/);
+    await h.guide.receive({ type: 'planAnswer', answer: '1' }); await drafting;
+    assert.deepEqual(JSON.parse(JSON.stringify(response)), { answers: { location: { answers: ['Separate file'] } } });
+    assert.equal(calls, 1, 'answer resumes the turn, without launching another draft');
+    assert.equal(h.guideState().plan.question, undefined);
+    assert.ok(h.guideState().plan.conversation.some(message => message.role === 'user' && message.text === '1'));
+    const next = h.guide.receive({ type: 'planImprove' });
+    await h.until(() => !!h.guideState().plan.question, 'second native question');
+    await h.guide.receive({ type: 'planDismissQuestion' }); await next;
+    assert.equal(h.guideState().plan.busy, undefined); assert.equal(h.guideState().plan.question, undefined);
+    assert.ok(h.guideState().plan.plan.steps.length, 'cancelling a question keeps the saved plan');
+  } finally { await h.close(); }
+});
+
+
+test('one-shot Codex planning uses native Plan mode without requiring streaming listeners, and routes colliding request IDs', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os'), real = require('../src/ai/engine');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-native-once-')), binary = path.join(dir, 'codex'), log = path.join(dir, 'turn.json');
+  const program = `#!${process.execPath}
+const fs=require('node:fs'),rl=require('node:readline').createInterface({input:process.stdin}),out=r=>process.stdout.write(JSON.stringify(r)+'\\n');
+rl.on('line',s=>{const r=JSON.parse(s);
+if(r.method==='initialize')out({id:r.id,result:{}});
+if(r.method==='thread/start')out({id:r.id,result:{thread:{id:'once'},model:'selected-model'}});
+if(r.method==='turn/start'){fs.writeFileSync(${JSON.stringify(log)},JSON.stringify(r.params));out({id:r.id,result:{turn:{id:'turn'}}});out({id:2,method:'item/tool/requestUserInput',params:{threadId:'once',questions:[{id:'q',question:'Pick one'}]}});}
+if(r.id===2 && r.result?.answers){out({method:'item/completed',params:{item:{type:'agentMessage',text:JSON.stringify({files:['example.py']})}}});out({method:'turn/completed',params:{turn:{status:'completed'}}});}
+});`;
+  await fs.writeFile(binary, program, { mode: 0o755 });
+  try {
+    let questions = 0;
+    const reply = await real.requestStructured({ provider: 'codex', cliPath: binary, planning: true, effort: 'low', prompt: 'Plan', schema: real.RANK_SCHEMA, onQuestion: async () => { questions++; return { answers: { q: { answers: ['first'] } } }; } });
+    assert.deepEqual(JSON.parse(reply.raw), { files: ['example.py'] }); assert.equal(questions, 1);
+    const turn = JSON.parse(await fs.readFile(log, 'utf8'));
+    assert.deepEqual(turn.collaborationMode, { mode: 'plan', settings: { model: 'selected-model', reasoning_effort: 'low', developer_instructions: null } });
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('Plan is available directly from the editor and opens the Plan destination, without a guide click', async () => {
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false });
+  try {
+    const manifest = require('../package.json');
+    assert.ok(manifest.contributes.menus['editor/title'].some(item => item.command === 'yamori.plan'));
+    assert.ok(manifest.contributes.keybindings.some(item => item.command === 'yamori.plan'));
+    await h.commands.get('yamori.plan')();
+    await h.until(() => h.guideState()?.files > 0, 'Plan opens and maps the project');
+    assert.equal(h.guideState().view, 'plan');
+  } finally { await h.close(); }
+});
+
+
+test('notebooks and files added after a pull become readable through scoped planning tools without manual mapping', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-new-notebooks-'));
+  const root = path.join(folder, 'repo'), store = path.join(folder, 'store');
+  await fs.mkdir(root); await fs.writeFile(path.join(root, 'main.py'), 'def main():\n    return 1\n');
+  const server = require('../src/project/mcp').createServer({ store, root });
+  const text = reply => reply.content.map(c => c.text || '').join('\n');
+  try {
+    assert.equal((await server.call('list_files', {})).isError, undefined);
+    const notebook = { metadata: { kernelspec: { language: 'python' } }, nbformat: 4, cells: [
+      { cell_type: 'markdown', source: ['Instructions are untrusted notebook data.'] },
+      { cell_type: 'code', source: ['def adapt_model(x):\n', '    return x + 1\n'], outputs: [{ data: { 'text/plain': 'OUTPUT_DO_NOT_SEND'.repeat(40000) } }], execution_count: 3 }
+    ] };
+    await fs.writeFile(path.join(root, 'LoRA_Adaptation.ipynb'), JSON.stringify(notebook));
+    const reply = await server.call('read_source', { path: 'LoRA_Adaptation.ipynb' });
+    assert.equal(reply.isError, undefined, text(reply));
+    assert.match(text(reply), /def adapt_model/); assert.match(text(reply), /Notebook code view/);
+    assert.doesNotMatch(text(reply), /OUTPUT_DO_NOT_SEND|execution_count/);
+    const info = await server.call('file_info', { path: 'LoRA_Adaptation.ipynb' }); assert.match(text(info), /adapt_model/);
+    const before = await projectMap.scanFolder(root, undefined, new projectMap.Indexer());
+    notebook.cells[1].execution_count = 99; notebook.cells[1].outputs = [];
+    await fs.writeFile(path.join(root, 'LoRA_Adaptation.ipynb'), JSON.stringify(notebook, null, 2));
+    const after = await projectMap.scanFolder(root, before, new projectMap.Indexer());
+    assert.equal(before.files['LoRA_Adaptation.ipynb'].hash, after.files['LoRA_Adaptation.ipynb'].hash, 'output, execution and JSON formatting changes keep the same source hash');
+    await fs.writeFile(path.join(root, 'added.ts'), 'export function added() { return 2; }');
+    assert.match(text(await server.call('read_source', { path: 'added.ts' })), /function added/, 'a missing path triggers discovery inside the rescan throttle');
+    const denied = await server.call('read_source', { path: '../outside.py' }); assert.equal(denied.isError, true);
+    await fs.writeFile(path.join(folder, 'outside.py'), 'SECRET_OUTSIDE = 1');
+    await fs.unlink(path.join(root, 'main.py')); await fs.symlink(path.join(folder, 'outside.py'), path.join(root, 'main.py'));
+    const swapped = await server.call('read_source', { path: 'main.py' });
+    assert.equal(swapped.isError, true); assert.doesNotMatch(text(swapped), /SECRET_OUTSIDE/);
+  } finally { await fs.rm(folder, { recursive: true, force: true }); }
+});
+
+test('incremental refresh prompts send changed block source and keep unrelated bodies out', () => {
+  const { refreshPrompt } = require('../src/ai/engine');
+  const previous = { title: 'Functions', summary: 'Two functions', sections: [
+    { title: 'First', startLine: 1, endLine: 2, pseudocode: 'Return 1.', lineMap: [] },
+    { title: 'Second', startLine: 4, endLine: 5, pseudocode: 'Return a separate value.', lineMap: [] }
+  ] };
+  const input = { name: 'a.py', uri: 'file:///a.py', language: 'python', text: 'def first():\n    return 3\n\ndef other():\n    return UNRELATED_SOURCE_BODY', startLine: 1, endLine: 5 };
+  const prompt = refreshPrompt(input, 'logic', { previous, patch: true, staleBlocks: [0] });
+  assert.match(prompt, /2:     return 3/); assert.doesNotMatch(prompt, /UNRELATED_SOURCE_BODY|4: def other/);
+});
+
+test('adding a separate function keeps unrelated cached blocks and only reviews the new source', () => {
+  const { analyzeSource, currentSnapshot } = require('../src/storage/cache');
+  const text = 'def first():\n    return 1\n\ndef second():\n    return 2\n';
+  const old = { uri: 'file:///a.py', text, fullText: text, startLine: 1, endLine: 6, selected: false };
+  const previous = { title: 'Functions', summary: 'Two functions', sections: [
+    { title: 'First', startLine: 1, endLine: 2, pseudocode: 'Return 1.', lineMap: [{ pseudocodeLine: 1, startLine: 2, endLine: 2 }] },
+    { title: 'Second', startLine: 4, endLine: 5, pseudocode: 'Return 2.', lineMap: [{ pseudocodeLine: 1, startLine: 5, endLine: 5 }] }
+  ] };
+  const result = analyzeSource(old, currentSnapshot(old, text + '\ndef independent():\n    return 3\n'), previous);
+  assert.equal(result.shared, false); assert.deepEqual(result.staleBlocks, [2]);
+  assert.deepEqual(result.value.sections.slice(0, 2), previous.sections);
+  assert.match(result.value.sections[2].title, /independent/);
+  const prepended = analyzeSource(old, currentSnapshot(old, 'def independent():\n    return 3\n\n' + text), previous);
+  assert.equal(prepended.shared, false); assert.deepEqual(prepended.staleBlocks, [2]);
+  assert.equal(prepended.value.sections[0].startLine, 4);
+  assert.equal(prepended.value.sections[0].pseudocode, previous.sections[0].pseudocode);
+});
+
+
+test('the notebook reader generates from code cells and reuses cached text after output-only updates', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'); const seen = [];
+  const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 0 }, { engine: () => ({ generate: async opts => {
+    seen.push(opts.source);
+    return { title: 'Notebook', summary: 'Define adaptation.', requestedModel: opts.model, requestedEffort: opts.effort, sections: [{ title: 'Adapt', startLine: 1, endLine: opts.source.endLine, pseudocode: 'Add one to the input.', lineMap: [] }] };
+  } }) });
+  await h.until(() => h.guideState().files > 0, 'initial map is ready');
+  const file = path.join(h.root, 'adapt.ipynb'), uri = new h.Uri(file);
+  const notebook = { metadata: { kernelspec: { language: 'python' } }, cells: [{ cell_type: 'code', source: ['def adapt(x):\n', '    return x + 1\n'], execution_count: 1, outputs: [{ text: 'OUTPUT_IGNORE_ME' }] }] };
+  try {
+    await fs.writeFile(file, JSON.stringify(notebook)); await h.commands.get('yamori.read')(uri);
+    assert.equal(seen.length, 1); assert.equal(seen[0].notebook, true); assert.match(seen[0].text, /def adapt/); assert.doesNotMatch(seen[0].text, /OUTPUT_IGNORE_ME/);
+    const reader = h.readers().at(-1); assert.equal(h.last(reader).stale, false);
+    notebook.cells[0].outputs = [{ text: 'different output' }]; notebook.cells[0].execution_count = 20;
+    await fs.writeFile(file, JSON.stringify(notebook, null, 2)); await h.commands.get('yamori.read')(uri);
+    assert.equal(seen.length, 1, 'output and execution updates never regenerate pseudocode');
+    assert.equal(h.last(reader).stale, false);
+  } finally { await h.close(); }
+});
+
+
+test('a notebook main-model answer with bad step links remains readable without another request', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-link-recovery-'));
+  const binary = path.join(dir, 'codex.js'), count = path.join(dir, 'count');
+  const answer = { title: 'Notebook', summary: 'Set and print.', sections: [{ title: 'Work', startLine: 10, endLine: 11, pseudocode: 'Set x\n\nPrint x', lineMap: [[1, 10, 10], [2, 10, 10], [3, 11, 11], [3, 10, 10], [9, 10, 10]] }] };
+  await fs.writeFile(binary, 'const fs=require("fs"),a=process.argv.slice(2);process.stdin.resume();process.stdin.on("end",()=>{fs.appendFileSync('+JSON.stringify(count)+',"call\\n");fs.writeFileSync(a[a.indexOf("--output-last-message")+1],'+JSON.stringify(JSON.stringify(answer))+')});');
+  try {
+    const value = await generate({ source: { ...source, name: 'notebook.ipynb', notebook: true }, level: 'logic', provider: 'codex', cliPath: binary, refinementSteps: 0 });
+    assert.equal(value.sections[0].pseudocode, answer.sections[0].pseudocode);
+    assert.deepEqual(value.sections[0].lineMap.map(link => link.pseudocodeLine), [1, 3]);
+    assert.equal(value.sections[0].omittedSourceLinks, 3);
+    assert.equal(await fs.readFile(count, 'utf8'), 'call\n', 'recovery costs no second model call');
+    assert.match(promptFor({ ...source, notebook: true }, 'logic'), /not notebook JSON lines/);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('approved implementation uses writing tools, honors selected settings and requires explicit completion', async () => {
+  const { implementPlan } = require('../src/ai/engine');
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-implementation-test-')), binary = path.join(root, 'fixture.js');
+  try {
+    await fs.writeFile(binary, `const fs=require('node:fs');const args=process.argv.slice(2);if(args.includes('--help')){console.log('--permission-prompts');process.exit(0);}let prompt='';process.stdin.on('data',x=>prompt+=x);process.stdin.on('end',()=>{
+      fs.writeFileSync('received.json',JSON.stringify({args,prompt,cwd:process.cwd()}));
+      const status=prompt==='blocked'?'blocked':'completed';
+      if(prompt==='cancel'){setTimeout(()=>{},10000);return;}
+      fs.writeFileSync('changed.py','answer = 42\\n');
+      if(args.includes('exec')) {
+        console.log(JSON.stringify({type:'item.started',item:{type:'command_execution',command:'npm test'}}));
+        console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:100,cached_input_tokens:40,output_tokens:20}}));
+        fs.writeFileSync(args[args.indexOf('--output-last-message')+1],prompt==='malformed'?'{}':JSON.stringify({status,summary:'Implemented and checked.'}));
+      }else console.log(JSON.stringify({type:'result',is_error:prompt==='error',permission_denials:prompt==='denied'?[{tool_name:'Bash'}]:[],result:'Permission needed.',structured_output:{status,summary:'Implemented and checked.'},usage:{input_tokens:80,output_tokens:12}}));
+    });`);
+    const updates = [];
+    const result = await implementPlan({ provider: 'codex', cliPath: binary, cwd: root, model: 'selected-model', effort: 'medium', prompt: 'implement', onProgress: u => updates.push(u) });
+    const received = JSON.parse(await fs.readFile(path.join(root, 'received.json'), 'utf8'));
+    assert.equal(received.cwd, await fs.realpath(root)); assert.ok(received.args.includes('workspace-write')); assert.ok(received.args.includes('selected-model')); assert.ok(received.args.includes('model_reasoning_effort=medium'));
+    assert.ok(!received.args.includes('--dangerously-bypass-approvals-and-sandbox'));
+    assert.deepEqual(result.usage, { input: 60, output: 20, cacheRead: 40, cacheWrite: 0 }); assert.ok(updates.some(u => /npm test/.test(u.phase || '')));
+    assert.match(await fs.readFile(path.join(root, 'changed.py'), 'utf8'), /42/);
+    await assert.rejects(implementPlan({ provider: 'codex', cliPath: binary, cwd: root, prompt: 'blocked' }), /Implemented and checked/);
+    await assert.rejects(implementPlan({ provider: 'codex', cliPath: binary, cwd: root, prompt: 'malformed' }), /confirm completion/);
+    const claude = await implementPlan({ provider: 'claude', cliPath: binary, cwd: root, model: 'sonnet', effort: 'high', prompt: 'implement' });
+    assert.equal(claude.usage.output, 12);
+    const c = JSON.parse(await fs.readFile(path.join(root, 'received.json'), 'utf8')).args;
+    assert.ok(c.includes('acceptEdits')); assert.ok(c.includes('Read,Glob,Grep,Edit,Write,Bash')); assert.ok(c.includes('sonnet')); assert.ok(!c.includes('--dangerously-skip-permissions'));
+    for (const prompt of ['denied','error']) await assert.rejects(implementPlan({ provider: 'claude', cliPath: binary, cwd: root, prompt }), /Permission needed/);
+    const controller = new AbortController(); const running = implementPlan({ provider: 'codex', cliPath: binary, cwd: root, prompt: 'cancel', signal: controller.signal }); setTimeout(() => controller.abort(), 80); await assert.rejects(running, /Cancelled/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('approving a plan executes once, excludes rejected and finished steps, archives only success and keeps failures', async () => {
+  let release, calls = [], stopped = false;
+  const h = await readerHarness({ autoNotes: false }, { engine: () => ({ implementPlan: options => {
+    calls.push(options); options.onProgress({ phase: 'Editing pipeline/plan.py', usage: { input: 100, output: 10 } });
+    return new Promise((resolve, reject) => { release = resolve; options.signal.addEventListener('abort', () => { stopped = true; reject(new Error('Cancelled.')); }, { once: true }); });
+  } }) });
+  try {
+    h.vscode.workspace.saveAll = async () => true;
+    await h.context.globalState.update('planningModel:codex', 'chosen-model'); await h.context.globalState.update('planningEffort:codex', 'high');
+    const setup = async () => {
+      await h.guide.receive({ type: 'planFind', goal: 'plan loops' });
+      const plan = h.guideState().plan.plan;
+      await h.guide.receive({ type: 'planEdit', plan: { ...plan, dismissed: ['pipeline/write.py'], steps: [
+        { id: 'active', file: 'pipeline/plan.py', startLine: 3, endLine: 8, title: 'Active change', change: 'Start at L2', why: '', status: 'todo', note: 'Keep the hook' },
+        { id: 'done', file: 'pipeline/plan.py', startLine: 3, endLine: 8, title: 'Already finished', change: 'Done', status: 'done' },
+        { id: 'rejected', file: 'pipeline/write.py', startLine: 4, endLine: 5, title: 'Rejected change', change: 'Do not do this', status: 'todo' }
+      ] } });
+      await h.until(() => h.guideState().plan.plan.steps.length === 3, 'plan saved'); return plan.id;
+    };
+    const id = await setup();
+    await h.guide.receive({ type: 'planExecute', id: 'stale-id' }); assert.equal(calls.length, 0);
+    h.vscode.workspace.isTrusted = false; await h.guide.receive({ type: 'planExecute', id }); assert.equal(calls.length, 0); assert.match(h.guideState().plan.error, /Trust this workspace/); h.vscode.workspace.isTrusted = true;
+    const run = h.guide.receive({ type: 'planExecute', id }); await h.until(() => calls.length === 1, 'implementation started');
+    assert.equal(h.guideState().plan.busy.stage, 'implement'); assert.equal(calls[0].cwd, h.root); assert.equal(calls[0].model, 'chosen-model'); assert.equal(calls[0].effort, 'high');
+    assert.match(calls[0].prompt, /Active change/); assert.match(calls[0].prompt, /Keep the hook/); assert.doesNotMatch(calls[0].prompt, /Already finished|Rejected change/);
+    await h.guide.receive({ type: 'planExecute', id }); await h.guide.receive({ type: 'planClear' }); await h.guide.receive({ type: 'planEdit', plan: { steps: [] } }); assert.equal(calls.length, 1); assert.equal(h.guideState().plan.plan.id, id);
+    release({ summary: 'Implemented the loop change; checks passed.', usage: { input: 100, output: 10 } }); await run;
+    assert.equal(h.guideState().plan.plan, undefined); assert.equal(h.guideState().plan.busy, undefined); assert.match(h.guideState().plan.conversation[0].text, /Implementation complete/); assert.equal(h.guideState().plan.lastRun.usage.output, 10);
+    const fs = require('node:fs/promises'), path = require('node:path'); const projects = path.join(h.temp, 'storage', 'cache', 'projects'), index = JSON.parse(await fs.readFile(path.join(projects, 'index.json'), 'utf8')); const saved = JSON.parse(await fs.readFile(path.join(projects, index[await fs.realpath(h.root)].dir, 'plan.json'), 'utf8'));
+    assert.equal(saved.current, undefined); assert.equal(saved.history.at(-1).id, id); assert.ok(saved.history.at(-1).completedAt); assert.equal(saved.history.at(-1).steps[0].status, 'done');
+    const next = await setup(), cancelled = h.guide.receive({ type: 'planExecute', id: next }); await h.until(() => calls.length === 2, 'second run started');
+    await h.guide.receive({ type: 'planStop' }); await cancelled; assert.ok(stopped); assert.equal(h.guideState().plan.plan.id, next); assert.match(h.guideState().plan.error, /stopped.*plan was kept/is);
+  } finally { await h.close(); }
 });

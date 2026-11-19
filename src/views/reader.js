@@ -208,6 +208,9 @@ button:disabled { opacity: .45; cursor: default; }
 `;
 // Reading blocks and pseudocode lines: shared by the reader and the project guide.
 const READING_STYLES = `details.reading-block { margin: 0 0 26px; border: 1px solid var(--read-ink); background: var(--read-surface); }
+.block-check { padding: 7px 14px; border-bottom: 1px dotted var(--read-border); font-size: 12px; line-height: 1.5; color: var(--read-note-ink); background: var(--read-note-bg); }
+.block-check p { margin: 2px 0; }
+.block-check-title { font: 600 10px/1.6 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; color: var(--read-muted); }
 .section-heading { display: flex; align-items: center; gap: 10px; padding: 14px; cursor: pointer; list-style: none; border-bottom: 1px solid var(--read-border); }
 .section-heading::-webkit-details-marker { display: none; }
 .section-heading::after { content: '−'; font-family: ui-monospace, monospace; }
@@ -432,8 +435,14 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
   --read-mark-bg: var(--vscode-editor-findMatchHighlightBackground); --read-mark-ink: var(--vscode-editor-foreground); --read-hover: var(--vscode-editor-findMatchHighlightBackground);
 }
 @media(forced-colors: active) { body, header, .reading-block, .section-heading, .code-line.note { background: Canvas; color: CanvasText; } button, .segments, details, .code-line.note { border: 1px solid ButtonText; } }
+.workspace-nav { display:flex; align-items:center; gap:3px; padding:3px; border:1px solid var(--read-border); }
+.workspace-nav button { padding:6px 13px; border:0; font:600 13px var(--vscode-font-family,system-ui); }
+.workspace-nav .current-view { color:var(--read-ink); background:var(--read-header); opacity:1; }
+.workspace-nav button:focus-visible { outline:2px solid var(--read-accent); outline-offset:2px; }
+@media(max-width:600px) { .workspace-nav { order:2; } .top { flex-wrap:wrap; } }
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
+<nav class="workspace-nav" aria-label="Yamori navigation"><button aria-current="page" class="current-view" disabled>Read</button><button id="map" title="Explore project files and connections">Map</button><button id="plan" title="Plan changes with Codex or Claude">Plan</button></nav>
 <button id="source" class="crumb" title="Show this file in the editor">No file yet</button>
 <details class="ai-settings"><summary id="ai-summary" title="Which AI writes explanations, and how hard it thinks">AI ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 1 ▾</button><button id="setup-ai" title="Install, sign in to or switch between Claude and ChatGPT">Set up AI…</button></div></details>
 <button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
@@ -441,7 +450,7 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
 <button data-level="overview" aria-pressed="false" title="Short: the goal and the main stages">Overview</button>
 <button data-level="logic" aria-pressed="true" title="Step by step: decisions, data and useful math">Logic</button></div>
 <button id="files" class="nav" title="Explain another file. Shows open Yamori tabs and project files grouped by folder." aria-label="Switch file">Switch file…</button>
-<button id="map" class="nav" title="Where to start reading, how files connect, and project terms" aria-label="Open project guide">Project guide</button>
+
 <button id="refresh" title="Write this explanation again from the current code">Regenerate</button></div></header>
 <main id="content" aria-busy="false"></main>
 <script nonce="${nonce}">
@@ -598,7 +607,9 @@ function render(s) {
     if (s.result.refinement.status === 'incomplete') { const retry = node('button', 'Retry review'); retry.disabled = !!s.busy || !!s.sourceMissing; retry.addEventListener('click', () => { flushDrafts(); send('refresh'); }); notice.append(retry); }
     content.append(notice);
   }
+  if (s.result?.sections?.some(section => section.omittedSourceLinks > 0)) { const notice = node('p', 'Some AI source links were invalid and have been disabled. The explanation is still readable.', 'notice source-links'); notice.setAttribute('role', 'status'); content.append(notice); }
   if (s.modelNotice) content.append(node('p', s.modelNotice, 'notice'));
+  if (s.writtenBy && s.result && !s.busy) content.append(node('p', 'Written by ' + s.writtenBy + ' during an agent session and saved through Yamori. Regenerate to have Yamori write its own.', 'notice'));
   if (s.review) { const line = node('p', s.review.text, 'notice review-status ' + s.review.state); line.setAttribute('role', 'status'); content.append(line); }
   if (s.error) {
     const el = node('div', undefined, 'notice error'); el.setAttribute('role', 'alert'); el.append(node('p', s.error));
@@ -736,6 +747,15 @@ function render(s) {
         code.append(row);
       });
       el.append(heading);
+      // Fixed-rule check of this block against the source (no AI): shown only when it found something to look at.
+      const found = s.checks?.[index];
+      if (found?.length && !s.partial && !blockStale) {
+        const box = node('div', undefined, 'block-check'); box.setAttribute('role', 'note');
+        box.append(node('span', 'Check against the source', 'block-check-title'));
+        for (const text of found) box.append(node('p', text));
+        box.title = 'Yamori compared this block with the source using fixed rules, not AI. A finding is a prompt to look, not proof of a mistake.';
+        el.append(box);
+      }
       if (blockStale) { const warning = node('div', undefined, 'block-stale'); warning.append(node('span', s.removedBlocks?.includes(index) ? 'This code was removed. Update from code to reorganize the map.' : 'This cached block needs review.')); if (!s.removedBlocks?.includes(index)) { const refresh = node('button', 'Refresh block'); refresh.disabled = !!s.busy || !!s.sourceMissing; refresh.addEventListener('click', () => { flushDrafts(); send('refreshBlock', { index, documentKey: s.documentKey }); }); warning.append(refresh); } el.append(warning); }
 
       if (editing?.index === index && editing.documentKey === s.documentKey) {
@@ -809,7 +829,7 @@ function render(s) {
     const empty = node('div', undefined, 'empty');
     empty.append(node('h1', 'Big ideas. Less guesswork.'), node('p', 'Explain a file as short pseudocode, or let the project guide show where to start reading.'));
     const actions = node('div', undefined, 'empty-actions');
-    for (const [label, type, primary] of [['Explain current file', 'read', true], ['Switch file…', 'switchFile'], ['Open project guide', 'map']]) {
+    for (const [label, type, primary] of [['Explain current file', 'read', true], ['Switch file…', 'switchFile'], ['Plan a change', 'plan']]) {
       const button = node('button', label, primary ? 'primary' : ''); button.addEventListener('click', () => send(type)); actions.append(button);
     }
     empty.append(actions);
@@ -956,6 +976,7 @@ document.getElementById('colors').addEventListener('click', () => send('palette'
 document.getElementById('source').addEventListener('click', () => send('showSource'));
 document.getElementById('files').addEventListener('click', () => send('switchFile'));
 document.getElementById('map').addEventListener('click', () => send('map'));
+document.getElementById('plan')?.addEventListener('click', () => send('plan'));
 refresh.addEventListener('click', () => { flushDrafts(); send(state.busy ? 'stop' : 'refresh'); });
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => send('level', { level: b.dataset.level })));
 window.addEventListener('message', e => {

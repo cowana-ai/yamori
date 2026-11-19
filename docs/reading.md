@@ -1,6 +1,6 @@
 # Reading code with Yamori
 
-[← Yamori](../README.md) · [Getting started](getting-started.md) · [Reading](reading.md) · [Project guide](project-guide.md) · [Tests](tests.md) · [Models & speed](models.md) · [Development](development.md)
+[← Yamori](../README.md) · [Getting started](getting-started.md) · [Reading](reading.md) · [Project guide](project-guide.md) · [Tests](tests.md) · [Models & speed](models.md) · [Agents](agents.md) · [Development](development.md)
 
 ## From a call to an idea
 
@@ -107,6 +107,18 @@ The interface uses contrast, typography, spacing and labels to distinguish
 control flow, notes and outputs. Motion is limited to a tiny loading step,
 button feedback and a short block transition. Reduced motion disables it.
 The gecko toolbar logo and status-bar shortcut remain available in the editor.
+
+## Checked against the source
+
+An AI wrote the pseudocode, so Yamori checks each block against the source lines it explains, using fixed rules with no AI. When a rule fires, the block shows a quiet note, **Check against the source**, with the cause:
+
+- **A name that isn't in the source or the project.** A snake_case or camelCase name (or one in backticks) that appears nowhere in the file, the project's definitions and modules, or its glossary. This usually means the explanation invented it. Examples after "e.g.", short math symbols, well-known products and standard error names are not flagged.
+- **A number the source doesn't contain.** A number stated in a step that isn't in the file and can't be derived from two numbers in it. Notes (`# Insight`, `# Context`) may give examples.
+- **A side effect left unsaid.** The source writes files, makes network requests, runs a process or evaluates code, and the block never mentions it.
+
+Only these three are shown in the reader. Two quieter findings exist for agents and tests: source numbers a block never mentions, and runs of code that no block explains.
+
+A finding is a prompt to look, not proof of a mistake: an explanation may derive a number or coin a name on purpose. On 109 blocks of real explanations, 3% raised a warning. On synthetic corruptions of those blocks, the check caught 100% of added invented names (109/109), 91% of changed numbers (31/34), 100% of unsaid side effects (9/9) and 73% of deleted blocks (8/11). The rules were tuned on these same files, so expect somewhat worse on new code. The check also can't tell a wrong explanation from a right one that uses the source's names, so it complements the AI review and doesn't replace it.
 
 ## Edit the explanation
 

@@ -1,6 +1,6 @@
 # Development
 
-[← Yamori](../README.md) · [Getting started](getting-started.md) · [Reading](reading.md) · [Project guide](project-guide.md) · [Tests](tests.md) · [Models & speed](models.md) · [Development](development.md)
+[← Yamori](../README.md) · [Getting started](getting-started.md) · [Reading](reading.md) · [Project guide](project-guide.md) · [Tests](tests.md) · [Models & speed](models.md) · [Agents](agents.md) · [Development](development.md)
 
 The packaged extension needs no dependency installation. CodeMirror, KaTeX,
 jsdiff and precompiled Ajv validators are local bundles; no CDN is used.
@@ -45,6 +45,7 @@ src/
   ai/
     engine.js         Prompts, Claude Code and Codex processes, parallel parts, review
     schemas.js        JSON Schemas; builds validation.min.js
+    verify.js         Fixed-rule checks of pseudocode against its source (no AI)
     validation.min.js Standalone Ajv validators (generated)
   views/
     reader.js         The reading panel and the shared reading styles

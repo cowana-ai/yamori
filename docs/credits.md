@@ -1,6 +1,6 @@
 # Credits and licenses
 
-[← Yamori](../README.md) · [Getting started](getting-started.md) · [Reading](reading.md) · [Project guide](project-guide.md) · [Tests](tests.md) · [Models & speed](models.md) · [Development](development.md)
+[← Yamori](../README.md) · [Getting started](getting-started.md) · [Reading](reading.md) · [Project guide](project-guide.md) · [Tests](tests.md) · [Models & speed](models.md) · [Agents](agents.md) · [Development](development.md)
 
 Application code is [MIT licensed](../LICENSE). Bundled [KaTeX](https://katex.org/)
 0.19.1 is MIT licensed, with its full notice retained in `vendor/katex.min.js`. It runs
@@ -24,3 +24,5 @@ application-code MIT license.
 
 Provider integration references: [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 and [Claude Code model configuration](https://code.claude.com/docs/en/model-config).
+
+- [xterm.js](https://github.com/xtermjs/xterm.js), MIT: planning terminal renderer and fit addon. Bundled license: `vendor/terminal-LICENSE`.

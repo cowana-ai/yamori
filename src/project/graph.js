@@ -901,6 +901,26 @@ function projectContextFor(graph, notes, rel, text, explanations = {}) {
   return { ...slice, fingerprint: hash(JSON.stringify(slice)).slice(0, 24) };
 }
 
+// Notebook views contain source cells only, never outputs or execution metadata.
+// L-marks refer to this stable code view; cell ranges retain editor navigation.
+const MAX_NOTEBOOK_BYTES = 10_000_000;
+function sourceLimit(rel) { return /\.ipynb$/i.test(rel) ? MAX_NOTEBOOK_BYTES : MAX_FILE_BYTES; }
+function sourceView(rel, raw) {
+  if (!/\.ipynb$/i.test(rel)) return { text: raw };
+  const notebook = JSON.parse(raw);
+  if (!Array.isArray(notebook.cells)) throw new Error('Invalid notebook: cells are missing.');
+  const lines = ['# Yamori notebook code view (source cells only)'], cells = [];
+  notebook.cells.forEach((cell, index) => {
+    if (cell.cell_type !== 'code') return;
+    const code = typeof cell.source === 'string' ? cell.source : Array.isArray(cell.source) ? cell.source.join('') : '';
+    if (!code.trim()) return;
+    lines.push('', '# Cell ' + (index + 1));
+    const startLine = lines.length + 1, content = code.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
+    lines.push(...content); cells.push({ cell: index, startLine, endLine: lines.length });
+  });
+  return { text: lines.join('\n'), notebookCells: cells, language: notebook.metadata?.language_info?.name || notebook.metadata?.kernelspec?.language || 'python' };
+}
+
 // ---- Scanning and storage ------------------------------------------------------
 
 // files: [{ rel, read: async () => text }]. Unchanged files reuse their record.
@@ -910,24 +930,243 @@ async function scanFiles(files, previous, indexer, { signal, onProgress } = {}) 
   for (const [i, item] of files.entries()) {
     if (signal?.aborted) throw new Error('Cancelled.');
     let text;
-    try { text = await item.read(); } catch { skipped++; continue; }
+    let view;
+    try { const raw = await item.read(); view = sourceView(item.rel, raw); text = view.text; } catch { skipped++; continue; }
     if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > MAX_FILE_BYTES || text.includes('\0')) { skipped++; continue; }
     const digest = hash(text), old = previous?.files?.[item.rel];
     if (old && old.hash === digest) { const { test, entry, rank, ...record } = old; records[item.rel] = record; reused++; }
-    else { records[item.rel] = { hash: digest, language: GRAMMAR_FOR[posix.extname(item.rel).toLowerCase()] || posix.extname(item.rel).slice(1), lines: lineCount(text), ...(await indexer.extract(item.rel, text)) }; parsed++; }
+    else { records[item.rel] = { hash: digest, language: view.language || GRAMMAR_FOR[posix.extname(item.rel).toLowerCase()] || posix.extname(item.rel).slice(1), ...(view.notebookCells ? { notebookCells: view.notebookCells } : {}), lines: lineCount(text), ...(await indexer.extract(view.notebookCells && view.language === 'python' ? item.rel.replace(/\.ipynb$/i, '.py') : item.rel, text)) }; parsed++; }
     if (onProgress && i % 25 === 0) onProgress({ done: i + 1, total: files.length });
   }
   return { records, parsed, reused, skipped };
 }
 class ProjectStore {
-  constructor(cache, root) { this.cache = cache; this.dir = path.join(cache.root, 'projects', hash(root).slice(0, 32)); }
+  constructor(cache, root, dir) { this.cache = cache; this.dir = dir || path.join(cache.root, 'projects', hash(root).slice(0, 32)); }
   file(name) { return path.join(this.dir, name + '.json'); }
   async load() {
-    const [graph, notes, layout, explanations] = await Promise.all(['graph', 'notes', 'layout', 'explanations'].map(name => this.cache.json(this.file(name))));
+    const [graph, notes, layout, explanations, plans] = await Promise.all(['graph', 'notes', 'layout', 'explanations', 'plan'].map(name => this.cache.json(this.file(name))));
     const object = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    return { graph: graph?.version === GRAPH_VERSION && graph.files ? graph : undefined, notes: notes?.files ? notes : { files: {} }, layout: object(layout), explanations: object(explanations) };
+    return { graph: graph?.version === GRAPH_VERSION && graph.files ? graph : undefined, notes: notes?.files ? notes : { files: {} }, layout: object(layout), explanations: object(explanations), plans: object(plans) };
   }
   save(name, value) { return this.cache.write(this.file(name), value); }
+}
+
+// ---- One store, shared by VS Code and agents --------------------------------
+// The extension and the standing knowledge server (run by the user's own Claude
+// Code or Codex) read and write the same project store. An index maps each
+// project folder to its store, so a process outside VS Code can find it.
+const SCAN_EXTENSIONS = new Set('ipynb py js jsx ts tsx mjs cjs go rs java kt scala cs c cpp cc h hpp rb php swift dart r sh bash lua pl sql vue svelte'.split(' '));
+const SCAN_SKIP = new Set(['node_modules', '.git', '.venv', 'venv', 'env', 'dist', 'build', 'out', 'vendor', '.next', 'coverage', '__pycache__', '.yamori']);
+const indexFile = cacheRoot => path.join(cacheRoot, 'projects', 'index.json');
+const realOr = async value => { try { return await fs.realpath(value); } catch { return path.resolve(value); } };
+async function readJsonFile(file) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return undefined; } }
+async function writeJsonFile(file, value) {
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temp = file + '.' + crypto.randomUUID() + '.tmp';
+  try { await fs.writeFile(temp, JSON.stringify(value), { mode: 0o600 }); await fs.rename(temp, file); }
+  finally { await fs.unlink(temp).catch(() => {}); }
+}
+// A short exclusive lock for read-modify-write of shared store files.
+async function withLock(dir, work) {
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const lock = path.join(dir, '.lock');
+  for (let attempt = 0; ; attempt++) {
+    try { await (await fs.open(lock, 'wx')).close(); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const stat = await fs.stat(lock).catch(() => undefined);
+      if (!stat || Date.now() - stat.mtimeMs > 2000) { await fs.rm(lock, { force: true }); continue; }
+      if (attempt > 150) throw new Error('The Yamori project store is busy. Try again.');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
+  try { return await work(); } finally { await fs.rm(lock, { force: true }); }
+}
+// Read, change and save one store file under the lock.
+async function updateStoreFile(dir, name, change) {
+  return withLock(dir, async () => {
+    const file = path.join(dir, name + '.json'), next = await change((await readJsonFile(file)) || {});
+    if (next !== undefined) await writeJsonFile(file, next);
+    return next;
+  });
+}
+async function storeDirFor(cacheRoot, rootPath, key) {
+  const real = await realOr(rootPath), known = (await readJsonFile(indexFile(cacheRoot)))?.[real];
+  return path.join(cacheRoot, 'projects', known?.dir || hash(key || 'path:' + real).slice(0, 32));
+}
+async function recordStore(cacheRoot, rootPath, dir, key) {
+  const real = await realOr(rootPath), projects = path.join(cacheRoot, 'projects');
+  await updateStoreFile(projects, 'index', index => {
+    const row = index[real];
+    if (row?.dir === path.basename(dir) && (row.uri || '') === (key || row.uri || '')) return undefined;
+    return { ...index, [real]: { dir: path.basename(dir), ...(key ? { uri: key } : row?.uri ? { uri: row.uri } : {}), updatedAt: Date.now() } };
+  });
+}
+// The project an agent is working in: the deepest indexed folder containing
+// its working folder, else the nearest folder that looks like a project root.
+async function locateProject(cwd, cacheRoot) {
+  const real = await realOr(cwd), index = (await readJsonFile(indexFile(cacheRoot))) || {};
+  const inside = root => real === root || real.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+  const known = Object.keys(index).filter(inside).sort((a, b) => b.length - a.length)[0];
+  if (known) return { root: known, dir: path.join(cacheRoot, 'projects', index[known].dir), key: index[known].uri, known: true };
+  let root = real;
+  for (let dir = real; ; dir = path.dirname(dir)) {
+    const found = await Promise.all(['.git', 'pyproject.toml', 'package.json', 'go.mod', 'Cargo.toml', 'setup.py'].map(name => fs.stat(path.join(dir, name)).then(() => true, () => false)));
+    if (found.some(Boolean)) { root = dir; break; }
+    if (path.dirname(dir) === dir) break;
+  }
+  return { root, dir: await storeDirFor(cacheRoot, root), known: false };
+}
+// The extension's scan, without VS Code: same file types, skipped folders and cap.
+async function listSourceFiles(root) {
+  const files = [];
+  const walk = async rel => {
+    if (files.length > MAX_FILES) return;
+    let entries;
+    try { entries = await fs.readdir(path.join(root, rel), { withFileTypes: true }); } catch { return; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const child = rel ? rel + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) { if (!SCAN_SKIP.has(entry.name) && !entry.name.startsWith('.')) await walk(child); }
+      else if (entry.isFile() && SCAN_EXTENSIONS.has(posix.extname(entry.name).slice(1))) files.push(child);
+    }
+  };
+  await walk('');
+  return files.sort((a, b) => a.localeCompare(b));
+}
+async function readInside(root, rel) {
+  const real = await fs.realpath(path.join(root, ...rel.split('/'))), rootReal = await realOr(root), relative = path.relative(rootReal, real);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Outside the project.');
+  if ((await fs.stat(real)).size > sourceLimit(rel)) throw new Error('Too large.');
+  return fs.readFile(real, 'utf8');
+}
+async function scanFolder(root, previous, indexer, key) {
+  const rels = await listSourceFiles(root), limited = rels.length > MAX_FILES, manifests = {};
+  for (const name of ['package.json', 'go.mod', 'Cargo.toml']) { try { manifests[name] = await fs.readFile(path.join(root, name), 'utf8'); } catch { /* none */ } }
+  const scanned = await scanFiles(rels.slice(0, MAX_FILES).map(rel => ({ rel, read: () => readInside(root, rel) })), previous, indexer);
+  return { ...buildGraph(scanned.records, manifests), scannedAt: Date.now(), limited, root: key || 'file://' + root };
+}
+// The guide's search: whole-word names (exact capitals) or any text (ignoring
+// capitals), the defining file first. `read(rel)` returns a file's text.
+async function searchProject(graph, raw, read, { files: maxFiles = 200, shown = 12 } = {}) {
+  const query = typeof raw === 'string' ? raw.trim().slice(0, 80) : '';
+  if (!query || !graph) return undefined;
+  const identifier = /^[A-Za-z_$][\w$]*$/.test(query), escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = identifier ? new RegExp('(?<![\\w$])' + escaped + '(?![\\w$])') : new RegExp(escaped, 'i');
+  const hits = [], lines = new Map();
+  await Promise.all(Object.keys(graph.files).map(async rel => {
+    let text;
+    try { text = await read(rel); } catch { return; }
+    const all = text.split(/\r?\n/), found = [];
+    all.forEach((line, index) => { if (pattern.test(line)) found.push(index + 1); });
+    if (!found.length) return;
+    const file = graph.files[rel];
+    lines.set(rel, { found, total: all.length });
+    hits.push({ file: rel, count: found.length, defines: !!file.defs?.some(def => def.name === query), test: !!file.test,
+      matches: found.slice(0, shown).map(line => ({ line, text: all[line - 1].trim().slice(0, 160) })) });
+  }));
+  hits.sort((a, b) => b.defines - a.defines || a.test - b.test || b.count - a.count || a.file.localeCompare(b.file));
+  return { result: { query, identifier, total: hits.reduce((sum, hit) => sum + hit.count, 0), hits: hits.slice(0, maxFiles), more: Math.max(0, hits.length - maxFiles) }, lines };
+}
+// Names that exist in the project: definitions, module (file) names and
+// glossary terms. The pseudocode checker accepts these without a source match.
+function projectNames(graph, notes) {
+  const names = new Set();
+  for (const [rel, file] of Object.entries(graph?.files || {})) {
+    const base = posix.basename(rel, posix.extname(rel));
+    names.add(base); if (base === '__init__' || base === 'index') names.add(posix.basename(posix.dirname(rel)));
+    for (const def of file.defs || []) if (names.size < 60000) names.add(def.name);
+  }
+  for (const term of glossaryOf(graph || { files: {}, edges: [] }, notes || { files: {} })) { names.add(term.term); for (const alias of term.aliases || []) names.add(alias); }
+  return names;
+}
+// ---- Pseudocode as plain text: what agents grep ------------------------------
+function authorLabel(view) {
+  const author = view?.author;
+  if (author?.kind === 'agent') return 'written by ' + (author.name || 'an agent') + ' during an agent session';
+  return 'written by Yamori' + (view?.model ? ' (' + view.model + ')' : '');
+}
+const lineLabel = link => link ? 'L' + link.startLine + (link.endLine !== link.startLine ? '–' + link.endLine : '') : '';
+// Rough token counts (about four characters per token), shown so agents can
+// pick the cheaper of source and pseudocode for what they need.
+const tokensOf = text => Math.ceil(String(text || '').length / 4);
+const formatTokens = count => count >= 1000 ? (count / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(count);
+const rangeLabel = (start, end) => 'L' + start + (end !== start ? '–' + end : '');
+// One block as text, every step marked with the source lines it stands for.
+function blockText(section, index) {
+  const lines = String(section.pseudocode || '').split('\n'), labels = lines.map((text, i) => lineLabel(section.lineMap?.find(link => link.pseudocodeLine === i + 1)));
+  const width = Math.max(4, ...labels.map(label => label.length)) + 2;
+  return [`## ${index + 1} · ${section.title} · ${rangeLabel(section.startLine, section.endLine)}`, ...lines.map((text, i) => (labels[i] || '').padEnd(width) + text)].join('\n');
+}
+// The outline: block titles, source ranges and each block's size. A small
+// fraction of the file; enough to pick the one block or range to read.
+function outlineText(view) {
+  return view.sections.map((section, index) => `${String(index + 1).padStart(2)} · ${section.title} · ${rangeLabel(section.startLine, section.endLine)} · ~${formatTokens(tokensOf(blockText(section, index)))} tok`).join('\n');
+}
+// Without pseudocode, an outline from the map's definitions.
+function definitionOutline(file) {
+  const kinds = new Set(['class', 'function', 'method', 'interface', 'type', 'enum']);
+  return (file?.defs || []).filter(def => kinds.has(def.kind)).slice(0, 120).map(def => `${def.kind} ${def.name} · ${rangeLabel(def.line, def.end || def.line)}`).join('\n');
+}
+function blocksAt(view, start, end = start) {
+  return view.sections.map((section, index) => ({ section, index })).filter(({ section }) => section.startLine <= end && section.endLine >= start);
+}
+// One file's pseudocode: a header with sizes, the outline, then the blocks.
+function pseudocodeText(rel, saved, { hash: currentHash, sourceLines, sourceTokens } = {}) {
+  const levels = ['logic', 'overview'].filter(level => saved?.[level]?.sections?.length);
+  if (!levels.length) return undefined;
+  const out = [];
+  for (const level of levels) {
+    const view = saved[level], state = currentHash && view.hash !== currentHash ? 'OUTDATED: the source changed since this was written' : 'current';
+    const blocks = view.sections.map(blockText), outline = outlineText(view), size = tokensOf(blocks.join('\n\n'));
+    out.push(`# ${rel} · ${level === 'logic' ? 'Logic' : 'Overview'} pseudocode`,
+      `${view.sections.length} block${view.sections.length === 1 ? '' : 's'} · ${state} · ${authorLabel(view)}${view.savedAt ? ' · ' + new Date(view.savedAt).toISOString().slice(0, 10) : ''}`,
+      `Size: pseudocode ~${formatTokens(size)} tok${sourceTokens ? ` · source ~${formatTokens(sourceTokens)} tok` : ''}${sourceLines ? ` (${sourceLines} lines)` : ''} · outline below ~${formatTokens(tokensOf(outline))} tok. Read only what you need: one block (get_pseudocode with line) or the source lines its L-marks give.`,
+      ...(view.title ? ['', view.title + (view.summary ? ': ' + view.summary : '')] : []),
+      '', '## Outline', outline, '', blocks.join('\n\n'), '');
+  }
+  return out.join('\n');
+}
+// The .yamori/ mirror in the project: one text file per explained source file,
+// an index of every mapped file, and a README. Kept out of git locally.
+const MIRROR = '.yamori';
+async function syncMirror(root, graph, notes, explanations) {
+  const base = path.join(root, MIRROR), pseudo = path.join(base, 'pseudocode'), written = new Set();
+  await fs.mkdir(pseudo, { recursive: true });
+  const write = async (file, text) => { const old = await fs.readFile(file, 'utf8').catch(() => undefined); if (old !== text) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, text); } };
+  for (const [rel, saved] of Object.entries(explanations || {})) {
+    if (!graph?.files?.[rel] || rel.split('/').includes('..')) continue;
+    const sourceTokens = await fs.stat(path.join(root, ...rel.split('/'))).then(stat => Math.ceil(stat.size / 4), () => undefined);
+    const text = pseudocodeText(rel, saved, { hash: graph.files[rel].hash, sourceLines: graph.files[rel].lines, sourceTokens });
+    if (!text) continue;
+    const file = path.join(pseudo, ...rel.split('/')) + '.md';
+    written.add(file); await write(file, text);
+  }
+  // Remove files whose source or explanation is gone.
+  const prune = async dir => {
+    let entries; try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { await prune(full); if (!(await fs.readdir(full)).length) await fs.rmdir(full).catch(() => {}); }
+      else if (!written.has(full)) await fs.rm(full, { force: true });
+    }
+  };
+  await prune(pseudo);
+  const rows = await Promise.all(Object.keys(graph?.files || {}).filter(rel => !graph.files[rel].test).sort().map(async rel => {
+    const saved = explanations?.[rel], view = saved?.logic || saved?.overview, purpose = notes?.files?.[rel]?.purpose, file = graph.files[rel];
+    const sourceTokens = await fs.stat(path.join(root, ...rel.split('/'))).then(stat => Math.ceil(stat.size / 4), () => 0);
+    const size = !view ? 'no pseudocode' : `pseudocode ~${formatTokens(tokensOf(view.sections.map(blockText).join('\n\n')))} tok (outline ~${formatTokens(tokensOf(outlineText(view)))})${view.hash !== file.hash ? ', outdated' : ''} · .yamori/pseudocode/${rel}.md`;
+    return `- ${rel} · ${file.lines} lines · source ~${formatTokens(sourceTokens)} tok · ${size}${purpose ? ' · ' + purpose : ''}`;
+  }));
+  await write(path.join(base, 'INDEX.md'), `# Yamori index\n\nEvery mapped source file with its size, the size of Yamori's pseudocode for it, and what it is for. Read whichever is cheaper for what you need: known lines in the source, or a file's outline or one pseudocode block to understand it. Generated by Yamori; do not edit.\n\n${notes?.overview ? notes.overview + '\n\n' : ''}${rows.join('\n')}\n`);
+  await write(path.join(base, 'README.md'), '# .yamori\n\nGenerated by the Yamori extension for VS Code and Cursor: pseudocode of explained files (pseudocode/), and an index of the project (INDEX.md). Agents read these instead of whole source files. Safe to delete; Yamori writes them again. Kept out of git through .git/info/exclude.\n');
+  // Local-only git ignore, added once.
+  try {
+    const exclude = path.join(root, '.git', 'info', 'exclude');
+    if ((await fs.stat(path.join(root, '.git'))).isDirectory()) {
+      const current = await fs.readFile(exclude, 'utf8').catch(() => '');
+      if (!/^\/?\.yamori\/?$/m.test(current)) { await fs.mkdir(path.dirname(exclude), { recursive: true }); await fs.appendFile(exclude, (current && !current.endsWith('\n') ? '\n' : '') + '.yamori/\n'); }
+    }
+  } catch { /* Not a git repository. */ }
 }
 
 // ---- Parts for parallel writing --------------------------------------------
@@ -973,7 +1212,7 @@ function planParts(defs, text, startLine = 1, { maxParts = 6, minLines = 25 } = 
   return parts.map(part => ({ ...part, names: named.filter(item => item.line >= part.startLine && item.line <= part.endLine).map(item => item.name).slice(0, 16) }));
 }
 
-module.exports = { planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
+module.exports = { sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
 
 // Build step: copy the tree-sitter runtime and the bundled grammars from the
 // pinned development dependency. Run `npm run build:parser` after updating it.
