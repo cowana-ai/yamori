@@ -12,6 +12,8 @@ const GRAMMAR_DIR = path.join(__dirname, '..', '..', 'vendor', 'tree-sitter');
 const GRAMMARS = ['python', 'javascript', 'tsx', 'go', 'java', 'rust'];
 // TypeScript files use the TSX grammar: one 1.4 MB grammar instead of two.
 const GRAMMAR_FOR = { '.py': 'python', '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.ts': 'tsx', '.tsx': 'tsx', '.mts': 'tsx', '.cts': 'tsx', '.go': 'go', '.java': 'java', '.rs': 'rust' };
+const CONTEXT_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg']);
+const isContextFile = rel => CONTEXT_EXTENSIONS.has(posix.extname(rel).toLowerCase());
 const MAX_FILE_BYTES = 500000, MAX_FILES = 500, MAX_REFS = 600, MAX_PATH_STEPS = 15;
 // Version 2 adds definition end lines and test cases; older scans rebuild once.
 const GRAPH_VERSION = 2;
@@ -129,6 +131,7 @@ class Indexer {
   }
   async extract(rel, text) {
     const grammar = GRAMMAR_FOR[posix.extname(rel).toLowerCase()];
+    if (isContextFile(rel)) return { defs: [], refs: [], imports: [], tests: [] };
     if (!grammar) return regexExtract(rel, text);
     let tree;
     try {
@@ -804,6 +807,7 @@ function numbered(text, from = 1) { return text.split('\n').map((line, i) => (fr
 // docstrings and module constants, with their original line numbers.
 function skeleton(text, record, limit = 6000) {
   const lines = text.split('\n'), keep = new Set();
+  if (record.contextFile) lines.forEach((line, i) => { if (line.trim()) keep.add(i + 1); });
   for (const imp of record.imports || []) keep.add(imp.line);
   for (const def of record.defs || []) for (let line = def.line; line <= def.line + 3 && line <= lines.length; line++) {
     if (line === def.line || /^\s*("""|'''|#|\/\/|\/\*|\*)/.test(lines[line - 1])) keep.add(line);
@@ -921,6 +925,17 @@ function sourceView(rel, raw) {
   return { text: lines.join('\n'), notebookCells: cells, language: notebook.metadata?.language_info?.name || notebook.metadata?.kernelspec?.language || 'python' };
 }
 
+// Branch identity comes directly from HEAD, never a model or a Git hook.
+async function gitInfo(root) {
+  let directory = path.resolve(root), gitDir;
+  while (true) {
+    const marker = path.join(directory, '.git');
+    try { const stat = await fs.stat(marker); if (stat.isDirectory()) gitDir = marker; else { const text = await fs.readFile(marker, 'utf8'), match = text.match(/^gitdir:\s*(.+)\s*$/m); if (match) gitDir = path.resolve(directory, match[1].trim()); } } catch {}
+    if (gitDir) break; const parent = path.dirname(directory); if (parent === directory) return undefined; directory = parent;
+  }
+  try { const head = (await fs.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim(), ref = head.match(/^ref:\s+refs\/heads\/(.+)$/); return { name: ref ? ref[1] : 'detached ' + head.slice(0, 7), detached: !ref, root: directory, gitDir }; } catch { return undefined; }
+}
+
 // ---- Scanning and storage ------------------------------------------------------
 
 // files: [{ rel, read: async () => text }]. Unchanged files reuse their record.
@@ -932,10 +947,10 @@ async function scanFiles(files, previous, indexer, { signal, onProgress } = {}) 
     let text;
     let view;
     try { const raw = await item.read(); view = sourceView(item.rel, raw); text = view.text; } catch { skipped++; continue; }
-    if (typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > MAX_FILE_BYTES || text.includes('\0')) { skipped++; continue; }
+    if (typeof text !== 'string' || (!text.trim() && !isContextFile(item.rel)) || Buffer.byteLength(text) > MAX_FILE_BYTES || text.includes('\0')) { skipped++; continue; }
     const digest = hash(text), old = previous?.files?.[item.rel];
     if (old && old.hash === digest) { const { test, entry, rank, ...record } = old; records[item.rel] = record; reused++; }
-    else { records[item.rel] = { hash: digest, language: view.language || GRAMMAR_FOR[posix.extname(item.rel).toLowerCase()] || posix.extname(item.rel).slice(1), ...(view.notebookCells ? { notebookCells: view.notebookCells } : {}), lines: lineCount(text), ...(await indexer.extract(view.notebookCells && view.language === 'python' ? item.rel.replace(/\.ipynb$/i, '.py') : item.rel, text)) }; parsed++; }
+    else { records[item.rel] = { hash: digest, ...(isContextFile(item.rel) ? { contextFile: true } : {}), language: view.language || GRAMMAR_FOR[posix.extname(item.rel).toLowerCase()] || posix.extname(item.rel).slice(1), ...(view.notebookCells ? { notebookCells: view.notebookCells } : {}), lines: lineCount(text), ...(await indexer.extract(view.notebookCells && view.language === 'python' ? item.rel.replace(/\.ipynb$/i, '.py') : item.rel, text)) }; parsed++; }
     if (onProgress && i % 25 === 0) onProgress({ done: i + 1, total: files.length });
   }
   return { records, parsed, reused, skipped };
@@ -955,7 +970,7 @@ class ProjectStore {
 // The extension and the standing knowledge server (run by the user's own Claude
 // Code or Codex) read and write the same project store. An index maps each
 // project folder to its store, so a process outside VS Code can find it.
-const SCAN_EXTENSIONS = new Set('ipynb py js jsx ts tsx mjs cjs go rs java kt scala cs c cpp cc h hpp rb php swift dart r sh bash lua pl sql vue svelte'.split(' '));
+const SCAN_EXTENSIONS = new Set('ipynb py js jsx ts tsx mjs cjs go rs java kt scala cs c cpp cc h hpp rb php swift dart r sh bash lua pl sql vue svelte md mdx txt rst json yaml yml toml ini cfg'.split(' '));
 const SCAN_SKIP = new Set(['node_modules', '.git', '.venv', 'venv', 'env', 'dist', 'build', 'out', 'vendor', '.next', 'coverage', '__pycache__', '.yamori']);
 const indexFile = cacheRoot => path.join(cacheRoot, 'projects', 'index.json');
 const realOr = async value => { try { return await fs.realpath(value); } catch { return path.resolve(value); } };
@@ -1027,7 +1042,7 @@ async function listSourceFiles(root) {
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const child = rel ? rel + '/' + entry.name : entry.name;
       if (entry.isDirectory()) { if (!SCAN_SKIP.has(entry.name) && !entry.name.startsWith('.')) await walk(child); }
-      else if (entry.isFile() && SCAN_EXTENSIONS.has(posix.extname(entry.name).slice(1))) files.push(child);
+      else if (entry.isFile() && SCAN_EXTENSIONS.has(posix.extname(entry.name).slice(1).toLowerCase())) files.push(child);
     }
   };
   await walk('');
@@ -1038,6 +1053,20 @@ async function readInside(root, rel) {
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Outside the project.');
   if ((await fs.stat(real)).size > sourceLimit(rel)) throw new Error('Too large.');
   return fs.readFile(real, 'utf8');
+}
+// A capped overview is not an access boundary. Index explicitly referenced
+// source files locally before validating a plan or serving a targeted lookup.
+async function includeSourceFiles(root, graph, paths, indexer, read) {
+  const rels = [...new Set(paths)].filter(rel => typeof rel === 'string' && !/[\\:\0]/.test(rel) && !rel.startsWith('/') && rel.split('/').every(part => part && part !== '..' && !part.startsWith('.') && !SCAN_SKIP.has(part)) && SCAN_EXTENSIONS.has(posix.extname(rel).slice(1).toLowerCase()));
+  if (!rels.length) return graph;
+  const scanned = await scanFiles(rels.map(rel => ({ rel, read: () => read ? read(rel) : readInside(root, rel) })), graph, indexer);
+  if (!scanned.parsed && rels.every(rel => graph.files[rel] && scanned.records[rel])) return graph;
+  const records = { ...graph.files };
+  for (const rel of rels) delete records[rel];
+  Object.assign(records, scanned.records);
+  const manifests = {};
+  for (const name of [...new Set(['package.json', 'go.mod', 'Cargo.toml', ...Object.keys(records).filter(rel => /(?:^|\/)(?:package\.json|go\.mod|Cargo\.toml)$/.test(rel))])]) { try { manifests[name] = await readInside(root, name); } catch {} }
+  return { ...graph, ...buildGraph(records, manifests) };
 }
 async function scanFolder(root, previous, indexer, key) {
   const rels = await listSourceFiles(root), limited = rels.length > MAX_FILES, manifests = {};
@@ -1212,7 +1241,7 @@ function planParts(defs, text, startLine = 1, { maxParts = 6, minLines = 25 } = 
   return parts.map(part => ({ ...part, names: named.filter(item => item.line >= part.startLine && item.line <= part.endLine).map(item => item.name).slice(0, 16) }));
 }
 
-module.exports = { sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
+module.exports = { includeSourceFiles, gitInfo, sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
 
 // Build step: copy the tree-sitter runtime and the bundled grammars from the
 // pinned development dependency. Run `npm run build:parser` after updating it.

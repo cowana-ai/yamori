@@ -22,7 +22,8 @@ Everything below is what you see in Yamori:
 - **Map and reading order:** `project_overview`, `start_here`, `project_map`, `list_files`, `file_info`
 - **Names and text:** `find_symbol`, `search_name`, `glossary`, `tests_for`
 - **Pseudocode, by the piece needed:** `get_pseudocode` returns an outline (block titles, source ranges and sizes), the block covering a line or a function, or the whole file. Every step is marked with the source lines it stands for (`L120–124`), and each answer states its size next to the source's. `search_pseudocode` searches all of it.
-- **Source:** `read_source`
+- **Source and branch changes:** `read_source`, `git_changes`
+- **Project conversation:** `get_conversation` returns questions, reviewed plan details, implementation activity and results across plan completion. Page backward with message IDs; read long messages in chunks.
 
 Answers are marked as untrusted project data. The server never runs project code or reads outside the project folder.
 

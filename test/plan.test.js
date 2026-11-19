@@ -349,3 +349,34 @@ test('canvas paths wrap without losing directories and grow file boxes to fit', 
   const layout = planCanvasLayout({ files: [{ id: file, count: 1 }], ideas: [] });
   assert.equal(layout.files[file].h, planFileHeight(file));
 });
+
+
+test('targeted MCP reads reach source beyond a capped overview and keep outside symlinks inaccessible', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-capped-plan-'));
+  try {
+    const repo = path.join(root, 'repo'), store = path.join(root, 'store'); await fs.mkdir(path.join(repo, 'assets'), { recursive: true }); await fs.mkdir(path.join(repo, 'src')); await fs.mkdir(store);
+    await Promise.all(Array.from({ length: 505 }, (_, i) => fs.writeFile(path.join(repo, 'assets', i + '.md'), '# Preview\n')));
+    await fs.writeFile(path.join(repo, 'src', 'calculate.py'), 'def calculate():\n    return 42\n');
+    const indexer = new project.Indexer(), capped = await project.scanFolder(repo, undefined, indexer); assert.equal(capped.files['src/calculate.py'], undefined);
+    const server = require('../src/project/mcp').createServer({ root: repo, store });
+    const result = await server.call('read_source', { path: 'src/calculate.py', start_line: 1, end_line: 2 }); assert.equal(result.isError, undefined); assert.match(result.content[0].text, /return 42/);
+    await fs.writeFile(path.join(store, 'plan.json'), JSON.stringify({ current: { steps: [{ file: 'src/calculate.py', startLine: 1, endLine: 2 }] } }));
+    const reopened = require('../src/project/mcp').createServer({ root: repo, store }); await reopened.call('project_overview', {});
+    assert.ok(JSON.parse(await fs.readFile(path.join(store, 'graph.json'), 'utf8')).files['src/calculate.py'], 'subsequent capped scans retain files used by the plan');
+    await fs.writeFile(path.join(root, 'private.py'), 'PRIVATE_CONTENT'); await fs.symlink(path.join(root, 'private.py'), path.join(repo, 'src', 'outside.py'));
+    const outside = await server.call('read_source', { path: 'src/outside.py' }); assert.equal(outside.isError, true); assert.doesNotMatch(outside.content[0].text, /PRIVATE_CONTENT/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+test('planning can verify local commit authorship without a shell or model turn', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-history-tool-'));
+  try {
+    const { execFileSync } = require('node:child_process'), git = args => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+    git(['init', '-q']); await fs.writeFile(path.join(root, 'source.py'), 'answer = 42\n'); git(['add', 'source.py']);
+    git(['-c', 'user.name=Fixture Author', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Add source']);
+    const store = path.join(root, 'store'); await fs.mkdir(store); const server = require('../src/project/mcp').createServer({ root, store });
+    const result = await server.call('git_history', { author: 'Fixture Author', limit: 2 }); assert.equal(result.isError, undefined); assert.match(result.content[0].text, /Fixture Author/); assert.match(result.content[0].text, /source.py/);
+    const missing = await server.call('git_history', { author: 'Different Author' }); assert.match(missing.content[0].text, /No matching local commits/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

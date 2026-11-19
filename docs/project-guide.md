@@ -188,3 +188,35 @@ Select your AI, model and effort, then press **Approve & implement** above the c
 The terminal shows activity and reported token usage. **Stop** cancels the run; it keeps the plan and any edits already made. Claude uses its normal edit permission mode: a command that needs additional permission can block completion, in which case the plan stays available. No permission bypass flags are used.
 
 After the agent confirms completion and checks, the active plan clears automatically. Its completed copy stays in local history and the terminal shows the result. Failed or incomplete runs keep the plan for review and retry.
+
+### Project access during planning
+
+Planning automatically supplies read-only project tools, including in Restricted Mode. The agent can find scripts, Markdown audience profiles and writer prompts, read text/configuration, and inspect local branch changes. You do not need to attach files already inside the open project. Text-file discovery is local and does not generate extra AI notes for those files. If a requested profile is absent, the agent can propose creating one. The original request stays in the planning context across follow-ups.
+
+Planning does not execute project code. If you approve implementation while the workspace is restricted, Yamori opens VS Code’s Workspace Trust screen and continues the approved plan after you grant trust. It does not grant trust automatically.
+
+### One project conversation
+
+Open **Chat & plan**. The canvas is the default, with the conversation below it. The highlighted **< > Focus chat** button expands the conversation; **Back to canvas** restores the map. Replies appear as the provider generates text, without another AI request. Streaming updates do not rebuild the canvas or replace the typing field.
+
+- **Chat:** ask questions and inspect the project without changing files.
+- **Plan:** draft and discuss changes on the canvas. **New plan** clears the active plan and keeps the conversation.
+- **Work:** talk to the coding agent normally. It answers questions or carries out explicitly requested tests and edits.
+
+After an approved plan completes, its changes leave the canvas and the conversation continues in Work. You can immediately ask “What changed?”, “Run the relevant tests”, or request another task. Messages, reviewed plan details, activity, results and native session references are cached locally per project and survive reopening VS Code. Earlier messages remain available through **Earlier messages** and the `get_conversation` agent tool; long messages can be read in chunks.
+
+### Move between Yamori and native agents
+
+Press **Continue from…** and select a local Codex or Claude Code conversation for the current project. Yamori imports its visible messages and retains the original session ID, so subsequent agent work can resume the provider's own context. Finish the current external turn before continuing here. External updates sync when you return to the Yamori view; **Sync linked conversation** requests a local refresh. **Open current conversation in agent terminal** resumes the same session outside Yamori.
+
+Planning stays in a separate read-only native session and shares its reviewed proposals and conversation through Yamori history. Coding/chat session references are kept separately so importing a plan cannot accidentally grant write access. If a native session was deleted, coding resumes from saved project context in a fresh session.
+
+Ordinary web-only chats are not automatically available as local CLI sessions. Use **Copy project context** or **Paste a conversation handoff** to bridge those clients or switch providers. This transfers visible context, not another provider's private reasoning or cache. Yamori does not import unrelated account chats automatically.
+
+The Git badge shows the current branch directly from local metadata, including worktrees and detached HEAD. Its updates and native-session discovery/import do not call an AI model.
+
+### Ask about highlighted code
+
+Highlight source code to open a native inline question field. Type your question and press **Ask Yamori**. Yamori opens project chat beside the editor and includes the file, line range and exact selected snapshot, including unsaved edits. This is a read-only question; no AI request happens until you submit. The field stays open when you click into it or the source highlight collapses. Use Dismiss to close it, or select another code range to replace it.
+
+Right-click → **Yamori: Ask About Selected Code** and **⌘⌥Q** / **Ctrl+Alt+Q** are alternatives. Turn off `yamori.selectionQuestions` if you prefer opening the field manually. Selections are limited to 12,000 characters. A failed send keeps a retryable question with its original code snapshot.

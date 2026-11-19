@@ -505,6 +505,8 @@ body.vscode-dark:not([data-palette="paper"]) .change-change, body[data-palette="
 .plan-terminal .terminal-composer #plan-goal:focus-visible { outline:none; }
 .plan-terminal .terminal-composer #plan-goal::placeholder { color:#8f98a5; }
 
+.terminal-stream[hidden] { display:none; }
+.terminal-stream { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.5 Menlo,Monaco,Consolas,monospace; color:#e4e5e8; border-left:2px solid #9ce2ac; padding:4px 12px; margin:6px 0; max-height:45%; overflow:auto; flex-shrink:1; }
 .native-terminal { flex:1; min-height:0; width:100%; overflow:hidden; }
 .native-terminal .xterm { height:100%; }
 #plan-panel[data-inspecting="true"] { bottom:calc(var(--plan-terminal-height,280px) + 28px); max-height:max(0px,calc(100% - var(--plan-terminal-height,280px) - 48px)); padding:12px 16px; }
@@ -687,9 +689,29 @@ header .top { gap:14px; }
 #plan-panel .step-body > .plan-row { position:static; padding:0 0 6px; }
 #plan-panel .step-body > .plan-row button { padding:6px 10px; font-size:12px; }
 @media(max-width:720px) { .workspace-actions .workspace-hint { width:100%; margin-left:0; } header .brand { margin-right:0; } .tabs { flex-shrink:0; } }
+.conversation-modes { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin:0 0 8px; }
+.conversation-modes button { background:transparent; color:#b6bec9; border:1px solid transparent; padding:4px 10px; font:12px/1.5 ui-monospace,monospace; }
+.conversation-modes button[aria-pressed="true"] { border-color:#65776b; background:#202923; color:#a5e2b3; }
+.conversation-modes button[data-mode="work"][aria-pressed="true"] { border-color:#877952; background:#2b2820; color:#edcf88; }
+.conversation-modes button:focus-visible { outline:1px solid #a5e2b3; outline-offset:2px; }
+.conversation-modes .conversation-focus { margin-left:auto; border:1px solid #87b798; background:#24382b; color:#c8f4d5; font-weight:600; padding:6px 12px; }
+.conversation-modes .conversation-focus:hover { background:#334e3c; }
+.conversation-modes .conversation-focus[aria-pressed="true"] { background:#36513e; border-color:#b5edc6; }
+.focus-icon { display:inline-block; font:700 14px ui-monospace,monospace; }
+.conversation-modes .conversation-earlier { margin-left:auto; color:#b6bec9; text-decoration:underline; }
+.project-branch { max-width:24ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--read-muted); font:11px/1.5 ui-monospace,monospace; padding:3px 7px; }
+.conversation-modes .conversation-handoff { margin-left:auto; border-color:#505761; }
+.conversation-linked { color:#a3b7ad; font:11px ui-monospace,monospace; }
+body[data-chat-focused="true"] > header { display:none; }
+body[data-chat-focused="true"] #canvas, body[data-chat-focused="true"] #drawer, body[data-chat-focused="true"] #search-panel { visibility:hidden; pointer-events:none; }
+#plan-panel .plan-terminal[data-focused="true"] { inset:12px; height:auto !important; z-index:12; }
+.plan-terminal[data-focused="true"] .terminal-resizer { display:none; }
+.conversation-project { display:flex; align-items:center; flex-shrink:0; gap:12px; padding:3px 0 12px; color:#d0d6de; font:13px/1.4 ui-monospace,monospace; }
+.conversation-project .conversation-branch { color:#a5b5aa; font:11px ui-monospace,monospace; background:transparent; border:1px solid #505761; padding:4px 7px; max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${LOGO}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
-<span class="tabs" role="tablist" aria-label="Yamori navigation"><button id="read-current" title="Read the current script as pseudocode">Read</button><button id="tab-start" role="tab" aria-selected="true" aria-controls="start-view" title="Which files to read first, folder by folder">Files</button><button id="tab-map" role="tab" aria-selected="false" aria-controls="map-view" title="How files connect, grouped by folder">Map</button><button id="tab-plan" role="tab" aria-selected="false" aria-controls="map-view" title="Plan a change: choose the files it affects on the map, draft steps, and edit anything">Plan</button></span>
+<button id="project-branch" class="project-branch" title="Current Git branch. Local metadata, no AI." hidden></button>
+<span class="tabs" role="tablist" aria-label="Yamori navigation"><button id="read-current" title="Read the current script as pseudocode">Read</button><button id="tab-start" role="tab" aria-selected="true" aria-controls="start-view" title="Which files to read first, folder by folder">Files</button><button id="tab-map" role="tab" aria-selected="false" aria-controls="map-view" title="How files connect, grouped by folder">Map</button><button id="tab-plan" role="tab" aria-selected="false" aria-controls="map-view" title="Chat about your project, plan changes and work with your agent">Chat &amp; plan</button></span>
 <form class="search" id="search-form" role="search"><input id="search" type="search" placeholder="Search a name: variable, function, term…" aria-label="Search the project for a variable, function or term" autocomplete="off" spellcheck="false"><button id="search-go" type="submit" title="Highlight every file that mentions it (local, no AI)">Search</button></form>
 <span class="spacer"></span>
 <button id="rescan" title="Re-read changed files. Local and free; no AI.">Rescan</button><button id="notes" title="Ask your selected AI for a one-line purpose per file, project terms and a reading order">Write AI notes</button></div>
@@ -737,23 +759,33 @@ const svgNode = (tag, attrs = {}, text) => { const el = document.createElementNS
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el; };
 const $ = id => document.getElementById(id);
 const canvas = $('canvas'), viewport = $('viewport'), boxLayer = $('boxes'), edgeLayer = $('edges'), nodeLayer = $('nodes');
-let state = {}, view = { x: 40, y: 40, k: 1 }, current = 'start', viewToken, focusToken, layoutKey, needsFit = true, query = '', selected, drag, pan;
+let state = {}, view = { x: 40, y: 40, k: 1 }, current = 'map', viewToken, focusToken, layoutKey, needsFit = true, query = '', selected, drag, pan;
 let positions = new Map(), byId = new Map(), boxes = new Map(), nodeElements = new Map(), boxElements = new Map(), edgeElements = [];
 const size = () => ({ width: canvas.clientWidth || 800, height: canvas.clientHeight || 600 });
 const fileName = id => id.split('/').at(-1);
 function show(name) {
   // Plan is the same map with the plan panel beside it.
-  planMode = name === 'plan'; document.body.setAttribute('data-planning', String(planMode)); current = planMode ? 'map' : name;
+  const changedMode = planMode !== (name === 'plan');
+  planMode = name === 'plan'; if (changedMode) needsFit = true; document.body.setAttribute('data-planning', String(planMode)); current = planMode ? 'map' : name;
   $('tab-start').setAttribute('aria-selected', String(name === 'start')); $('tab-map').setAttribute('aria-selected', String(name === 'map')); $('tab-plan').setAttribute('aria-selected', String(planMode));
   if ($('plan-actions')) $('plan-actions').hidden = !planMode;
   $('start-view').hidden = current !== 'start'; $('map-view').hidden = current !== 'map';
-  if (current === 'map' && needsFit) { needsFit = false; fit(); }
   if (state.map) { hits = planMode ? undefined : searchHits(); if (planMode) showDetails(false); computePlanSets(); drawMap(); drawPlan(); drawSearch(); }
+  if (current === 'map' && needsFit) { needsFit = false; fit(true); }
 }
 // ---- Map ----
 function applyView() { viewport.setAttribute('transform', 'translate(' + Math.round(view.x) + ' ' + Math.round(view.y) + ') scale(' + view.k.toFixed(3) + ')'); }
 function box(id) { const n = byId.get(id), p = planMode && planCoordinates.has(id) ? planCoordinates.get(id) : positions.get(id); return { x: p.x, y: p.y, w: planMode ? 240 : n.w, h: planMode ? planFileHeight(id) + planFilesHeight(id) : n.h }; }
-function fit() { const { width, height } = size(); view = fitTransform(planMode ? [...[...planCoordinates.keys()].map(id => box(id)), ...Object.values(planLayout.ideas)] : [...boxes.values()].map(b => ({ x: b.x, y: b.y, w: b.w, h: b.h })), width, planMode ? Math.max(180, height - 250) : height); applyView(); }
+function fit(readable = false) {
+  const { width, height } = size(), usableHeight = planMode ? Math.max(180, height - terminalHeight - 24) : height;
+  view = fitTransform(planMode ? [...[...planCoordinates.keys()].map(id => box(id)), ...Object.values(planLayout.ideas)] : [...boxes.values()].map(b => ({ x: b.x, y: b.y, w: b.w, h: b.h })), width, usableHeight);
+  // Initial planning view keeps the main affected file readable. Explicit Fit
+  // canvas can still zoom out to show every label; panning/zooming stay local.
+  if (planMode && readable === true && view.k < 0.75 && planGraph.files.length) {
+    const main = [...planGraph.files].sort((a, b) => b.count - a.count)[0], b = box(main.id); view = { k: 0.75, x: width / 2 - (b.x + b.w / 2) * 0.75, y: usableHeight / 2 - (b.y + b.h / 2) * 0.75 };
+  }
+  applyView();
+}
 function zoom(factor, cx, cy) {
   const { width, height } = size(), x = cx ?? width / 2, y = cy ?? height / 2, k = Math.max(0.15, Math.min(3, view.k * factor));
   view = { k, x: x - (x - view.x) * k / view.k, y: y - (y - view.y) * k / view.k }; applyView();
@@ -925,11 +957,11 @@ function moveBox(boxId, dx, dy) {
   drawEdges();
 }
 function drawMap() {
-  for (const id of planSynthetic) byId.delete(id); planSynthetic.clear();
+  for (const id of planSynthetic) if (byId.get(id)?.syntheticPlan) byId.delete(id); planSynthetic.clear();
   if (planMode) {
     planGraph = planIdeaGraph(planLocal, Object.keys(state.cards || {}));
     if (!planGraph.ideas.some(idea => idea.id === planIdeaSelection)) planIdeaSelection = undefined;
-    for (const { id } of planGraph.files) if (!byId.has(id) && (state.cards?.[id] || planLocal?.steps.some(step => step.file === id && step.newFile))) { byId.set(id, { id, kind: 'file', label: fileName(id), w: 200, h: 64 }); planSynthetic.add(id); }
+    for (const { id } of planGraph.files) if (!byId.has(id)) { byId.set(id, { id, kind: 'file', label: fileName(id), w: 200, h: 64, syntheticPlan: true }); planSynthetic.add(id); }
     planLayout = planCanvasLayout(planGraph, { expanded: planFilesAnchor, offsets: Object.fromEntries(planOffsets), ideaOffsets: Object.fromEntries(planIdeaOffsets) });
   }
   planCoordinates.clear();
@@ -1063,6 +1095,7 @@ let expandedStep, editingStep;
 let planCanvasKey = '';
 const planCoordinates = new Map(), planOffsets = new Map(), planIdeaOffsets = new Map(), planSynthetic = new Set();
 const planDisclosures = new Map();
+let chatFocused = false;
 const planInfo = () => state.plan || {};
 function computePlanSets() {
   const info = planInfo(), steps = new Map();
@@ -1093,7 +1126,7 @@ function restorePlan(from, to) {
 }
 function planSignature() {
   const info = planInfo();
-  return JSON.stringify([planRev, info.busy, info.error, info.estimate, (info.candidates?.files || []).length, (info.notes || []).length, (info.ripple || []).length, planMode, selected, Object.keys(info.impact || {}).length, info.snippet, info.ai, info.question, info.activity, planLocal?.messages, info.conversation]);
+  return JSON.stringify([planRev, info.busy, info.error, info.estimate, (info.candidates?.files || []).length, (info.notes || []).length, (info.ripple || []).length, planMode, selected, Object.keys(info.impact || {}).length, info.snippet, info.ai, info.question, info.activity, planLocal?.messages, info.conversation, info.mode, info.conversationHasMore, info.nativeSession, state.projectName, state.git?.name, state.git?.detached]);
 }
 const fileLabel = rel => rel.split('/').at(-1) + (rel.includes('/') ? '  ·  ' + rel.split('/').slice(0, -1).join('/') : '');
 const tokenText = value => value >= 1000 ? (value / 1000).toFixed(1).replace(/[.]0$/, '') + 'k' : String(value);
@@ -1155,7 +1188,7 @@ function navigatePlanStep(id) {
   select(step.file, false, true); expandedStep = id; drawPlan(); const scroller = $('plan-panel').querySelector?.('.plan-detail-content') || $('plan-panel'); scroller.scrollTop = 0;
   send('planSource', { step: id });
 }
-let nativeTerminal, nativeHost, nativeFit, nativeKey = '', planComposer, planInputHistory = 0, planInputDraft = '', terminalDrag;
+let nativeTerminal, nativeHost, nativeFit, nativeKey = '', nativeMessages = [], planComposer, planInputHistory = 0, planInputDraft = '', terminalDrag;
 let terminalHeight = Number(vscode.getState?.()?.terminalHeight) || 280;
 function terminalLimits() {
   const top = $('map-view')?.getBoundingClientRect?.().top || 100;
@@ -1217,12 +1250,15 @@ function attachTerminal(container, messages, info) {
   }
   // The browser edits the prompt; xterm only displays the transcript. It never
   // repaints partially wrapped input or guesses Unicode cursor positions.
-  container.insertBefore(nativeHost, container.querySelector?.('.terminal-composer') || null); container.setAttribute('data-native', 'true');
+  container.insertBefore(nativeHost, container.querySelector?.('.terminal-stream') || container.querySelector?.('.terminal-composer') || null); container.setAttribute('data-native', 'true');
   const key = JSON.stringify([messages, info.error]);
   if (key !== nativeKey) {
-    nativeKey = key; nativeTerminal.reset();
-    if (!messages.length) nativeTerminal.writeln('Yamori · describe a change to begin.');
-    for (const message of messages) nativeTerminal.writeln((message.role === 'user' ? '\\x1b[32m❯ ' : '\\x1b[36m● ') + '\\x1b[0m' + terminalPlain(message.text) + '\\r\\n');
+    const prefix = nativeMessages.length <= messages.length && nativeMessages.every((message, index) => JSON.stringify(message) === JSON.stringify(messages[index]));
+    const start = prefix ? nativeMessages.length : 0;
+    nativeKey = key; if (!prefix) nativeTerminal.reset();
+    if (!messages.length) nativeTerminal.writeln('Yamori · your project conversation starts here.');
+    for (const message of messages.slice(start)) nativeTerminal.writeln((message.role === 'user' ? '\\x1b[32m❯ ' : message.role === 'tool' ? '\\x1b[90m↳ ' : '\\x1b[36m● ') + '\\x1b[0m' + terminalPlain(message.text) + '\\r\\n');
+    nativeMessages = messages.map(message => ({ ...message }));
     if (info.error) nativeTerminal.writeln('\\x1b[31m' + terminalPlain(info.error) + '\\x1b[0m');
   }
   requestAnimationFrame(() => { try { nativeFit.fit(); } catch {} });
@@ -1377,14 +1413,15 @@ function flushPlan() { clearTimeout(planSendTimer); if (planLocal) send('planEdi
 function drawPlan() {
   const panel = $('plan-panel'); if (terminalDrag) return; panel.hidden = !planMode; stepCards.clear();
   planSig = planSignature();
-  if (!planMode || terminalDrag) return;
+  if (!planMode || terminalDrag) { if (!planMode) document.body.setAttribute('data-chat-focused', 'false'); return; }
   const previousGoal = planComposer, focusedGoal = previousGoal && document.activeElement === previousGoal;
   const caret = focusedGoal ? [previousGoal.selectionStart, previousGoal.selectionEnd, previousGoal.selectionDirection] : undefined;
   if (focusedGoal) pendingGoal = previousGoal.value;
   const scroll = panel.querySelector?.('.plan-detail-content')?.scrollTop ?? panel.scrollTop; const previousTranscript = panel.querySelector?.('.plan-transcript');
   const transcriptAtEnd = !previousTranscript || previousTranscript.scrollHeight - previousTranscript.scrollTop - previousTranscript.clientHeight < 40;
   const transcriptScroll = previousTranscript?.scrollTop || 0; selectionAction = undefined; panel.replaceChildren();
-  const info = planInfo(), busy = info.busy, plan = planLocal, hasSteps = !!plan?.steps.length;
+  const info = planInfo(), busy = info.busy, plan = planLocal, hasSteps = !!plan?.steps.length, mode = info.mode || 'plan';
+  document.body.setAttribute('data-chat-focused', String(chatFocused));
   if (selected && !plan?.steps.some(step => step.id === expandedStep && step.file === selected)) expandedStep = plan?.steps.find(step => step.file === selected)?.id;
   const head = node('div', undefined, 'plan-head'); head.append(node('h2', selected && planSets.steps.has(selected) ? fileName(selected) : 'Plan'));
   const undo = node('button', 'Undo'); undo.disabled = !planUndo.length; undo.addEventListener('click', () => restorePlan(planUndo, planRedo));
@@ -1404,20 +1441,33 @@ function drawPlan() {
   }
   const content = node('div', undefined, 'plan-detail-content'); content.setAttribute('tabindex', '0'); content.setAttribute('aria-label', 'Change details'); panel.append(content);
   // The goal.
-  const goal = node('textarea'); goal.id = 'plan-goal'; goal.value = pendingGoal; goal.placeholder = 'Ask about your plan or describe a change…'; goal.rows = 1; goal.spellcheck = false; goal.wrap = 'soft'; goal.setAttribute('aria-label', 'Goal'); goal.title = 'Enter to send · Shift+Enter for a new line';
+  const goal = node('textarea'); goal.id = 'plan-goal'; goal.value = pendingGoal; goal.placeholder = mode === 'chat' ? 'Ask anything about this project…' : mode === 'work' ? 'Ask your agent, run tests, or request a change…' : 'Describe a plan or discuss its changes…'; goal.rows = 1; goal.spellcheck = false; goal.wrap = 'soft'; goal.setAttribute('aria-label', 'Goal'); goal.title = 'Enter to send · Shift+Enter for a new line';
   goal.addEventListener('input', () => { pendingGoal = goal.value; planInputHistory = 0; sizePlanComposer(goal); go && (go.disabled = !goal.value.trim() || !!busy && !info.question); }); goal.addEventListener('change', () => { pendingGoal = goal.value; });
   const canvasKey = [...planSets.steps.keys()].join('|');
   if (planMode && canvasKey !== planCanvasKey) { planCanvasKey = canvasKey; fit(); }
   panel.setAttribute('data-ready', String(!!hasSteps)); panel.setAttribute('data-inspecting', String(!!selected && planSets.steps.has(selected)));
   const ai = node('div', undefined, 'plan-ai');
   for (const [label, type] of [[(info.ai?.label || 'Choose AI') + ' ▾', 'planAI'], ['Model: ' + (info.ai?.model || 'default') + ' ▾', 'planModel'], ['Effort: ' + (info.ai?.effort || 'default') + ' ▾', 'planEffort']]) { const pick = node('button', label); pick.setAttribute('aria-label', { planAI: 'Choose planning AI', planModel: 'Choose planning model', planEffort: 'Choose planning effort' }[type]); pick.disabled = !!busy; pick.addEventListener('click', () => send(type)); ai.append(pick); }
-  const terminal = node('section', undefined, 'plan-terminal'); terminal.setAttribute('aria-label', 'Planning conversation'); setTerminalHeight(terminalHeight); terminal.append(terminalResizer());
+  const terminal = node('section', undefined, 'plan-terminal'); terminal.setAttribute('aria-label', 'Project conversation'); terminal.setAttribute('data-focused', String(!!chatFocused)); setTerminalHeight(terminalHeight); terminal.append(terminalResizer());
   const transcript = node('div', undefined, 'plan-transcript'); transcript.setAttribute('role', 'log'); transcript.setAttribute('aria-live', 'polite');
   const messages = info.conversation?.length ? info.conversation : plan?.messages?.length ? plan.messages : plan?.goal ? [{ role: 'user', text: plan.goal }, ...(plan.summary ? [{ role: 'assistant', text: plan.summary }] : [])] : [];
   for (const message of messages) { const line = node('div', undefined, 'terminal-message'); line.append(node('span', message.role === 'user' ? '❯' : 'yamori', 'terminal-speaker'), node('p', message.text)); transcript.append(line); }
-  if (!messages.length) transcript.append(node('p', 'Describe a change. Your agent will explore the project and draw a plan.', 'terminal-welcome'));
+  if (!messages.length) transcript.append(node('p', 'Ask about your project, plan a change, or ask your agent to work. This conversation stays with the project.', 'terminal-welcome'));
   const composer = node('div', undefined, 'terminal-composer'); composer.append(node('span', '❯', 'terminal-prompt'), goal);
   const toolbar = node('div', undefined, 'plan-terminal-toolbar');
+  const projectHeading = node('div', undefined, 'conversation-project'); projectHeading.append(node('span', 'yamori / ' + (state.projectName || 'Project')));
+  if (state.git?.name) { const branch = node('button', '⎇ ' + state.git.name, 'conversation-branch'); branch.title = 'Current Git branch. Local metadata, no AI.'; branch.addEventListener('click', () => send('refreshGit')); projectHeading.append(branch); }
+  if (chatFocused) terminal.append(projectHeading);
+  const modes = node('div', undefined, 'conversation-modes'); modes.setAttribute('role', 'group'); modes.setAttribute('aria-label', 'Conversation mode');
+  for (const [value, label, tip] of [['chat', 'Chat', 'Read and explain project files. No changes.'], ['plan', 'Plan', 'Discuss and review a plan on the canvas.'], ['work', 'Work', 'Your agent answers questions, runs requested tests and makes requested edits.']]) {
+    const choice = node('button', label); choice.setAttribute('aria-pressed', String(mode === value)); choice.setAttribute('data-mode', value); choice.title = tip; choice.disabled = !!busy; choice.addEventListener('click', () => send('projectMode', { mode: value })); modes.append(choice);
+  }
+  const transfer = node('button', 'Continue from…', 'conversation-handoff'); transfer.title = 'Move an existing Codex or Claude conversation into Yamori, or open this conversation in your agent'; transfer.disabled = !!busy; transfer.addEventListener('click', () => send('handoff')); modes.append(transfer);
+  if (info.nativeSession?.linked) { const linked = node('span', '↔ ' + (info.nativeSession.provider === 'claude' ? 'Claude' : 'Codex'), 'conversation-linked'); linked.title = 'Native session ' + info.nativeSession.id + '. External updates sync when you return.'; modes.append(linked); }
+  if (info.conversationHasMore) { const earlier = node('button', 'Earlier messages', 'conversation-earlier'); earlier.title = 'Load older messages from this project’s local history'; earlier.addEventListener('click', () => send('conversationEarlier')); modes.append(earlier); }
+  const focusChat = node('button', undefined, 'conversation-focus'); focusChat.setAttribute('aria-pressed', String(chatFocused)); focusChat.setAttribute('aria-label', chatFocused ? 'Back to canvas' : 'Focus chat'); const focusIcon = node('span', chatFocused ? '> <' : '< >', 'focus-icon'); focusIcon.setAttribute('aria-hidden', 'true'); focusChat.append(focusIcon, document.createTextNode(chatFocused ? ' Back to canvas' : ' Focus chat')); focusChat.title = chatFocused ? 'Show the project canvas beside this conversation' : 'Give the conversation the whole view'; focusChat.addEventListener('click', () => { chatFocused = !chatFocused; drawPlan(); }); modes.append(focusChat);
+  if (chatFocused) { const newPlan = node('button', 'New plan'); newPlan.disabled = !!busy; newPlan.addEventListener('click', () => { clearTimeout(planSendTimer); pendingGoal = ''; planComposer = undefined; send('planClear'); }); modes.append(newPlan); }
+  terminal.append(modes);
   const fresh = node('button', '+ New plan', 'plan-new'); fresh.setAttribute('aria-label', 'New plan'); fresh.title = 'Start a fresh plan. The current plan is kept in local history.';
   fresh.addEventListener('click', () => {
     clearTimeout(planSendTimer); pendingGoal = ''; planComposer = undefined; planInputHistory = 0; planInputDraft = ''; nativeKey = '';
@@ -1427,7 +1477,7 @@ function drawPlan() {
   const actions = $('plan-actions');
   if (actions) {
     actions.hidden = !planMode;
-    fresh.disabled = busy?.stage === 'implement';
+    fresh.disabled = ['implement', 'handoff'].includes(busy?.stage);
     const approve = node('button', busy?.stage === 'implement' ? 'Implementing…' : 'Approve & implement', 'go');
     approve.disabled = !!busy || !!info.question || !plan?.steps.some(step => !['done', 'skipped'].includes(step.status) && !plan.dismissed?.includes(step.file));
     approve.title = 'Allow the selected agent to edit project files and run checks. Clear the plan after successful completion.';
@@ -1435,12 +1485,14 @@ function drawPlan() {
     const fitButton = node('button', 'Fit canvas'); fitButton.addEventListener('click', fit);
     const copyPlan = node('button', 'Copy plan'); copyPlan.disabled = !hasSteps; copyPlan.addEventListener('click', () => { flushPlan(); send('planCopy', {}); });
     const exportPlan = node('button', 'Export'); exportPlan.disabled = !hasSteps; exportPlan.addEventListener('click', () => { flushPlan(); send('planExport'); });
-    const hint = node('span', hasSteps ? plan.steps.length + (plan.steps.length === 1 ? ' change' : ' changes') + ' · click a file to explore' : 'Describe a change in the terminal below', 'workspace-hint');
+    const hint = node('span', hasSteps ? plan.steps.length + (plan.steps.length === 1 ? ' change' : ' changes') + ' · click a file to explore' : 'One conversation for this project', 'workspace-hint');
     actions.replaceChildren(...(hasSteps ? [approve] : []), fresh, fitButton, copyPlan, exportPlan, hint);
     if (busy) { const stop = node('button', 'Stop', 'workspace-stop'); stop.addEventListener('click', () => send('planStop')); actions.append(stop); }
   }
-  toolbar.append(ai); terminal.append(toolbar, transcript, composer); panel.append(terminal);
-  const submit = () => { const text = goal.value.trim(); if (!text || busy && !info.question) return; pendingGoal = ''; goal.value = ''; send(info.question ? 'planAnswer' : plan?.goal ? 'planChat' : 'planGoal', info.question ? { answer: text } : plan?.goal ? { text } : { goal: text }); };
+  toolbar.append(ai); terminal.append(toolbar, transcript);
+  const live = node('div', busy?.reply || '', 'terminal-stream'); live.hidden = !busy?.reply; live.setAttribute('role', 'status'); live.setAttribute('aria-label', 'Agent reply, streaming'); terminal.append(live);
+  terminal.append(composer); panel.append(terminal);
+  const submit = () => { const text = goal.value.trim(); if (!text || busy && !info.question) return; pendingGoal = ''; goal.value = ''; if (info.question) send('planAnswer', { answer: text }); else if (mode === 'plan') send(plan?.goal ? 'planChat' : 'planGoal', plan?.goal ? { text } : { goal: text }); else send('projectMessage', { text, mode }); };
   attachTerminal(terminal, messages, info);
   planComposer = goal; sizePlanComposer(goal);
   if (focusedGoal) { goal.focus?.(); if (caret?.[0] !== undefined) goal.setSelectionRange?.(...caret); }
@@ -1467,10 +1519,11 @@ function drawPlan() {
     popup.append(answer, reply, cancel); terminal.append(popup);
   }
   const recordedUsage = (plan?.calls || []).filter(call => call.usage).map(call => call.usage);
+  for (const call of info.conversationCalls || []) if (call.usage) recordedUsage.push(call.usage);
   if (!plan && info.lastRun?.usage) recordedUsage.push(info.lastRun.usage);
   const usage = [...recordedUsage, ...(busy?.usage ? [busy.usage] : [])];
   const total = key => usage.reduce((sum, value) => sum + (value[key] || 0), 0);
-  const usageLabel = usage.length
+  const usageLabel = busy?.stage === 'handoff' ? 'Local history · no AI' : usage.length
     ? tokenText(total('input') + total('cacheWrite')) + ' input · ' + tokenText(total('output')) + ' output · ' + tokenText(total('cacheRead')) + ' cached'
     : plan?.tokens?.used || info.questionTokens
       ? tokenText(plan?.tokens?.used || info.questionTokens) + ' tokens used (excludes cached input)'
@@ -1493,7 +1546,7 @@ function drawPlan() {
 
   let go;
   {
-    const row = node('div', undefined, 'plan-row'); go = node('button', hasSteps ? 'Send' : 'Create plan', 'go'); go.disabled = !goal.value.trim() || !!busy && !info.question; go.title = 'Ask your agent to investigate the project and propose a plan. No code is changed.';
+    const row = node('div', undefined, 'plan-row'); go = node('button', mode === 'plan' && !hasSteps ? 'Create plan' : 'Send', 'go'); go.disabled = !goal.value.trim() || !!busy && !info.question; go.title = mode === 'work' ? 'Send to your agent. It can answer questions, run tests and edit files as requested.' : mode === 'chat' ? 'Discuss the project without changing files.' : 'Investigate the project and propose a plan. No code is changed.';
     go.addEventListener('click', submit); row.append(go, node('span', 'Enter to send · Shift+Enter for a new line', 'plan-models')); terminal.append(row);
   }
   if (info.error) { const err = node('div', info.error, 'plan-err'); err.setAttribute('role', 'alert'); terminal.append(err); }
@@ -1794,6 +1847,7 @@ function drawStart() {
 }
 function render(s) {
   state = s;
+  const branch = $('project-branch'); if (branch) { branch.hidden = !s.git?.name; branch.textContent = s.git?.name ? '⎇ ' + s.git.name : ''; branch.title = (s.git?.root || '') + ' · Current Git branch. Local metadata, no AI.'; branch.onclick = () => send('refreshGit'); }
   document.body.setAttribute('data-palette', ['paper', 'slate'].includes(s.readingPalette) ? s.readingPalette : 'auto');
   byId = new Map((s.map?.nodes || []).map(item => [item.id, item]));
   positions = new Map((s.map?.nodes || []).map(item => [item.id, { x: item.x, y: item.y }]));
@@ -1816,7 +1870,7 @@ function render(s) {
   syncPlan(s);
   // Proposed files live in the plan, not the source graph. Keep their inspector
   // open when source/detail responses rebuild the map.
-  if (!byId.has(selected) && !(planMode && planLocal?.steps.some(step => step.file === selected && step.newFile))) selected = undefined;
+  if (!byId.has(selected) && !(planMode && planLocal?.steps.some(step => step.file === selected))) selected = undefined;
   // A new result is shown on the map, wherever the search came from.
   let zoomToHits = false;
   if (s.search?.query && s.search.query !== shownQuery) { shownQuery = s.search.query; zoomToHits = true; if (current !== 'map' || planMode) show('map'); }
@@ -1827,9 +1881,9 @@ function render(s) {
   // The plan panel is rebuilt only when the plan or its context changed, so typing is never interrupted.
   if (planSignature() !== planSig) drawPlan();
   // Refit when the set of folders changes, not when one is folded.
-  const key = (s.map?.boxes || []).map(b => b.id).join('|');
+  const key = planMode ? 'plan:' + planGraph.files.map(file => file.id).join('|') : 'map:' + (s.map?.boxes || []).map(b => b.id).join('|');
   if (key !== layoutKey) { layoutKey = key; needsFit = true; }
-  if (current === 'map' && needsFit) { needsFit = false; fit(); }
+  if (current === 'map' && needsFit) { needsFit = false; fit(true); }
   // A new search zooms to the files it found.
   if (zoomToHits && hits?.size) {
     const found = [...hits.keys()].filter(id => byId.has(id) && positions.has(id)).map(box);
@@ -1865,9 +1919,17 @@ $('rescan').addEventListener('click', () => send('rescan'));
 $('notes').addEventListener('click', () => send(state.notesBusy ? 'stop' : state.waitingForAI ? 'setup' : 'notes'));
 $('drawer-toggle').addEventListener('click', () => showDetails($('drawer').hidden));
 $('drawer-close').addEventListener('click', () => showDetails(false));
-window.addEventListener('message', event => { if (event.data?.type === 'map') render(event.data.state); });
+window.addEventListener('focus', () => send('conversationSync'));
+window.addEventListener('message', event => {
+  if (event.data?.type === 'map') render(event.data.state);
+  else if (event.data?.type === 'agentStream' && state.plan?.busy && typeof event.data.reply === 'string') {
+    state.plan.busy.reply = event.data.reply;
+    const live = $('plan-panel').querySelector?.('.terminal-stream');
+    if (live) { const atEnd = live.scrollHeight - live.scrollTop - live.clientHeight < 40; live.textContent = event.data.reply; live.hidden = !event.data.reply; if (atEnd) live.scrollTop = live.scrollHeight; }
+  }
+});
 showDetails(false);
-show('start');
+show('map');
 send('ready');
 </script></body></html>`;
 }

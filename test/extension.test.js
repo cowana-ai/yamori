@@ -1571,7 +1571,7 @@ test('project guide lists folder reading steps and a folder-box map; drag, fold,
   assert.equal(edgePath({ x: 0, y: 0, w: 100, h: 36 }, { x: 0, y: 104, w: 100, h: 36 }), 'M50 36 C50 70 50 70 50 104');
   assert.ok(fitTransform([{ x: 0, y: 0, w: 100, h: 40 }, { x: 300, y: 200, w: 100, h: 40 }], 800, 600).k <= 1.4);
   assert.deepEqual(byFolder(['b/x.py', 'main.py', 'a/y.py', 'a/z.py']), [['a', ['a/y.py', 'a/z.py']], ['b', ['b/x.py']], ['', ['main.py']]]);
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = [], sent = { at: i => messages.at(i), get length() { return messages.length; } }; let receive;
   vm.runInNewContext(pageScript(html), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON });
@@ -1583,7 +1583,9 @@ test('project guide lists folder reading steps and a folder-box map; drag, fold,
     guide: { folder: 'pipeline', steps: steps.map(step => ({ id: step.id, why: 'Why ' + step.id, uses: [], usedBy: ['main.py'], explained: step.id === 'pipeline/plan.py' })) },
     cards: { 'pipeline/plan.py': { purpose: 'Plans open loops.', role: 'loop planning', explained: true, terms: [{ term: 'L1', aliases: [], meaning: 'The first loop.', line: 5 }], defs: ['plan_loops'] } },
     glossary: [{ term: 'L1', aliases: ['L2'], meaning: 'The first loop.', file: 'pipeline/plan.py', line: 5 }, { term: '<b>HOOK</b>', aliases: [], meaning: '', kind: 'constant', file: 'models/script.py', line: 1 }] } } });
-  // Start here: folders and ordered steps, all text.
+  // The map opens first; the reading guide is still one click away.
+  assert.equal(elements['start-view'].hidden, true); assert.equal(elements['map-view'].hidden, false);
+  elements['tab-start'].events.click();
   assert.equal(elements['start-view'].hidden, false); assert.equal(elements['map-view'].hidden, true);
   const folderButtons = all(elements.folders).filter(el => el.tag === 'button');
   assert.deepEqual(folderButtons.map(el => el.children[0].textContent), ['Whole project', 'models/', 'pipeline/', 'tests/']);
@@ -1790,7 +1792,7 @@ test('Yamori MCP server answers over stdio with read-only lookups limited to map
     const replies = new Map(output.trim().split('\n').map(line => JSON.parse(line)).map(reply => [reply.id, reply]));
     assert.equal(replies.size, 13, 'notifications get no reply');
     assert.equal(replies.get(1).result.protocolVersion, '2025-11-25'); assert.equal(replies.get(1).result.serverInfo.name, 'yamori');
-    assert.deepEqual(replies.get(2).result.tools.map(tool => tool.name), ['get_plan', 'project_overview', 'start_here', 'project_map', 'list_files', 'file_info', 'find_symbol', 'search_name', 'glossary', 'tests_for', 'get_pseudocode', 'search_pseudocode', 'read_source'], 'inside Yamori\'s own requests the server is read-only: no save_pseudocode');
+    assert.deepEqual(replies.get(2).result.tools.map(tool => tool.name), ['get_conversation', 'get_plan', 'project_overview', 'start_here', 'project_map', 'list_files', 'file_info', 'find_symbol', 'search_name', 'glossary', 'tests_for', 'get_pseudocode', 'search_pseudocode', 'git_history', 'git_changes', 'read_source'], 'inside Yamori\'s own requests the server is read-only: no save_pseudocode');
     const text = id => replies.get(id).result.content[0].text;
     assert.match(text(3), /^Untrusted project data from Yamori/); assert.match(text(3), /function plan_loops \(line 3\)/); assert.match(text(3), /"file": "main.py"/);
     assert.match(text(4), /"file": "models\/script.py",\s*"line": 1/); assert.match(text(4), /pipeline\/plan.py/);
@@ -2122,8 +2124,8 @@ async function readerHarness(settings = {}, options = {}) {
     MarkdownString, Hover: class { constructor(contents, range) { this.contents = contents; this.range = range; } }, CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } }, EventEmitter: class { constructor() { this.fired = 0; this.event = () => noop(); } fire() { this.fired++; } dispose() {} },
     languages: { registerHoverProvider: (_, provider) => { harness.hover = provider; return noop(); }, registerCodeLensProvider: (_, provider) => { harness.lens = provider; return noop(); } },
     commands: { registerCommand(id, fn) { harness.commands.set(id, fn); return noop(); } },
-    workspace: { isTrusted: options.trusted !== false, workspaceFolders: [{ uri: new Uri(root) }], textDocuments: [], getWorkspaceFolder: uri => uri.fsPath.startsWith(root) ? { uri: new Uri(root) } : undefined, asRelativePath: uri => path.relative(root, uri.fsPath), openTextDocument: docFor,
-      findFiles: async pattern => (await walk(root)).filter(file => /package\.json/.test(pattern.pattern) ? false : /\.py$/.test(file)).map(file => new Uri(file)),
+    workspace: { isTrusted: options.trusted !== false, onDidGrantWorkspaceTrust: fn => { harness.grantTrust = fn; return noop(); }, workspaceFolders: [{ uri: new Uri(root) }], textDocuments: [], getWorkspaceFolder: uri => uri.fsPath.startsWith(root) ? { uri: new Uri(root) } : undefined, asRelativePath: uri => path.relative(root, uri.fsPath), openTextDocument: docFor,
+      findFiles: async pattern => (await walk(root)).filter(file => /package\.json/.test(pattern.pattern) ? false : /\.(py|md|mdx|txt|rst|json|yaml|yml|toml|ini|cfg)$/.test(file)).map(file => new Uri(file)),
       createFileSystemWatcher: () => ({ onDidCreate: noop, onDidDelete: noop, onDidChange: noop, dispose() {} }), getConfiguration: () => ({ get: (key, fallback) => key in settings ? settings[key] : fallback, inspect: () => ({}) }), onDidChangeTextDocument: noop },
     window: { createStatusBarItem: statusItem, activeTextEditor: undefined, visibleTextEditors: [], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showErrorMessage(message) { throw new Error(message); }, showInformationMessage: async () => undefined,
       showWarningMessage: async message => { harness.warnings.push(message); return harness.answer; },
@@ -2828,7 +2830,7 @@ test('guide search: a visible header box highlights every file that mentions a n
     assert.ok(h.panels.some(panel => panel.type === 'yamoriSetup')); assert.equal(flows.length, 1);
   } finally { delete testStatus.codex; await h.close(); }
   // The page: hits glow and carry counts; the side panel lists them and the flow.
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = []; let receive;
   vm.runInNewContext(pageScript(require('../src/views/guide').mapHTML()), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON, setTimeout, clearTimeout });
@@ -3159,7 +3161,7 @@ test('planning: free starting points, a cheap draft that escalates once only whe
     // 7. Start over keeps the old plan in history.
     await h.guide.receive({ type: 'planClear' });
     assert.equal(plan().plan, undefined);
-    assert.deepEqual(plan().conversation, [], 'a fresh plan has a fresh transcript; old messages stay in history');
+    assert.ok(plan().conversation.some(message => message.text === 'plan the loops and skip the hook'), 'a new plan preserves the project conversation');
     assert.equal(plan().busy, undefined); assert.equal(plan().question, undefined);
     let after; for (let i = 0; i < 80 && !after?.history?.length; i++) { await new Promise(resolve => setTimeout(resolve, 25)); after = JSON.parse(await fs.readFile(path.join(store, 'plan.json'), 'utf8').catch(() => 'null')); }
     assert.equal(after.history.length, 1); assert.equal(after.current, undefined);
@@ -3216,7 +3218,7 @@ test('planning: a good quick draft is kept (no escalation), a broad goal goes st
 });
 
 test('the Plan tab: the same map with numbered steps, ripples and suggestions, and every part of the plan editable, draggable and undoable', async () => {
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
   const { document, elements, all } = fakeDocument(ids);
   const documentEvents = {}; document.addEventListener = (type, fn) => { documentEvents[type] = fn; };
   const messages = [], savedView = {}; let receive;
@@ -3231,14 +3233,16 @@ test('the Plan tab: the same map with numbered steps, ripples and suggestions, a
     impact: { a: { usedBy: [{ file: 'main.py' }], uses: [], tests: [{ id: 'tests/test_plan.py::test_first_loop' }], risk: ['No unit test calls the functions in these lines.'] }, b: { usedBy: [], uses: [], tests: [], risk: [] } },
     ripple: ['main.py'], candidates: { files: [{ file: 'pipeline/plan.py', score: 6, why: ['name: plan'] }, { file: 'models/script.py', score: 3, why: ['defines: hook'] }], weak: false },
     estimate: { sent: 3200, whole: 9800, percent: 67, omitted: 0, files: 1, budget: 6000 }, notes: [{ kind: 'order', text: 'Step 1 uses write.py, which step 2 changes.' }], settings: { mode: 'auto' }, ...extra });
-  const push = plan => receive({ data: { type: 'map', state: { files: 5, links: 6, notes: { done: 0, total: 4 }, folders: [], map, guide: { folder: '', steps: [] }, cards, glossary: [], plan } } });
+  const push = plan => receive({ data: { type: 'map', state: { git: plan.git, files: 5, links: 6, notes: { done: 0, total: 4 }, folders: [], map, guide: { folder: '', steps: [] }, cards, glossary: [], plan } } });
   const panel = elements['plan-panel'], node = id => all(elements.nodes).find(el => el.attributes?.['data-id'] === id);
   const stepCards = () => all(panel).filter(el => el.attributes?.['data-step']);
   const titles = () => stepCards().map(card => all(card).find(el => el.className === 'step-title').value);
   const button = (label, from = panel) => [...all(from), ...(from === panel ? all(elements['plan-actions']) : [])].find(el => el.tag === 'button' && (el.textContent === label || el.attributes?.['aria-label'] === label));
   push(planInfo(1));
   assert.equal(panel.hidden, true, 'the plan panel waits for the Plan tab');
+  vm.runInNewContext('view = { x: 0, y: 0, k: 0.2 }; needsFit = false;', sandbox);
   elements['tab-plan'].events.click();
+  assert.ok(vm.runInNewContext('view.k', sandbox) >= 0.75, 'planning refits at a readable zoom instead of inheriting the full-project zoom');
   assert.deepEqual([panel.hidden, elements['map-view'].hidden, elements['start-view'].hidden, elements['tab-plan'].attributes['aria-selected'], elements['tab-map'].attributes['aria-selected']], [false, false, true, 'true', 'false']);
   assert.ok(button('Approve & implement'), 'approval is directly above the canvas');
   button('Approve & implement').events.click(); assert.deepEqual(messages.at(-1), { type: 'planExecute', id: 'p1' });
@@ -3521,6 +3525,38 @@ test('the Plan tab: the same map with numbered steps, ripples and suggestions, a
   assert.ok(all(panel).some(el => el.textContent === 'Activity'));
   push({ ...measured, rev: 27, snippet: { step: 'a', text: 'source reply' } });
   assert.ok(button('Generate pseudocode'), 'source updates preserve the inspector');
+  push({ ...measured, rev: 28, mode: 'chat', conversationHasMore: true, git: { name: 'feature/audience', root: '/repo' } });
+  assert.equal(button('Chat').attributes['aria-pressed'], 'true');
+  const chatGoal = all(panel).find(el => el.id === 'plan-goal'); chatGoal.value = 'Why did we change the writer?'; chatGoal.events.input(); button('Send').events.click(); assert.deepEqual(messages.at(-1), { type: 'projectMessage', mode: 'chat', text: 'Why did we change the writer?' });
+  button('Work').events.click(); assert.deepEqual(messages.at(-1), { type: 'projectMode', mode: 'work' });
+  button('Continue from…').events.click(); assert.equal(messages.at(-1).type, 'handoff'); button('Earlier messages').events.click(); assert.equal(messages.at(-1).type, 'conversationEarlier');
+  assert.match(elements['project-branch'].textContent, /feature\/audience/); elements['project-branch'].onclick(); assert.equal(messages.at(-1).type, 'refreshGit');
+  assert.equal(vm.runInNewContext('chatFocused', sandbox), false, 'the canvas is the default');
+  button('Focus chat').events.click(); assert.equal(document.body.attributes['data-chat-focused'], 'true'); assert.equal(button('Back to canvas').attributes['aria-pressed'], 'true');
+  const focusedBranch = () => all(panel).find(el => el.className === 'conversation-branch');
+  assert.equal(focusedBranch().textContent, '⎇ feature/audience');
+  composer().value = 'Keep my unfinished message'; composer().events.input();
+  // Same plan revision and conversation: only local HEAD changed.
+  push({ ...measured, rev: 28, mode: 'chat', conversationHasMore: true, git: { name: 'feat/script-quality-skills', root: '/repo' } });
+  assert.equal(focusedBranch().textContent, '⎇ feat/script-quality-skills');
+  assert.equal(composer().value, 'Keep my unfinished message');
+  focusedBranch().events.click(); assert.equal(messages.at(-1).type, 'refreshGit');
+  button('Back to canvas').events.click(); assert.equal(document.body.attributes['data-chat-focused'], 'false');
+  push({ ...measured, rev: 29, busy: { text: 'Writing reply' } });
+  const originalComposer = composer(), originalCanvas = elements.nodes.children[0];
+  panel.querySelector = selector => selector === '.terminal-stream' ? all(panel).find(el => el.className === 'terminal-stream') : undefined;
+  const live = all(panel).find(el => el.className === 'terminal-stream'); assert.equal(live.hidden, true);
+  receive({ data: { type: 'agentStream', reply: 'Here is' } }); assert.equal(live.textContent, 'Here is'); assert.equal(live.hidden, false);
+  receive({ data: { type: 'agentStream', reply: 'Here is the answer.' } }); assert.equal(live.textContent, 'Here is the answer.');
+  assert.equal(composer(), originalComposer, 'streaming preserves the typing field'); assert.equal(elements.nodes.children[0], originalCanvas, 'streaming preserves the canvas');
+  push({ ...measured, rev: 30 }); assert.equal(all(panel).find(el => el.className === 'terminal-stream').hidden, true, 'final response clears the live preview');
+  // A valid plan can arrive before its file metadata or expanded folder nodes.
+  const completeNodes = map.nodes, knownCard = cards['pipeline/plan.py'];
+  map.nodes = map.nodes.filter(item => item.id !== 'pipeline/plan.py'); delete cards['pipeline/plan.py'];
+  push(planInfo(31)); assert.ok(node('pipeline/plan.py'), 'every affected file has a box even outside the current map');
+  assert.ok(all(node('pipeline/plan.py')).some(el => /2|1/.test(el.textContent || '')));
+  map.nodes = completeNodes; cards['pipeline/plan.py'] = knownCard; push(planInfo(32));
+  assert.ok(node('pipeline/plan.py'), 'real map metadata replaces a temporary plan node');
   // Back to the map: the plan panel goes away, the map stays.
   elements['tab-map'].events.click(); assert.deepEqual([panel.hidden, elements['map-view'].hidden], [true, false]);
   assert.equal(elements['plan-actions'].hidden, true, 'plan actions do not clutter Map');
@@ -3899,26 +3935,41 @@ test('a notebook main-model answer with bad step links remains readable without 
 });
 
 
+// Simulates the provider protocols without contacting a model.
+function codingFixture(log) {
+  return `const fs=require('node:fs'),a=process.argv.slice(2),out=x=>console.log(JSON.stringify(x));
+if(a.includes('--help')){console.log('--permission-prompts');process.exit(0);}
+let thread, method;
+const save=(prompt,turn)=>{const data={args:a,prompt,cwd:process.cwd(),thread,method,turn};fs.writeFileSync('received.json',JSON.stringify(data));${log ? `fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(data)+'\\n');` : ''}};
+const result=(prompt,chat)=>prompt==='malformed'?{}:chat?{message:'Read-only answer.'}:{status:prompt==='blocked'?'blocked':'completed',summary:'Implemented and checked.'};
+if(a.includes('app-server')){
+ require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);
+ if(m.method==='initialize')out({id:m.id,result:{}});
+ if(m.method==='thread/start'||m.method==='thread/resume'){thread=m.params;method=m.method;if(thread.threadId==='missing-session')return out({id:m.id,error:{message:'No saved session found'}});out({id:m.id,result:{thread:{id:'native-session'},model:'fixture-model'}});}
+ if(m.method==='turn/start'){const prompt=m.params.input[0].text;save(prompt,m.params);if(prompt==='cancel')return;
+ const chat=!!m.params.outputSchema.properties.message,r=result(prompt,chat);if(!chat)fs.writeFileSync('changed.py','answer = 42\\n');
+ out({method:'item/started',params:{item:{type:'commandExecution',command:'npm test'}}});out({method:'item/started',params:{item:{type:'agentMessage'}}});
+ const raw=JSON.stringify(r),cut=Math.max(raw.indexOf('Implemented'),raw.indexOf('Read-only'))+5;out({method:'item/agentMessage/delta',params:{delta:raw.slice(0,cut)}});
+ setTimeout(()=>{out({method:'item/agentMessage/delta',params:{delta:raw.slice(cut)}});out({method:'thread/tokenUsage/updated',params:{tokenUsage:{total:{inputTokens:1000,cachedInputTokens:400,outputTokens:200},last:{inputTokens:100,cachedInputTokens:40,outputTokens:20}}}});out({method:'turn/completed',params:{turn:{status:'completed'}}});},40);
+ }});
+}else{let prompt='';process.stdin.on('data',x=>prompt+=x);process.stdin.on('end',()=>{save(prompt);const schema=JSON.parse(a[a.indexOf('--json-schema')+1]),r=result(prompt,!!schema.properties.message);
+ out({type:'stream_event',event:{type:'content_block_start',index:0,content_block:{type:'thinking'}}});out({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'thinking_delta',thinking:'PRIVATE_REASONING'}}});
+ out({type:'stream_event',event:{type:'content_block_start',index:1,content_block:{type:'tool_use',name:'StructuredOutput'}}});
+ const raw=JSON.stringify(r),cut=Math.max(raw.indexOf('Implemented'),raw.indexOf('Read-only'))+5;out({type:'stream_event',event:{type:'content_block_delta',index:1,delta:{type:'input_json_delta',partial_json:raw.slice(0,cut)}}});
+ setTimeout(()=>{out({type:'stream_event',event:{type:'content_block_delta',index:1,delta:{type:'input_json_delta',partial_json:raw.slice(cut)}}});out({type:'result',session_id:'claude-native-session',is_error:prompt==='error',permission_denials:prompt==='denied'?[{tool_name:'Bash'}]:[],result:'Permission needed.',structured_output:r,usage:{input_tokens:80,output_tokens:12}});},40);
+ });}`;
+}
+
 test('approved implementation uses writing tools, honors selected settings and requires explicit completion', async () => {
   const { implementPlan } = require('../src/ai/engine');
   const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-implementation-test-')), binary = path.join(root, 'fixture.js');
   try {
-    await fs.writeFile(binary, `const fs=require('node:fs');const args=process.argv.slice(2);if(args.includes('--help')){console.log('--permission-prompts');process.exit(0);}let prompt='';process.stdin.on('data',x=>prompt+=x);process.stdin.on('end',()=>{
-      fs.writeFileSync('received.json',JSON.stringify({args,prompt,cwd:process.cwd()}));
-      const status=prompt==='blocked'?'blocked':'completed';
-      if(prompt==='cancel'){setTimeout(()=>{},10000);return;}
-      fs.writeFileSync('changed.py','answer = 42\\n');
-      if(args.includes('exec')) {
-        console.log(JSON.stringify({type:'item.started',item:{type:'command_execution',command:'npm test'}}));
-        console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:100,cached_input_tokens:40,output_tokens:20}}));
-        fs.writeFileSync(args[args.indexOf('--output-last-message')+1],prompt==='malformed'?'{}':JSON.stringify({status,summary:'Implemented and checked.'}));
-      }else console.log(JSON.stringify({type:'result',is_error:prompt==='error',permission_denials:prompt==='denied'?[{tool_name:'Bash'}]:[],result:'Permission needed.',structured_output:{status,summary:'Implemented and checked.'},usage:{input_tokens:80,output_tokens:12}}));
-    });`);
+    await fs.writeFile(binary, codingFixture());
     const updates = [];
     const result = await implementPlan({ provider: 'codex', cliPath: binary, cwd: root, model: 'selected-model', effort: 'medium', prompt: 'implement', onProgress: u => updates.push(u) });
     const received = JSON.parse(await fs.readFile(path.join(root, 'received.json'), 'utf8'));
-    assert.equal(received.cwd, await fs.realpath(root)); assert.ok(received.args.includes('workspace-write')); assert.ok(received.args.includes('selected-model')); assert.ok(received.args.includes('model_reasoning_effort=medium'));
+    assert.equal(received.cwd, await fs.realpath(root)); assert.equal(received.thread.sandbox, 'workspace-write'); assert.equal(received.thread.model, 'selected-model'); assert.equal(received.thread.config.model_reasoning_effort, 'medium');
     assert.ok(!received.args.includes('--dangerously-bypass-approvals-and-sandbox'));
     assert.deepEqual(result.usage, { input: 60, output: 20, cacheRead: 40, cacheWrite: 0 }); assert.ok(updates.some(u => /npm test/.test(u.phase || '')));
     assert.match(await fs.readFile(path.join(root, 'changed.py'), 'utf8'), /42/);
@@ -3954,16 +4005,283 @@ test('approving a plan executes once, excludes rejected and finished steps, arch
     };
     const id = await setup();
     await h.guide.receive({ type: 'planExecute', id: 'stale-id' }); assert.equal(calls.length, 0);
-    h.vscode.workspace.isTrusted = false; await h.guide.receive({ type: 'planExecute', id }); assert.equal(calls.length, 0); assert.match(h.guideState().plan.error, /Trust this workspace/); h.vscode.workspace.isTrusted = true;
+    h.vscode.workspace.isTrusted = false; await h.guide.receive({ type: 'planExecute', id }); assert.equal(calls.length, 0); assert.match(h.guideState().plan.error, /Trust this workspace/);
+    await h.guide.receive({ type: 'planEdit', plan: { ...h.guideState().plan.plan, summary: 'Changed while waiting for trust.' } });
+    h.vscode.workspace.isTrusted = true; h.grantTrust(); assert.equal(calls.length, 0, 'trust cannot execute a changed plan without fresh approval'); assert.match(h.guideState().plan.error, /plan changed/);
     const run = h.guide.receive({ type: 'planExecute', id }); await h.until(() => calls.length === 1, 'implementation started');
     assert.equal(h.guideState().plan.busy.stage, 'implement'); assert.equal(calls[0].cwd, h.root); assert.equal(calls[0].model, 'chosen-model'); assert.equal(calls[0].effort, 'high');
-    assert.match(calls[0].prompt, /Active change/); assert.match(calls[0].prompt, /Keep the hook/); assert.doesNotMatch(calls[0].prompt, /Already finished|Rejected change/);
+    assert.match(calls[0].prompt, /Active change/); assert.match(calls[0].prompt, /Keep the hook/); assert.doesNotMatch(calls[0].prompt.slice(calls[0].prompt.indexOf('Goal: plan loops')), /Already finished|Rejected change/, 'only active steps are in the execution instructions; history remains available as context');
     await h.guide.receive({ type: 'planExecute', id }); await h.guide.receive({ type: 'planClear' }); await h.guide.receive({ type: 'planEdit', plan: { steps: [] } }); assert.equal(calls.length, 1); assert.equal(h.guideState().plan.plan.id, id);
     release({ summary: 'Implemented the loop change; checks passed.', usage: { input: 100, output: 10 } }); await run;
-    assert.equal(h.guideState().plan.plan, undefined); assert.equal(h.guideState().plan.busy, undefined); assert.match(h.guideState().plan.conversation[0].text, /Implementation complete/); assert.equal(h.guideState().plan.lastRun.usage.output, 10);
+    assert.equal(h.guideState().plan.plan, undefined); assert.equal(h.guideState().plan.busy, undefined); assert.ok(h.guideState().plan.conversation.some(message => /Implementation complete/.test(message.text))); assert.equal(h.guideState().plan.conversation[0].role, 'user', 'completion preserves the original conversation'); assert.equal(h.guideState().plan.lastRun.usage.output, 10);
     const fs = require('node:fs/promises'), path = require('node:path'); const projects = path.join(h.temp, 'storage', 'cache', 'projects'), index = JSON.parse(await fs.readFile(path.join(projects, 'index.json'), 'utf8')); const saved = JSON.parse(await fs.readFile(path.join(projects, index[await fs.realpath(h.root)].dir, 'plan.json'), 'utf8'));
     assert.equal(saved.current, undefined); assert.equal(saved.history.at(-1).id, id); assert.ok(saved.history.at(-1).completedAt); assert.equal(saved.history.at(-1).steps[0].status, 'done');
     const next = await setup(), cancelled = h.guide.receive({ type: 'planExecute', id: next }); await h.until(() => calls.length === 2, 'second run started');
     await h.guide.receive({ type: 'planStop' }); await cancelled; assert.ok(stopped); assert.equal(h.guideState().plan.plan.id, next); assert.match(h.guideState().plan.error, /stopped.*plan was kept/is);
+  } finally { await h.close(); }
+});
+
+
+test('planning can inspect Markdown profiles and prompts in Restricted Mode without asking for attachments', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), real = require('../src/ai/engine');
+  let inspected = false, captured, implemented = false;
+  const h = await readerHarness({ autoNotes: false }, { trusted: false, engine: () => ({ implementPlan: async () => { implemented = true; return { summary: 'Implemented and checked.' }; }, requestStructured: async options => {
+    if (options.schema !== real.PLAN_SCHEMA) throw new Error('Unexpected model request.');
+    captured = options; assert.ok(options.tools, 'static project tools remain available without workspace trust');
+    assert.equal(options.tools.projectRoot, h.root); assert.equal(options.tools.env.ELECTRON_RUN_AS_NODE, '1');
+    const args = options.tools.args, root = args[args.indexOf('--root') + 1], store = args[args.indexOf('--store') + 1];
+    const server = require('../src/project/mcp').createServer({ root, store });
+    const files = await server.call('list_files', {}); assert.match(files.content[0].text, /audience-profile\.md/); assert.match(files.content[0].text, /writer\.md/);
+    const source = await server.call('read_source', { path: 'prompts/writer.md' }); assert.equal(source.isError, undefined); assert.match(source.content[0].text, /Grade 10/);
+    const profile = await server.call('read_source', { path: 'audience-profile.md' }); assert.equal(profile.isError, undefined); assert.match(profile.content[0].text, /No prior programming knowledge/);
+    inspected = true;
+    return { raw: JSON.stringify({ question: '', summary: 'Use the audience profile for plain language.', steps: [{ file: 'prompts/writer.md', lines: [1, 2], title: 'Use the audience profile', change: 'Read the audience profile before writing; explain unfamiliar terms in simple language.', why: 'Readers can follow without prior knowledge.' }] }), actualModel: 'fixture-model', usage: { input: 100, output: 20 } };
+  } }) });
+  try {
+    await fs.mkdir(path.join(h.root, 'prompts')); await fs.writeFile(path.join(h.root, 'prompts/writer.md'), '# Writer\nGrade 10 explanations.\n'); await fs.writeFile(path.join(h.root, 'audience-profile.md'), '# Audience\nNo prior programming knowledge.\n');
+    await h.guide.receive({ type: 'planGoal', goal: 'Make the writer use the audience profile and simplify its language' });
+    assert.ok(inspected); assert.equal(h.guideState().notes.total, 4, 'text discovery does not create extra automatic AI note requests'); assert.equal(h.guideState().plan.plan.steps.length, 1); assert.equal(h.guideState().plan.question, undefined); assert.match(captured.prompt, /Do not ask the user to attach/); assert.match(captured.prompt, /INITIAL REQUEST/);
+    const id = h.guideState().plan.plan.id; let trustCommand;
+    h.vscode.commands.executeCommand = async command => { trustCommand = command; };
+    await h.guide.receive({ type: 'planExecute', id }); assert.equal(trustCommand, 'workbench.trust.manage'); assert.equal(h.guideState().plan.plan.id, id, 'opening trust does not remove the plan');
+    assert.equal(implemented, false, 'restricted planning cannot modify source');
+    h.vscode.workspace.isTrusted = true; h.grantTrust();
+    await h.until(() => implemented && !h.guideState().plan.plan && !h.guideState().plan.busy, 'granting trust resumes the explicitly approved plan once');
+  } finally { await h.close(); }
+});
+
+test('read-only project tools find text configs, report Git changes and reject escaping paths', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os'), cp = require('node:child_process');
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-context-files-')), root = path.join(folder, 'repo'), store = path.join(folder, 'store');
+  await fs.mkdir(root); const git = (...args) => cp.execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+  try {
+    await fs.writeFile(path.join(root, 'main.py'), 'def main():\n    return 1\n'); await fs.writeFile(path.join(root, 'audience.md'), '# Audience\nNo experience.\n'); await fs.writeFile(path.join(root, 'settings.yaml'), 'audience: audience.md\n');
+    git('init','-q'); git('add','.'); git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Initial');
+    await fs.writeFile(path.join(root, 'audience.md'), '# Audience\nGrade 10.\n');
+    const server = require('../src/project/mcp').createServer({ root, store }), text = reply => reply.content[0].text;
+    const files = await server.call('list_files', {}); assert.match(text(files), /audience\.md/); assert.match(text(files), /settings\.yaml/);
+    assert.match(text(await server.call('search_name', { query: 'Grade 10' })), /audience\.md/);
+    assert.match(text(await server.call('read_source', { path: 'settings.yaml' })), /audience: audience.md/);
+    const diff = await server.call('git_changes', { path: 'audience.md' }); assert.equal(diff.isError, undefined, text(diff)); assert.match(text(diff), /Grade 10/); assert.match(text(diff), /No experience/);
+    assert.equal((await server.call('git_changes', { base: '--ext-diff' })).isError, true);
+    await fs.writeFile(path.join(folder, 'private.md'), 'OUTSIDE_PROJECT'); await fs.symlink(path.join(folder, 'private.md'), path.join(root, 'escape.md'));
+    const escape = await server.call('read_source', { path: 'escape.md' }); assert.equal(escape.isError, true); assert.doesNotMatch(text(escape), /OUTSIDE_PROJECT/);
+    const graph = await projectMap.scanFolder(root, undefined, new projectMap.Indexer()); assert.equal(graph.files['audience.md'].contextFile, true); assert.deepEqual(graph.files['audience.md'].defs, []); assert.deepEqual(graph.files['audience.md'].refs, []);
+    assert.match(projectMap.skeleton('# Audience\nGrade 10.\n', graph.files['audience.md']), /2: Grade 10/);
+  } finally { await fs.rm(folder, { recursive: true, force: true }); }
+});
+
+
+test('native Codex planning uses the project cwd and reports MCP startup failures instead of asking for attachments', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os'), real = require('../src/ai/engine');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-access-failure-')), binary = path.join(root, 'codex.js'), log = path.join(root, 'cwd.txt'), session = {};
+  try {
+    await fs.writeFile(binary, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});const send=x=>console.log(JSON.stringify(x));fs.writeFileSync(${JSON.stringify(log)},process.cwd());rl.on('line',s=>{const m=JSON.parse(s);if(m.method==='initialize')send({id:m.id,result:{}});if(m.method==='thread/start'){send({id:m.id,result:{thread:{id:'failure'},model:'fixture'}});send({method:'mcpServer/startupStatus/updated',params:{name:'yamori',status:'failed',error:'Fixture could not start project tools.'}});}});`);
+    await assert.rejects(real.requestStructured({ provider: 'codex', cliPath: binary, planning: true, session, tools: { command: process.execPath, args: [], projectRoot: root }, prompt: 'Make a plan', schema: real.PLAN_SCHEMA }), /Yamori project tools could not start.*attachments are not needed/);
+    assert.equal(await fs.readFile(log, 'utf8'), await fs.realpath(root));
+  } finally { real.disposePlanningSession(session); await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+test('project chat continues through planning, implementation, testing and a new plan with native session references', async () => {
+  const calls = [], planningCalls = [], queue = [GOOD_PLAN];
+  const h = await readerHarness({ autoNotes: false }, { engine: () => ({ ...planEngine(planningCalls, queue)(), implementPlan: async options => {
+    calls.push(options); const session = { provider: 'codex', cwd: options.cwd, id: 'native-project-session' }; options.onSession?.(session);
+    options.onProgress?.({ kind: 'tool', phase: options.mode === 'chat' ? 'Reading writer.py' : 'Running requested checks' });
+    options.onProgress?.({ stage: 'write', reply: 'The writer' }); options.onProgress?.({ stage: 'write', reply: 'The writer' }); options.onProgress?.({ stage: 'write', reply: 'The writer numbers its loops.' });
+    return { summary: options.mode === 'chat' ? 'The writer numbers its loops.' : 'Requested work completed; checks passed.', usage: { input: 30, output: 10, cacheRead: 90 }, session };
+  } }) });
+  try {
+    h.vscode.workspace.saveAll = async () => true;
+    await h.guide.receive({ type: 'projectMessage', mode: 'chat', text: 'How does this project write a script?' });
+    assert.deepEqual(h.guide.messages.filter(message => message.type === 'agentStream').map(message => message.reply), ['The writer', 'The writer numbers its loops.']);
+    assert.equal(h.guideState().plan.plan, undefined, 'discussion does not create a plan'); assert.equal(h.guideState().plan.mode, 'chat'); assert.ok(h.guideState().plan.conversation.some(row => /numbers its loops/.test(row.text)));
+    await h.guide.receive({ type: 'planGoal', goal: 'plan the loops and skip the hook' }); const plan = h.guideState().plan.plan;
+    assert.match(planningCalls[0].prompt, /How does this project write a script/); assert.equal(h.guideState().plan.mode, 'plan');
+    await h.guide.receive({ type: 'planExecute', id: plan.id }); assert.equal(h.guideState().plan.plan, undefined); assert.equal(h.guideState().plan.mode, 'work');
+    assert.equal(calls[1].session.id, 'native-project-session'); assert.match(calls[1].prompt, /How does this project write a script/);
+    await h.guide.receive({ type: 'projectMessage', mode: 'work', text: 'Run the tests for those changes' });
+    assert.equal(calls[2].session.id, 'native-project-session'); assert.match(calls[2].prompt, /Run the tests for those changes/);
+    assert.equal(h.guideState().plan.plan, undefined, 'a testing follow-up does not start another plan');
+    const conversation = h.guideState().plan.conversation; assert.ok(conversation.some(row => row.text === 'How does this project write a script?')); assert.ok(conversation.some(row => row.kind === 'plan')); assert.ok(conversation.some(row => row.kind === 'completion')); assert.ok(conversation.some(row => row.role === 'tool'));
+    const id = h.guideState().plan.conversationId; await h.guide.receive({ type: 'planClear' }); assert.equal(h.guideState().plan.conversationId, id); assert.ok(h.guideState().plan.conversation.some(row => /Run the tests for those changes/.test(row.text)));
+    const fs = require('node:fs/promises'), path = require('node:path'), projects = path.join(h.temp, 'storage', 'cache', 'projects');
+    await new Promise(resolve => setTimeout(resolve, 450)); const index = JSON.parse(await fs.readFile(path.join(projects, 'index.json'), 'utf8')), store = path.join(projects, index[await fs.realpath(h.root)].dir), data = JSON.parse(await fs.readFile(path.join(store, 'plan.json'), 'utf8'));
+    assert.equal(data.conversation.sessions.codex.id, 'native-project-session'); assert.ok(data.conversation.messages.some(row => /Run the tests for those changes/.test(row.text)));
+    const server = require('../src/project/mcp').createServer({ root: h.root, store }); const history = await server.call('get_conversation', { limit: 50 }); assert.equal(history.isError, undefined); assert.match(history.content[0].text, /How does this project write a script/); assert.match(history.content[0].text, /Run the tests for those changes/);
+  } finally { await h.close(); }
+});
+
+test('read-only project discussion works without a plan in Restricted Mode', async () => {
+  const real = require('../src/ai/engine'); let calls = 0;
+  const h = await readerHarness({ autoNotes: false }, { trusted: false, engine: () => ({ requestStructured: async options => { calls++; assert.equal(options.schema, real.CHAT_SCHEMA); assert.ok(options.tools); assert.match(options.prompt, /do not draft a plan unless requested/); return { raw: JSON.stringify({ message: 'The entry point calls the planner and writer.' }), usage: { input: 20, output: 10 } }; }, implementPlan: async () => { throw new Error('Must not execute project code'); } }) });
+  try {
+    await h.guide.receive({ type: 'projectMessage', mode: 'chat', text: 'Explain the entry point' }); assert.equal(calls, 1); assert.equal(h.guideState().plan.plan, undefined); assert.equal(h.guideState().plan.conversation.at(-1).text, 'The entry point calls the planner and writer.');
+    await h.guide.receive({ type: 'projectMessage', mode: 'work', text: 'Run the tests' }); assert.equal(calls, 1); assert.match(h.guideState().plan.error, /Trust this workspace/); assert.ok(h.guideState().plan.conversation.some(row => row.text === 'Run the tests'));
+  } finally { await h.close(); }
+});
+
+test('native coding and chat runners resume their session, keep chat read-only and recover a missing session from local history', async () => {
+  const real = require('../src/ai/engine'), fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-chat-runner-')), binary = path.join(root, 'fixture.js'), log = path.join(root, 'calls.jsonl');
+  try {
+    await fs.writeFile(binary, codingFixture(log));
+    for (const provider of ['codex', 'claude']) {
+      const updates = []; let finished = false;
+      const pending = real.implementPlan({ provider, cliPath: binary, cwd: root, prompt: 'Run checks', onProgress: update => { assert.equal(finished, false); updates.push(update); } });
+      const work = await pending; finished = true;
+      const replies = updates.filter(update => update.reply).map(update => update.reply); assert.ok(replies.length >= 2, provider + ' streams partial text before completion'); assert.ok(replies[0].length < replies.at(-1).length); assert.equal(replies.at(-1), work.summary); assert.ok(!JSON.stringify(updates).includes('PRIVATE_REASONING'));
+      assert.equal(work.session.provider, provider);
+      const chat = await real.implementPlan({ provider, cliPath: binary, cwd: root, prompt: 'Explain the result', mode: 'chat', session: work.session }); assert.equal(chat.summary, 'Read-only answer.');
+    }
+    const calls = (await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(calls[0].thread.ephemeral, false); assert.equal(calls[1].method, 'thread/resume'); assert.equal(calls[1].thread.threadId, 'native-session'); assert.equal(calls[1].thread.sandbox, 'read-only');
+    assert.ok(calls[3].args.includes('--resume')); assert.ok(calls[3].args.includes('claude-native-session')); assert.equal(calls[3].args[calls[3].args.indexOf('--permission-mode')+1], 'plan'); assert.equal(calls[3].args[calls[3].args.indexOf('--tools')+1], 'Read,Glob,Grep');
+    const recovered = await real.implementPlan({ provider: 'codex', cliPath: binary, cwd: root, mode: 'chat', session: { provider: 'codex', cwd: root, id: 'missing-session' }, prompt: 'Only new question', fallbackPrompt: 'Full saved project conversation plus new question' }); assert.equal(recovered.summary, 'Read-only answer.');
+    const last = JSON.parse((await fs.readFile(log, 'utf8')).trim().split('\n').at(-1)); assert.match(last.prompt, /Full saved project conversation/); assert.equal(last.method, 'thread/start');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+test('branch display refreshes from HEAD changes without a model call', async () => {
+  const h=await readerHarness({autoNotes:false}); const fs=require('node:fs/promises'),path=require('node:path');
+  try { await fs.mkdir(path.join(h.root,'.git'));await fs.writeFile(path.join(h.root,'.git','HEAD'),'ref: refs/heads/feature/audience\n');await h.guide.receive({type:'refreshGit'});assert.equal(h.guideState().git.name,'feature/audience');const calls=h.requests.length;await fs.writeFile(path.join(h.root,'.git','HEAD'),'ref: refs/heads/fix/clarity\n');await h.until(()=>h.guideState().git?.name==='fix/clarity','branch watcher refreshes the display');assert.equal(h.requests.length,calls); await fs.writeFile(path.join(h.root,'.git','HEAD'),'ref: refs/heads/feat/script-quality-skills\n'); await h.guide.receive({type:'conversationSync'}); assert.equal(h.guideState().git.name,'feat/script-quality-skills'); assert.equal(h.requests.length,calls); }finally{await h.close();}
+});
+
+
+test('Continue from imports a native session, syncs external updates and opens that same session without an AI call', async () => {
+  const fs=require('node:fs/promises'),path=require('node:path'), settings={autoNotes:false};const h=await readerHarness(settings);
+  try {
+    const binary=path.join(h.temp,'native-history.js'), rowsFile=path.join(h.temp,'native-rows.json');
+    await fs.writeFile(rowsFile,JSON.stringify([{id:'u1',type:'userMessage',content:[{type:'text',text:'Simplify the audience language'}]},{id:'a1',type:'agentMessage',text:'Use a beginner audience profile.'}]));
+    await fs.writeFile(binary,`const fs=require('node:fs'),rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',s=>{const m=JSON.parse(s),reply=result=>console.log(JSON.stringify({id:m.id,result}));if(m.method==='initialize')reply({});if(m.method==='thread/list')reply({data:[{id:'external-session',cwd:${JSON.stringify(h.root)},preview:'Answer the current question about this project. CURRENT INTERNAL TEXT',updatedAt:1000}]});if(m.method==='thread/read')reply({thread:{id:'external-session',cwd:${JSON.stringify(h.root)},preview:'Answer the current question about this project. CURRENT INTERNAL TEXT'}});if(m.method==='thread/turns/list')reply({data:[{items:JSON.parse(fs.readFileSync(${JSON.stringify(rowsFile)},'utf8'))}],nextCursor:null});});`);
+    settings.codexPath=binary;let pick=0;h.vscode.window.showQuickPick=async items=>pick++===0?{action:'codex'}:items[0];
+    await h.guide.receive({type:'handoff'}); assert.doesNotMatch(JSON.stringify(h.guideState().plan.conversation), /CURRENT INTERNAL TEXT/); assert.ok(h.guideState().plan.conversation.some(row => row.text === 'Continuing Codex: Codex conversation')); assert.equal(h.guideState().plan.nativeSession.id,'external-session');assert.equal(h.guideState().plan.mode,'work');assert.ok(h.guideState().plan.conversation.some(row=>row.text==='Simplify the audience language'));assert.equal(h.requests.length,0);
+    const more=JSON.parse(await fs.readFile(rowsFile,'utf8'));more.push({id:'u2',type:'userMessage',content:[{type:'text',text:'Also explain unfamiliar terms'}]});await fs.writeFile(rowsFile,JSON.stringify(more));await h.guide.receive({type:'conversationSync'});const count=h.guideState().plan.conversation.length;assert.ok(h.guideState().plan.conversation.some(row=>row.text==='Also explain unfamiliar terms'));await h.guide.receive({type:'conversationSync'});assert.equal(h.guideState().plan.conversation.length,count,'sync does not duplicate imported turns');
+    let terminal;h.vscode.window.createTerminal=options=>(terminal={options,show(){this.shown=true;}});h.vscode.window.showQuickPick=async()=>({action:'open'});await h.guide.receive({type:'handoff'});assert.equal(terminal.shown,true);assert.ok(terminal.options.shellArgs.includes('resume'));assert.ok(terminal.options.shellArgs.includes('external-session'));assert.equal(terminal.options.cwd,h.root);assert.equal(h.requests.length,0);
+  }finally{await h.close();}
+});
+
+test('persistent planning resumes its own read-only native session and returns its session reference', async () => {
+ const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),real=require('../src/ai/engine');const root=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-plan-resume-')),binary=path.join(root,'fixture.js'),log=path.join(root,'calls.jsonl'),session={persist:true,resumeId:'saved-planning-session'};
+ try{
+  await fs.writeFile(binary,`const fs=require('node:fs'),rl=require('node:readline').createInterface({input:process.stdin}),send=x=>console.log(JSON.stringify(x));rl.on('line',s=>{const m=JSON.parse(s);fs.appendFileSync(${JSON.stringify(log)},s+'\\n');if(m.method==='initialize')send({id:m.id,result:{}});if(m.method==='thread/resume')send({id:m.id,result:{thread:{id:m.params.threadId},model:'fixture-model'}});if(m.method==='turn/start'){send({id:m.id,result:{turn:{id:'t'}}});send({method:'item/completed',params:{item:{type:'agentMessage',text:JSON.stringify({draft:{question:'',summary:'Inspect the audience.',steps:[]},patch:null})}}});send({method:'turn/completed',params:{turn:{status:'completed'}}});}});`);
+  const response=await real.requestStructured({provider:'codex',cliPath:binary,planning:true,session,tools:{command:process.execPath,args:[],projectRoot:root},schema:real.PLAN_SCHEMA,prompt:'Plan from the project conversation.'});assert.equal(response.nativeSession.id,'saved-planning-session');
+  const calls=(await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse),resume=calls.find(call=>call.method==='thread/resume');assert.equal(resume.params.sandbox,'read-only');assert.equal(resume.params.excludeTurns,true);assert.ok(!calls.some(call=>call.method==='thread/start'));assert.equal(calls.find(call=>call.method==='turn/start').params.collaborationMode.mode,'plan');
+ }finally{real.disposePlanningSession(session);await fs.rm(root,{recursive:true,force:true});}
+});
+
+
+test('reply previews decode partial JSON strings without exposing transport or hidden fields', () => {
+  const { partialReply } = require('../src/ai/engine');
+  assert.equal(partialReply('{"message":"Hello\\nworld'), 'Hello\nworld');
+  assert.equal(partialReply('{"message":"Hello\\u'), 'Hello');
+  assert.equal(partialReply('{"status":"completed","summary":"Checked'), 'Checked');
+  assert.equal(partialReply('{"draft":{"summary":"Plan progress'), 'Plan progress');
+  assert.equal(partialReply('{"thinking":"secret","steps":['), '');
+});
+
+
+test('planning retains existing files outside the capped map and validates revisions against actual source', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), calls = [], queue = [];
+  const h = await readerHarness({ autoNotes: false, planModel: 'main' }, { engine: planEngine(calls, queue) });
+  try {
+    await fs.writeFile(path.join(h.root, 'unlisted.py'), 'def calculate():\n    value = 1\n    return value\n');
+    const find = h.vscode.workspace.findFiles; h.vscode.workspace.findFiles = async (...args) => (await find(...args)).filter(uri => !uri.fsPath.endsWith('/unlisted.py'));
+    queue.push({ question: '', summary: 'Simplify calculation and test it.', steps: [
+      { file: 'unlisted.py', lines: [1, 3], title: 'Simplify calculation', change: 'Return the value directly.', why: '' },
+      { file: 'tests/new_test.py', lines: [0, 0], title: 'Check calculation', change: 'Test the result.', why: '' }
+    ] });
+    await h.guide.receive({ type: 'planGoal', goal: 'Simplify calculation and test it' });
+    let plan = h.guideState().plan.plan; assert.equal(plan.steps.length, 2, 'implementation is not silently dropped');
+    const patch = { message: 'Update calculation.', question: '', summary: '', updates: [{ id: plan.steps[0].id, file: 'unlisted.py', lines: [2, 3], title: 'Return the result', change: 'Return directly.', why: '' }], additions: [], removals: [] };
+    queue.push(patch); await h.guide.receive({ type: 'planChat', text: 'Make the implementation clearer' });
+    plan = h.guideState().plan.plan; assert.equal(plan.steps.length, 2); assert.equal(plan.steps[0].startLine, 2);
+    queue.push({ ...patch, updates: [{ ...patch.updates[0], lines: [1, 999] }] }); await h.guide.receive({ type: 'planChat', text: 'Update it again' });
+    assert.match(h.guideState().plan.error, /invalid source range/); assert.equal(h.guideState().plan.plan.steps[0].startLine, 2, 'invalid ranges preserve the previous plan');
+  } finally { await h.close(); }
+});
+
+test('chat and planning receive the current source tab and selection, retaining it when the webview has focus', async () => {
+  const calls = [], planning = [], queue = [GOOD_PLAN];
+  const h = await readerHarness({ autoNotes: false, planModel: 'main' }, { engine: () => ({ ...planEngine(planning, queue)(), implementPlan: async options => { calls.push(options); return { summary: 'Explained the selected enum.' }; } }) });
+  try {
+    const doc = await h.docFor(h.Uri.file(require('node:path').join(h.root, 'models/script.py')));
+    doc.getText = () => 'class LineKind:\n    SAY = "SAY"\n'; doc.isDirty = true;
+    h.vscode.window.activeTextEditor = { document: doc, selection: { isEmpty: false, start: { line: 0, character: 0 }, end: { line: 1, character: 15 } } };
+    await h.guide.receive({ type: 'projectMessage', mode: 'chat', text: 'Do I still need this?' });
+    assert.match(calls[0].prompt, /CURRENT VS CODE EDITOR/); assert.match(calls[0].prompt, /"file":"models\/script.py"/); assert.match(calls[0].prompt, /"selected":true/); assert.match(calls[0].prompt, /"unsaved":true/); assert.match(calls[0].prompt, /LineKind/);
+    h.vscode.window.activeTextEditor = undefined;
+    await h.guide.receive({ type: 'projectMessage', mode: 'chat', text: 'Explain the current tab' }); assert.match(calls[1].prompt, /LineKind/);
+    await h.guide.receive({ type: 'planGoal', goal: 'plan the loops' }); assert.match(planning[0].prompt, /CURRENT VS CODE EDITOR/); assert.match(planning[0].prompt, /LineKind/);
+    h.vscode.window.activeTextEditor = { document: { uri: h.Uri.file('/different-project/private.py'), getText: () => { throw new Error('Must not read another project'); } } };
+    await h.guide.receive({ type: 'projectMessage', mode: 'chat', text: 'What is this?' }); assert.match(calls[2].prompt, /outside this project/);
+  } finally { await h.close(); }
+});
+
+
+test('external recovery updates the saved plan without a model request', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), queue = [GOOD_PLAN], calls = [];
+  const h = await readerHarness({ autoNotes: false }, { engine: planEngine(calls, queue) });
+  try {
+    await h.guide.receive({ type: 'planGoal', goal: 'plan the loops' });
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const projects = path.join(h.temp, 'storage', 'cache', 'projects'), index = JSON.parse(await fs.readFile(path.join(projects, 'index.json'), 'utf8')), store = path.join(projects, index[await fs.realpath(h.root)].dir);
+    await require('../src/project/graph').updateStoreFile(store, 'plan', value => { value.current.steps[0].title = 'Recovered implementation change'; return value; });
+    await h.until(() => h.guideState().plan.plan.steps[0].title === 'Recovered implementation change', 'recovered plan becomes visible');
+    assert.equal(calls.length, 1);
+  } finally { await h.close(); }
+});
+
+
+test('highlighted source opens a native inline question; dismiss and submit preserve the selected snapshot', async () => {
+  const fs = require('node:fs'), path = require('node:path'), stub = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? {} : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout });
+  const commands = new Map(), threads = [], sent = [], errors = []; let onSelection, onActive, source = 'SAY = "SAY"\nLOOP = "LOOP"', enabled = true, fail = false, finish;
+  const disposable = () => ({ dispose() {} });
+  const uri = { scheme: 'file', fsPath: '/repo/model.py', toString: () => 'file:///repo/model.py' };
+  const selection = { isEmpty: false, start: { line: 20, character: 0 }, end: { line: 22, character: 0 } };
+  const editor = { document: { uri, languageId: 'python', version: 1, isDirty: true, getText: () => source }, selection, selections: [selection] };
+  const api = { Range: class { constructor(a,b,c,d) { this.start = { line:a, character:b }; this.end = { line:c, character:d }; } }, CommentThreadCollapsibleState: { Expanded: 1 }, CommentMode: { Preview: 0 }, TextEditorSelectionChangeKind: { Mouse: 2, Keyboard: 1 },
+    comments: { createCommentController: () => ({ createCommentThread(uri, range, comments) { const t = { uri, range, comments, dispose() { this.disposed = true; } }; threads.push(t); return t; }, dispose() {} }) },
+    commands: { registerCommand: (id, fn) => { commands.set(id, fn); return disposable(); } }, workspace: { getConfiguration: () => ({ get: () => enabled }) },
+    window: { activeTextEditor: editor, onDidChangeTextEditorSelection: fn => { onSelection = fn; return disposable(); }, onDidChangeActiveTextEditor: fn => { onActive = fn; return disposable(); }, showErrorMessage: message => errors.push(message) }
+  };
+  const context = { subscriptions: [] }, integration = stub.exports.createSelectionQuestions(context, api, async (selected, question) => { if (fail) throw new Error('Busy; retry'); sent.push({ selected, question }); await new Promise(resolve => { finish = resolve; }); });
+  try {
+    onSelection({ kind: 2, textEditor: editor, selections: [selection] }); await new Promise(resolve => setTimeout(resolve, 400));
+    assert.equal(threads.length, 1); assert.equal(sent.length, 0, 'highlighting starts no AI'); assert.match(threads[0].label, /L21–22/);
+    editor.selection = { ...selection, isEmpty: true }; onSelection({ kind: 2, textEditor: editor, selections: [editor.selection] }); assert.equal(threads[0].disposed, undefined, 'collapsing the source highlight must not discard an open question');
+    const commentEditor = { document: { uri: { scheme: 'comment', toString: () => 'comment:///draft' } }, selection: { isEmpty: true } };
+    onSelection({ kind: 2, textEditor: commentEditor, selections: [commentEditor.selection] }); onActive(commentEditor);
+    assert.equal(threads[0].disposed, undefined, 'clicking and selecting inside the inline input keeps the field open');
+    await commands.get('yamori.cancelSelectionQuestion')(threads[0]); assert.equal(threads[0].disposed, true);
+    editor.selection = selection; await commands.get('yamori.askSelection')(); const thread = threads.at(-1);
+    source = 'changed after highlighting'; editor.document.version++;
+    const pending = commands.get('yamori.sendSelectionQuestion')({ thread, text: 'Do I still need this?' });
+    await Promise.resolve(); assert.equal(sent[0].selected.text, 'SAY = "SAY"\nLOOP = "LOOP"'); assert.equal(sent[0].selected.unsaved, true);
+    await commands.get('yamori.sendSelectionQuestion')({ thread, text: 'Duplicate' }); assert.equal(sent.length, 1, 'double-submit is ignored');
+    finish(); await pending; assert.equal(thread.disposed, true);
+    await commands.get('yamori.askSelection')(); const retry = threads.at(-1); fail = true;
+    await commands.get('yamori.sendSelectionQuestion')({ thread: retry, text: 'Keep this draft' }); assert.equal(retry.disposed, undefined); assert.equal(retry.contextValue, 'yamori-selection-retry'); assert.equal(retry.comments[0].body, 'Keep this draft');
+    fail = false; const retried = commands.get('yamori.retrySelectionQuestion')(retry); await Promise.resolve(); assert.equal(sent.at(-1).question, 'Keep this draft'); finish(); await retried;
+    enabled = false; onSelection({ kind: 2, textEditor: editor, selections: [selection] }); await new Promise(resolve => setTimeout(resolve, 400)); assert.equal(threads.length, 3, 'automatic questions respect the setting');
+    await commands.get('yamori.askSelection')(); onActive({ document: { uri: { scheme: 'file', toString: () => 'file:///repo/other.py' } } }); assert.equal(threads.at(-1).disposed, true);
+  } finally { integration.dispose(); }
+});
+
+test('selection questions enter the existing project chat with source metadata and use read-only mode', async () => {
+  let release, called; const h = await readerHarness({ autoNotes: false }, { engine: () => ({ implementPlan: async options => { called = options; await new Promise(resolve => { release = resolve; }); return { summary: 'The enum separates narration from other lines.' }; } }) });
+  try {
+    const selected = { uri: h.Uri.file(require('node:path').join(h.root, 'models/script.py')), text: 'class LineKind:\n    SAY = "SAY"', language: 'python', startLine: 1, endLine: 2, version: 4, unsaved: true };
+    const map = h.exports.createProjectMap(h.context, { api: h.vscode });
+    try {
+      const pending = map.askSelection(selected, 'Do I still need this enum?');
+      await h.until(() => !!release, 'question reaches the agent'); assert.equal(called.mode, 'chat'); assert.match(called.prompt, /Do I still need this enum/); assert.match(called.prompt, /Selected code · models\/script.py:L1–2/); assert.match(called.prompt, /LineKind/);
+      await assert.rejects(map.askSelection(selected, 'Another question'), /busy/);
+      release(); await pending;
+      const panel = h.panels.filter(panel => panel.type === 'yamoriMap').at(-1), state = panel.messages.filter(message => message.type === 'map').at(-1).state;
+      assert.equal(state.plan.mode, 'chat'); assert.equal(state.plan.plan, undefined); const question = state.plan.conversation.find(row => row.role === 'user'); assert.equal(question.details.selection.file, 'models/script.py'); assert.equal(question.details.selection.unsaved, true); assert.match(question.text, /SAY/);
+    } finally { await map.dispose(); }
   } finally { await h.close(); }
 });

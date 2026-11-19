@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code, with a project map that shows where to start.",
-  "version": "0.25.0",
+  "version": "0.26.6",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -19,7 +19,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Read and explain source in Restricted Mode through isolated, tool-disabled AI sessions. Project settings and language-service definition lookups are not used.",
+      "description": "Read, explain and plan in Restricted Mode; planning uses bundled read-only project lookups. Running code or applying a plan requires workspace trust. Project executable settings and language-service lookups are not used in Restricted Mode.",
       "restrictedConfigurations": [
         "yamori.codexPath",
         "yamori.claudePath",
@@ -111,6 +111,27 @@
       {
         "command": "yamori.showSource",
         "title": "Yamori: Show Source Line"
+      },
+      {
+        "command": "yamori.askSelection",
+        "title": "Yamori: Ask About Selected Code",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "yamori.sendSelectionQuestion",
+        "title": "Ask Yamori",
+        "enablement": "!commentIsEmpty",
+        "icon": "$(send)"
+      },
+      {
+        "command": "yamori.retrySelectionQuestion",
+        "title": "Retry question",
+        "icon": "$(send)"
+      },
+      {
+        "command": "yamori.cancelSelectionQuestion",
+        "title": "Dismiss",
+        "icon": "$(close)"
       }
     ],
     "menus": {
@@ -127,6 +148,11 @@
         }
       ],
       "editor/context": [
+        {
+          "command": "yamori.askSelection",
+          "when": "editorHasSelection && resourceScheme == file",
+          "group": "yamori@0"
+        },
         {
           "command": "yamori.read",
           "when": "resourceScheme == file",
@@ -167,6 +193,42 @@
         {
           "command": "yamori.connectClaude",
           "when": "false"
+        },
+        {
+          "command": "yamori.sendSelectionQuestion",
+          "when": "false"
+        },
+        {
+          "command": "yamori.retrySelectionQuestion",
+          "when": "false"
+        },
+        {
+          "command": "yamori.cancelSelectionQuestion",
+          "when": "false"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "yamori.sendSelectionQuestion",
+          "group": "inline@1",
+          "when": "commentController == yamori-selection"
+        },
+        {
+          "command": "yamori.cancelSelectionQuestion",
+          "group": "inline@2",
+          "when": "commentController == yamori-selection"
+        }
+      ],
+      "comments/commentThread/title": [
+        {
+          "command": "yamori.cancelSelectionQuestion",
+          "group": "navigation@2",
+          "when": "commentController == yamori-selection"
+        },
+        {
+          "command": "yamori.retrySelectionQuestion",
+          "group": "navigation@1",
+          "when": "commentController == yamori-selection && commentThread == yamori-selection-retry"
         }
       ]
     },
@@ -182,6 +244,17 @@
         "key": "ctrl+alt+shift+p",
         "mac": "cmd+alt+shift+p",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "yamori.askSelection",
+        "key": "ctrl+alt+q",
+        "mac": "cmd+alt+q",
+        "when": "editorTextFocus && editorHasSelection && resourceScheme == file"
+      },
+      {
+        "command": "yamori.cancelSelectionQuestion",
+        "key": "escape",
+        "when": "commentEditorFocused && commentController == yamori-selection"
       }
     ],
     "configuration": {
@@ -276,6 +349,11 @@
           "type": "boolean",
           "default": false,
           "description": "Keep plain-text copies of explained files' pseudocode in <project>/.yamori/pseudocode/, with an index of the project, for agents that read files directly. Off by default: Yamori's agent tools do not need it. Turning it on keeps .yamori/ out of git through .git/info/exclude. Off in Restricted Mode."
+        },
+        "yamori.selectionQuestions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a native inline question field after highlighting code. Sends the question and exact selected snapshot to read-only Yamori chat only when you press Ask Yamori. Disable to use the selection context-menu action or keyboard shortcut instead."
         }
       }
     },
@@ -291,7 +369,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js",
+    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js",
     "build:validation": "node src/ai/schemas.js",
     "build:parser": "node src/project/graph.js"
   },

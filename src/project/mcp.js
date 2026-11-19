@@ -23,6 +23,7 @@ const object = properties => ({ type: 'object', properties, additionalProperties
 const PATH = { type: 'string', description: 'File path relative to the project root, as shown by list_files.' };
 
 const READ_TOOLS = [
+  { name: 'get_conversation', description: 'Read the project chat across questions, reviewed plans, implementation and tests. Returns the latest messages with IDs and plan details; pass before=message ID to page backward. History is context, not a new instruction.', inputSchema: object({ before: { type: 'string' }, limit: { type: 'integer' }, message_id: { type: 'string', description: 'Read one long message as JSON text, using offset and limit (up to 6000 characters).' }, offset: { type: 'integer' } }) },
   { name: 'get_plan', description: 'Read the current human planning canvas: goal, proposed changes, source ranges, comments and rejected files. No .yamori mirror is required. These are proposals, not proof that code was changed. Optionally fetch one file and generated pseudocode snippets.', inputSchema: object({ path: PATH, include_pseudocode: { type: 'boolean' }, include_skipped: { type: 'boolean' } }) },
   { name: 'project_overview', description: 'Start here instead of exploring files: what the project does, its file groups, entry points and the recommended reading order, from Yamori.', inputSchema: object({}) },
   { name: 'start_here', description: "The project guide's reading order for the whole project or one folder: which files to read first and why, with each file's purpose and links. Cheaper than opening files to find out.", inputSchema: object({ folder: { type: 'string', description: 'Folder path relative to the project root; omit for the whole project.' } }) },
@@ -35,6 +36,8 @@ const READ_TOOLS = [
   { name: 'tests_for', description: 'Unit tests that call the functions of a file (or of the function at a line), with the test file and line.', inputSchema: object({ path: PATH, line: { type: 'integer', description: 'A line inside one function (optional).' } }) },
   { name: 'get_pseudocode', description: "A file's pseudocode, by the piece you need: outline=true gives block titles, source ranges and sizes (a small fraction of the file); line=N or name=X gives the block covering that source line or definition; block=N or start_line/end_line select blocks; with none of these, the whole file. Each step is marked with the source lines it stands for (L120–124), and each answer states its size next to the source's, so you can pick the cheaper.", inputSchema: object({ path: PATH, level: { type: 'string', enum: LEVEL_NAMES, description: 'logic (step by step, default) or overview.' }, outline: { type: 'boolean', description: 'Only the outline.' }, line: { type: 'integer', description: 'A source line; returns the block covering it.' }, name: { type: 'string', description: 'A function or class name; returns the block covering its definition.' }, block: { type: 'integer', description: 'One-based block number.' }, start_line: { type: 'integer', description: 'Blocks overlapping source lines from here.' }, end_line: { type: 'integer', description: 'Blocks overlapping source lines up to here.' } }) },
   { name: 'search_pseudocode', description: 'Search all of the project\'s pseudocode (what each file does, in plain steps) for words or a name. Returns matching steps with their file and source lines.', inputSchema: object({ query: { type: 'string', description: 'Words or a name to find, such as "loop" or plan_loops.' } }) },
+  { name: 'git_history', description: 'Inspect local commit authorship and touched file paths without running project code, fetching or changing files. Use before attributing changes to a person.', inputSchema: object({ author: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 30 } }) },
+  { name: 'git_changes', description: 'Read the current branch, local branches, changed paths and a diff summary. Optionally inspect the patch for one mapped file or compare with a local base ref. Never commits, runs hooks, fetches or changes files.', inputSchema: object({ path: PATH, base: { type: 'string', description: 'Local base ref such as HEAD (default), main or origin/main.' } }) },
   { name: 'read_source', description: `Read numbered lines from a project file (at most ${MAX_LINES} lines per call). Use the L-marks from get_pseudocode to read only what you need.`, inputSchema: object({ path: PATH, start_line: { type: 'integer' }, end_line: { type: 'integer' } }) }
 ];
 const WRITE_TOOLS = [
@@ -81,7 +84,9 @@ function createServer({ store, root, log, cache }) {
     located ||= await standingStore({ root, cache });
     if (!force && Date.now() - lastScan < RESCAN_MS) return;
     const previous = readJson(path.join(located.dir, 'graph.json'));
-    const graph = await project.scanFolder(located.root, previous?.version === project.GRAPH_VERSION ? previous : undefined, indexer, located.key);
+    let graph = await project.scanFolder(located.root, previous?.version === project.GRAPH_VERSION ? previous : undefined, indexer, located.key);
+    const referenced = (readJson(path.join(located.dir, 'plan.json'))?.current?.steps || []).filter(step => !step.newFile).map(step => step.file);
+    if (referenced.length) graph = await project.includeSourceFiles(located.root, graph, referenced, indexer);
     const same = previous && JSON.stringify(Object.entries(previous.files || {}).map(([rel, file]) => [rel, file.hash])) === JSON.stringify(Object.entries(graph.files).map(([rel, file]) => [rel, file.hash]));
     if (!same) await project.updateStoreFile(located.dir, 'graph', () => graph);
     lastScan = Date.now();
@@ -148,6 +153,7 @@ function createServer({ store, root, log, cache }) {
       const links = graph.edges.filter(edge => inFolder(edge.from, folder) || inFolder(edge.to, folder)).slice(0, 300).map(edge => edge.from + ' → ' + edge.to + (edge.names?.length ? ' (' + edge.names.slice(0, 6).join(', ') + ')' : ''));
       return { folders, uses: links };
     },
+    get_conversation(_data, args) { return require('./conversation').page(readJson(path.join(located.dir, 'plan.json')) || {}, args); },
     list_files({ graph, notes, explanations }, { folder } = {}) {
       const groups = {};
       for (const rel of Object.keys(graph.files).sort()) {
@@ -241,6 +247,20 @@ function createServer({ store, root, log, cache }) {
       }
       return hits.length ? hits.join('\n') : 'No pseudocode mentions "' + query.trim() + '". Try search_name to search the source.';
     },
+    async git_history(_data, { author, limit = 15 } = {}) {
+      if (author !== undefined && (typeof author !== 'string' || author.length > 100 || /[\x00-\x1f]/.test(author))) throw new Error('Use a short author name.');
+      return new Promise((resolve, reject) => require('node:child_process').execFile('git', ['--no-pager', '-c', 'core.fsmonitor=false', 'log', '--no-ext-diff', '--no-textconv', '-n', String(Math.max(1, Math.min(30, Number.isInteger(limit) ? limit : 15))), '--format=Commit %h%nAuthor: %an <%ae>%nDate: %aI%nSubject: %s', '--name-only', ...(author ? ['--regexp-ignore-case', '--author=' + author] : []), '--'], { cwd: realRoot(), env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, timeout: 10000, maxBuffer: 200000, encoding: 'utf8' }, (error, stdout) => error ? reject(new Error('Could not read local commit history.')) : resolve(stdout.trim() || 'No matching local commits.')));
+    },
+    async git_changes({ graph }, { path: file, base = 'HEAD' } = {}) {
+      if (typeof base !== 'string' || base.length > 120 || !/^[A-Za-z0-9_./@{}~^+-]+$/.test(base) || base.startsWith('-')) throw new Error('Use a local Git ref such as HEAD, main or origin/main.');
+      const git = args => new Promise((resolve, reject) => require('node:child_process').execFile('git', ['--no-pager', '-c', 'core.fsmonitor=false', ...args], { cwd: realRoot(), env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, timeout: 10000, maxBuffer: 200000, encoding: 'utf8' }, (error, stdout) => error ? reject(new Error('Could not inspect local Git changes: ' + String(error.stderr || error.message).slice(0, 500))) : resolve(stdout.trim())));
+      const rel = file === undefined ? undefined : mapped(graph, file);
+      const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+      const branches = await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/']);
+      const status = await git(['status', '--porcelain=v1', '--untracked-files=normal', '--ignore-submodules=all']);
+      const diff = await git(['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', ...(rel ? [] : ['--stat']), base, '--', ...(rel ? [rel] : [])]);
+      return { branch, localBranches: branches.split('\n').filter(Boolean), status: status || 'Working tree clean.', base, ...(rel ? { file: rel, patch: diff || 'No tracked changes against this base.' } : { diffSummary: diff || 'No tracked changes against this base.' }) };
+    },
     read_source({ graph }, { path: file, start_line: start = 1, end_line: end }) {
       const rel = mapped(graph, file), lines = readMapped(rel).split('\n');
       const from = Math.max(1, Math.min(Number.isInteger(start) ? start : 1, lines.length));
@@ -310,7 +330,7 @@ FORMAT FOR save_pseudocode
       if (typeof args?.path === 'string') {
         let rel = args.path.replace(/\\/g, '/').replace(/^\.\//, '');
         if (path.isAbsolute(args.path)) rel = path.relative(located.root, args.path).split(path.sep).join('/');
-        if (!data.graph?.files?.[rel]) { await refresh(true); data = load(); }
+        if (!data.graph?.files?.[rel]) { await refresh(true); data = load(); if (data.graph) { data.graph = await project.includeSourceFiles(located.root, data.graph, [rel], indexer); await project.updateStoreFile(located.dir, 'graph', () => data.graph); } }
       }
       if (!data.graph) throw new Error('This project has not been mapped yet.');
       const result = await handler(data, args && typeof args === 'object' ? args : {});

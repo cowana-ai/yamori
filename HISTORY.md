@@ -1,5 +1,39 @@
 # Release history
 
+### 0.26.6 · 2026-11-19
+- **Stable inline questions:** ignore selections and focus changes from embedded comment editors. Keep drafts when the source highlight collapses; dismiss explicitly or replace the selection instead. Add a visible Dismiss action.
+- **Complete plan canvas:** render every affected file even before its map metadata arrives. Fit planning independently of the project map, with a readable initial zoom centred on the most affected file.
+
+### 0.26.5 · 2026-11-19
+- **Ask from a selection:** highlighting source code opens a native inline question field. Ask Yamori sends the question, file/range and frozen selected code to project chat. Deselecting dismisses an unsent field; context-menu and keyboard actions are also available. No AI request is made until Submit.
+
+### 0.26.4 · 2026-11-19
+- **Complete saved plans:** verify referenced source directly when the overview index is capped. Targeted tool reads can index a missing source file, and drafts with unverifiable steps keep the previous plan instead of silently saving a partial plan.
+- **Current editor context:** chat, planning and work receive the current source tab, cursor, selected lines and a bounded unsaved excerpt. Retain the last source editor while Yamori has focus; exclude files outside the current project.
+- **Commit evidence:** read-only git_history lets planning inspect local authorship before attributing a change to someone. Broader-plan requests can investigate missing scope.
+
+### 0.26.3 · 2026-11-19
+- **Live branch in focused chat:** redraw the conversation header when local Git HEAD changes, even if the plan and messages stay unchanged. Refresh local branch metadata on webview focus as well; no model call is needed.
+
+### 0.26.2 · 2026-11-19
+- **Clean conversation handoffs:** session titles derived from internal prompts use the actual user request instead. Picker labels and handoff messages never print Yamori context wrappers. Existing cached handoff labels are repaired locally without changing native sessions or removing chat history.
+
+### 0.26.1 · 2026-11-19
+- **Live replies:** Codex and Claude chat/work responses appear as provider text arrives, without a second AI request. JSON transport and private reasoning remain hidden; completion is still validated before saving the final reply.
+- **Stable canvas:** streaming updates the reply in place, preserving the canvas, input and cursor. The canvas is the default, with a highlighted < > Focus chat control to expand the conversation and return.
+
+### 0.26.0 · 2026-11-19
+- **One project conversation:** Chat, Plan and Work share durable local history, including reviewed changes, execution activity and outcomes. Completed plans leave the canvas while the discussion remains. New plans preserve the transcript.
+- **Native continuation:** coding and chat turns retain Codex/Claude Code session references. Continue from an existing local conversation, sync external updates on return, or reopen the same native session in an agent terminal. Copy/paste handoffs support web-only chats and other providers.
+- **Focused chat:** use the conversation as the main view before and after a plan, with an explicit return to the canvas. Older messages can be loaded locally, and agents can retrieve complete earlier context using get_conversation.
+- **AI-free branch indicator:** read Git HEAD directly, including worktrees and detached HEAD; refresh on local Git changes and focus without a model call.
+
+### 0.25.1 · 2026-11-19
+- **Autonomous planning access:** provide bundled read-only project tools in Restricted Mode, and start native planning sessions in the actual project folder. Preserve the initial request as later conversation grows; ask about missing intent rather than requesting project attachments.
+- **Profiles, prompts and configuration:** discover Markdown, text, JSON, YAML, TOML and INI/CFG files; search and read them with source line numbers. Text context has no invented code definitions or dependency edges.
+- **Branch evidence:** a read-only git_changes tool reports the current branch, changed paths and optional patches without fetching or modifying the repository.
+- **Trust handoff:** approving an implementation in Restricted Mode opens Workspace Trust and resumes the approved plan after the user grants trust. MCP startup failures become access errors rather than repeated attachment requests.
+
 ### 0.25.0 · 2026-11-19
 - **Approve & implement:** start a separate coding run with the selected Codex or Claude model and effort. The planning agent remains read-only until approval. Active steps and notes are passed to the coding agent; rejected and finished changes are excluded.
 - **Completion cleanup:** successful implementations leave the canvas and are retained in local history, with a completion summary and token report. Errors, blocked operations, missing completion reports and cancellation retain the plan.
