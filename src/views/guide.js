@@ -439,7 +439,10 @@ body[data-planning="true"] .agents { display:none; }
 #plan-panel[data-ready="false"] .plan-terminal { top:25%; bottom:auto; height:auto; max-height:65vh; }
 .plan-transcript { flex:1; min-height:36px; overflow:auto; padding:4px 0 10px; }
 .terminal-message { display:grid; grid-template-columns:58px minmax(0,1fr); gap:12px; padding:4px 0; }
-.terminal-message p { white-space:pre-wrap; margin:0; overflow-wrap:anywhere; max-width:85ch; }
+.terminal-message[data-role="user"] { color:oklch(87% 0.055 247); background:oklch(25% 0.025 247); padding:10px 12px; margin:8px 0; }
+.terminal-message[data-role="user"] .terminal-speaker { color:oklch(82% 0.09 247); font-weight:600; }
+.terminal-message[data-role="assistant"] .terminal-speaker { color:oklch(85% 0.08 150); font-weight:600; }
+.terminal-message p { white-space:pre-wrap; margin:0; overflow-wrap:anywhere; max-width:72ch; }
 .terminal-speaker, .terminal-prompt { color:var(--read-muted); }
 .terminal-composer { display:flex; align-items:flex-start; gap:12px; }
 .terminal-composer #plan-goal { min-height:46px; max-height:130px; resize:vertical; font:inherit; background:transparent; color:inherit; border:0; border-radius:0; padding:0; box-shadow:none; }
@@ -506,7 +509,7 @@ body.vscode-dark:not([data-palette="paper"]) .change-change, body[data-palette="
 .plan-terminal .terminal-composer #plan-goal::placeholder { color:#8f98a5; }
 
 .terminal-stream[hidden] { display:none; }
-.terminal-stream { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.5 Menlo,Monaco,Consolas,monospace; color:#e4e5e8; border-left:2px solid #9ce2ac; padding:4px 12px; margin:6px 0; max-height:45%; overflow:auto; flex-shrink:1; }
+.terminal-stream { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.5 Menlo,Monaco,Consolas,monospace; color:#e4e5e8; background:oklch(23% 0.015 150); padding:8px 12px; margin:6px 0; max-height:45%; overflow:auto; flex-shrink:1; }
 .native-terminal { flex:1; min-height:0; width:100%; overflow:hidden; }
 .native-terminal .xterm { height:100%; }
 #plan-panel[data-inspecting="true"] { bottom:calc(var(--plan-terminal-height,280px) + 28px); max-height:max(0px,calc(100% - var(--plan-terminal-height,280px) - 48px)); padding:12px 16px; }
@@ -1257,7 +1260,11 @@ function attachTerminal(container, messages, info) {
     const start = prefix ? nativeMessages.length : 0;
     nativeKey = key; if (!prefix) nativeTerminal.reset();
     if (!messages.length) nativeTerminal.writeln('Yamori · your project conversation starts here.');
-    for (const message of messages.slice(start)) nativeTerminal.writeln((message.role === 'user' ? '\\x1b[32m❯ ' : message.role === 'tool' ? '\\x1b[90m↳ ' : '\\x1b[36m● ') + '\\x1b[0m' + terminalPlain(message.text) + '\\r\\n');
+    for (const message of messages.slice(start)) {
+      const user = message.role === 'user';
+      nativeTerminal.writeln((user ? '\\x1b[1;38;2;154;207;255m❯ You' : '\\x1b[1;38;2;165;226;179m● Yamori') + '\\x1b[0m');
+      nativeTerminal.writeln((user ? '\\x1b[38;2;189;220;248m' : '\\x1b[38;2;228;229;232m') + terminalPlain(message.text) + '\\x1b[0m\\r\\n');
+    }
     nativeMessages = messages.map(message => ({ ...message }));
     if (info.error) nativeTerminal.writeln('\\x1b[31m' + terminalPlain(info.error) + '\\x1b[0m');
   }
@@ -1450,8 +1457,9 @@ function drawPlan() {
   for (const [label, type] of [[(info.ai?.label || 'Choose AI') + ' ▾', 'planAI'], ['Model: ' + (info.ai?.model || 'default') + ' ▾', 'planModel'], ['Effort: ' + (info.ai?.effort || 'default') + ' ▾', 'planEffort']]) { const pick = node('button', label); pick.setAttribute('aria-label', { planAI: 'Choose planning AI', planModel: 'Choose planning model', planEffort: 'Choose planning effort' }[type]); pick.disabled = !!busy; pick.addEventListener('click', () => send(type)); ai.append(pick); }
   const terminal = node('section', undefined, 'plan-terminal'); terminal.setAttribute('aria-label', 'Project conversation'); terminal.setAttribute('data-focused', String(!!chatFocused)); setTerminalHeight(terminalHeight); terminal.append(terminalResizer());
   const transcript = node('div', undefined, 'plan-transcript'); transcript.setAttribute('role', 'log'); transcript.setAttribute('aria-live', 'polite');
-  const messages = info.conversation?.length ? info.conversation : plan?.messages?.length ? plan.messages : plan?.goal ? [{ role: 'user', text: plan.goal }, ...(plan.summary ? [{ role: 'assistant', text: plan.summary }] : [])] : [];
-  for (const message of messages) { const line = node('div', undefined, 'terminal-message'); line.append(node('span', message.role === 'user' ? '❯' : 'yamori', 'terminal-speaker'), node('p', message.text)); transcript.append(line); }
+  const history = info.conversation?.length ? info.conversation : plan?.messages?.length ? plan.messages : plan?.goal ? [{ role: 'user', text: plan.goal }, ...(plan.summary ? [{ role: 'assistant', text: plan.summary }] : [])] : [];
+  const messages = history.filter(message => message.role !== 'tool' && message.kind !== 'activity');
+  for (const message of messages) { const line = node('div', undefined, 'terminal-message'); line.setAttribute('data-role', message.role); line.append(node('span', message.role === 'user' ? 'You' : 'Yamori', 'terminal-speaker'), node('p', message.text)); transcript.append(line); }
   if (!messages.length) transcript.append(node('p', 'Ask about your project, plan a change, or ask your agent to work. This conversation stays with the project.', 'terminal-welcome'));
   const composer = node('div', undefined, 'terminal-composer'); composer.append(node('span', '❯', 'terminal-prompt'), goal);
   const toolbar = node('div', undefined, 'plan-terminal-toolbar');
@@ -1518,8 +1526,8 @@ function drawPlan() {
     const cancel = node('button', 'Not now'); cancel.addEventListener('click', () => send('planDismissQuestion'));
     popup.append(answer, reply, cancel); terminal.append(popup);
   }
-  const recordedUsage = (plan?.calls || []).filter(call => call.usage).map(call => call.usage);
-  for (const call of info.conversationCalls || []) if (call.usage) recordedUsage.push(call.usage);
+  const recordedUsage = [], recordedIds = new Set();
+  for (const call of [...(plan?.calls || []), ...(info.conversationCalls || [])]) if (call.usage && (!call.id || !recordedIds.has(call.id))) { recordedUsage.push(call.usage); if (call.id) recordedIds.add(call.id); }
   if (!plan && info.lastRun?.usage) recordedUsage.push(info.lastRun.usage);
   const usage = [...recordedUsage, ...(busy?.usage ? [busy.usage] : [])];
   const total = key => usage.reduce((sum, value) => sum + (value[key] || 0), 0);
@@ -1536,7 +1544,7 @@ function drawPlan() {
   status.append(node('span', info.question ? 'Waiting for your answer' : busy?.text || (info.error ? 'Stopped' : hasSteps ? 'Plan ready' : info.lastRun ? 'Implementation complete' : 'Ready'), 'plan-live-phase'));
   if (busy?.characters) status.append(node('span', tokenText(busy.characters) + ' characters generated', 'plan-live-metric'));
   if (busy?.thinkingTokens) status.append(node('span', '~' + tokenText(busy.thinkingTokens) + ' reasoning tokens', 'plan-live-metric'));
-  const activity = [...new Set(info.activity || [])].filter(item => item !== 'Token usage updated');
+  const activity = [...new Set([...history.filter(message => message.role === 'tool' || message.kind === 'activity').map(message => message.text), ...(info.activity || [])])].filter(item => item !== 'Token usage updated');
   if (activity.length) {
     const trail = node('details', undefined, 'plan-live-trail'); trail.open = planDisclosures.get('activity') || false;
     trail.addEventListener('toggle', () => planDisclosures.set('activity', trail.open));

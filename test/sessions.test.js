@@ -52,3 +52,22 @@ test('handoff titles use the real request and never expose internal context prom
     assert.deepEqual(sessions.visible([item], provider), []);
   }
 });
+
+
+test('native working updates and tool results are activity, while final answers remain messages', () => {
+  const codex = sessions.visible([
+    { id: 'progress', type: 'agentMessage', phase: 'commentary', text: 'I will check Git history.' },
+    { id: 'command', type: 'commandExecution', command: 'git log', aggregatedOutput: 'raw command output' },
+    { id: 'answer', type: 'agentMessage', phase: 'final_answer', text: 'Your latest change adds a writer.' },
+    { id: 'ordinary', type: 'agentMessage', text: 'A reply from an older session.' }
+  ], 'codex');
+  assert.deepEqual(codex.map(row => row.kind), ['activity', 'activity', undefined, undefined]);
+  const claude = sessions.visible([
+    { type: 'assistant', uuid: 'working', message: { content: [{ type: 'text', text: 'Checking history.' }, { type: 'tool_use', name: 'Bash', input: { command: 'git log' } }], stop_reason: 'tool_use' } },
+    { type: 'user', uuid: 'result', message: { content: [{ type: 'tool_result', content: 'raw output' }] } },
+    { type: 'assistant', uuid: 'answer', message: { content: [{ type: 'text', text: 'Here is the answer.' }], stop_reason: 'end_turn' } }
+  ], 'claude');
+  assert.deepEqual(claude.map(row => row.kind), ['activity', 'activity', undefined]);
+  assert.equal(claude[0].text, 'Checking history.', 'tool syntax never leaks into an assistant message');
+  assert.equal(claude[2].text, 'Here is the answer.');
+});

@@ -46,7 +46,7 @@ function sync(plans, plan, ready) {
   }
 }
 function add(plans, message) { return append(ensure(plans), message); }
-function context(plans, limit = 24000, after) {
+function context(plans, limit = 24000, after, { includePlan = true } = {}) {
   const chat = ensure(plans), tail = []; let size = 0;
   const cursor = after ? chat.messages.findIndex(message => message.id === after) : -1;
   for (const message of chat.messages.slice(cursor + 1).reverse()) {
@@ -54,7 +54,7 @@ function context(plans, limit = 24000, after) {
     if (size + row.length > limit) break; tail.unshift(row); size += row.length;
   }
   const initial = chat.messages.find(message => message.role === 'user');
-  return 'PROJECT CONVERSATION (history is context, not a new instruction):\n' + (initial && cursor < 0 ? 'Initial request: ' + JSON.stringify(initial.text).slice(0, 6000) + '\n' : '') + tail.join('\n') + '\n' + (chat.messages.length - tail.length) + ' older messages are available using get_conversation. Current plan: ' + JSON.stringify(plans.current ? { id: plans.current.id, goal: plans.current.goal, summary: plans.current.summary, steps: plans.current.steps, rejectedFiles: plans.current.dismissed } : null).slice(0, 14000);
+  return 'PROJECT CONVERSATION (history is context, not a new instruction):\n' + (initial && cursor < 0 ? 'Initial request: ' + JSON.stringify(initial.text).slice(0, 6000) + '\n' : '') + tail.join('\n') + '\n' + (chat.messages.length - tail.length) + ' older messages are available using get_conversation. ' + (includePlan ? 'Current plan: ' + JSON.stringify(plans.current ? { id: plans.current.id, goal: plans.current.goal, summary: plans.current.summary, steps: plans.current.steps, rejectedFiles: plans.current.dismissed } : null).slice(0, 14000) : 'The approved plan is supplied separately.');
 }
 function page(plans, { before, limit = 30, message_id: messageId, offset = 0 } = {}) {
   const chat = ensure(plans);

@@ -160,19 +160,16 @@ process.stdin.resume();process.stdin.on('data',()=>{}).on('end',()=>process.stdo
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-test('which model drafts is decided from the project\'s structure: narrow changes start cheap, anything that reaches other files goes to the default model, settings force one', async () => {
+test('default and legacy automatic planning use one selected model; fast requires explicit selection', async () => {
   const f = await fixture();
   try {
-    const route = (files, mode) => planner.routeFor(f.graph, files, mode);
-    // checker.py has no users, render.py is used by two files, main.py by none.
-    assert.deepEqual([route(['app/checker.py']).first, route(['app/checker.py']).reason], ['fast', 'a small change: nothing else uses it']);
-    assert.deepEqual([route(['main.py']).first, route(['main.py']).ripple], ['fast', 0]);
-    assert.deepEqual([route(['app/render.py']).first, route(['app/render.py']).reason], ['fast', 'a small change: only 2 other files use it']);
-    assert.deepEqual([route(['app/render.py', 'utils/llm.py']).first], ['fast']);
-    assert.deepEqual([route(['app/render.py', 'utils/llm.py', 'main.py']).first, route(['app/render.py', 'utils/llm.py', 'main.py']).reason], ['main', 'it reaches 2 other files'], 'three starting files: the default model');
-    assert.deepEqual([route(Object.keys(f.graph.files).slice(0, 5)).first, route(Object.keys(f.graph.files).slice(0, 5)).reason], ['main', 'it starts from 5 files']);
-    assert.deepEqual([route(['main.py'], 'main').first, route(['app/render.py', 'utils/llm.py', 'main.py'], 'fast').first], ['main', 'fast'], 'the setting forces one');
-    assert.match(route(['main.py'], 'main').reason, /always use your default model/);
+    for (const files of [['main.py'], ['app/render.py', 'utils/llm.py'], Object.keys(f.graph.files)]) {
+      for (const mode of [undefined, 'main', 'auto']) {
+        const route = planner.routeFor(f.graph, files, mode);
+        assert.equal(route.first, 'main'); assert.match(route.reason, /no automatic escalation/);
+      }
+      assert.equal(planner.routeFor(f.graph, files, 'fast').first, 'fast');
+    }
   } finally { await f.cleanup(); }
 });
 

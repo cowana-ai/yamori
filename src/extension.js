@@ -600,7 +600,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   }
   // ---- Planning mode: goal -> starting points (free) -> draft (cheap model, then
   // the default model only if a fixed rule rejects it) -> edit anything ----------
-  const planSettings = () => ({ budget: Math.max(2000, Math.min(20000, Number(setting(api, 'planBudget', 6000)) || 6000)), mode: ['auto', 'main', 'fast'].includes(setting(api, 'planModel', 'auto')) ? setting(api, 'planModel', 'auto') : 'auto' });
+  const planSettings = () => ({ budget: Math.max(2000, Math.min(20000, Number(setting(api, 'planBudget', 6000)) || 6000)), mode: setting(api, 'planModel', 'main') === 'fast' ? 'fast' : 'main' });
   const planningProvider = () => context.globalState.get('planningProvider') || context.globalState.get('provider');
   const currentPlan = entry => entry.plans?.current;
   const projectConversation = entry => journal.ensure(entry.plans ||= {});
@@ -658,25 +658,12 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     }
   }
   const planAfterChange = async entry => { bump(entry); await Promise.all([planEstimate(entry), planEffects(entry)]).catch(() => {}); planSave(entry); post(entry); };
-  // Step 1, free: likely starting files for the goal. A cheap model ranks them only when the free match is weak.
+  // Starting points are local hints. The planning agent can investigate weak matches in its existing turn.
   async function planFind(entry, goal) {
     if (!entry.graph || typeof goal !== 'string' || !goal.trim()) return;
     await scan(entry);
     entry.planError = ''; const plan = await planEnsure(entry, goal);
     let found = planner.findStartingPoints(entry.graph, entry.notes, entry.explanations, plan.goal);
-    if (found.weak) {
-      try {
-        const chosen = planningProvider(), status = PROVIDERS[chosen] ? await providerStatus(chosen, cliPathFor(api, chosen)).catch(() => undefined) : undefined;
-        if (status?.ready) {
-          entry.planBusy = { stage: 'rank', text: 'Few files match the goal’s words; asking the quick model to rank them…' }; post(entry);
-          const main = connectionOptions(context.globalState, chosen, api), fast = await quickModel(chosen, main.cliPath, api);
-          const lines = Object.entries(entry.graph.files).filter(([, file]) => !file.test).sort((a, b) => b[1].rank - a[1].rank).slice(0, 120).map(([rel]) => rel + (entry.notes.files?.[rel]?.purpose ? ' — ' + entry.notes.files[rel].purpose : ''));
-          const response = await requestStructured({ ...main, ...(fast || {}), effort: 'low', prompt: rankPrompt({ goal: plan.goal, overview: entry.notes.overview, lines }), schema: RANK_SCHEMA, showPreview: false });
-          const ranked = parseRank(response.raw, new Set(Object.keys(entry.graph.files)));
-          if (ranked.length) found = { ...found, files: ranked.map(file => ({ file, score: 0, why: ['ranked by the quick model'] })), weak: false };
-        }
-      } catch { /* The free match stands. */ } finally { entry.planBusy = undefined; }
-    }
     entry.planCandidates = { files: found.files, weak: found.weak, terms: found.terms };
     plan.starting = found.files.filter(item => !found.weak || item.score === 0).slice(0, 3).map(item => item.file);
     if (!plan.starting.length && !found.weak) plan.starting = found.files.slice(0, 3).map(item => item.file);
@@ -726,10 +713,27 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     return JSON.stringify([chosen, context.globalState.get('planningModel:' + chosen), context.globalState.get('planningEffort:' + chosen), defaults.model, defaults.effort, defaults.cliPath]);
   }
   function planningSession(entry, plan, connection) {
-    const signature = JSON.stringify([plan.id, planningProvider(), connection.model || '', connection.effort || '', connection.cliPath || '', api.workspace.isTrusted !== false, Object.entries(entry.graph.files).map(([file, value]) => [file, value.hash]), (api.workspace.textDocuments || []).filter(doc => doc.isDirty && doc.uri?.scheme === 'file' && relative(entry.root.fsPath, doc.uri.fsPath)).map(doc => [doc.uri?.toString(), doc.version])]);
+    const signature = JSON.stringify([plan.id, planningProvider(), connection.model || '', connection.effort || '', connection.cliPath || '', api.workspace.isTrusted !== false]);
     if (entry.planSession?.key !== signature) { disposePlanningSession(entry.planSession); entry.planSession = { key: signature, persist: true, resumeId: projectConversation(entry).planningSessions?.[planningProvider()]?.id }; }
     entry.planSession.connection = { ...connection }; entry.planSession.preference = planningPreference();
     return entry.planSession;
+  }
+  function planningChanges(entry, session) {
+    const snapshot = Object.fromEntries(Object.entries(entry.graph.files).map(([file, value]) => [file, value.hash]));
+    for (const doc of api.workspace.textDocuments || []) {
+      const file = doc.isDirty && doc.uri?.scheme === 'file' && relative(entry.root.fsPath, doc.uri.fsPath);
+      if (file) snapshot[file] = String(snapshot[file] || '') + ':unsaved:' + doc.version;
+    }
+    const before = session.sources; session.sources = snapshot;
+    if (!before) return session.ready ? '\nSource snapshot reloaded. Verify current source for any ranges you rely on.' : '';
+    const changed = [...new Set([...Object.keys(before), ...Object.keys(snapshot)])].filter(file => before[file] !== snapshot[file]);
+    if (!changed.length) return '';
+    return '\nCHANGED PROJECT FILES since the previous planning request (data): ' + JSON.stringify(changed.slice(0, 80)).slice(0, 5000) + (changed.length > 80 ? '\nAdditional files changed; use list_files for the current index.' : '') + '\nRetain unrelated findings, but reread affected source before using it. Removed files may no longer exist. Unsaved changes may differ from disk; use the supplied editor snapshot for unsaved text, and do not assume other dirty buffers match disk.';
+  }
+  function recordPlanCall(entry, stage, response, connection, started, estimate = 0) {
+    const tokens = usedTokens(response.usage);
+    const call = { id: 'call-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8), workflowId: currentPlan(entry)?.id || projectConversation(entry).id, stage, model: response.actualModel || connection.label, tokens: tokens ?? estimate, estimated: tokens === undefined, durationMs: Date.now() - started, ...(response.usage ? { usage: response.usage } : {}) };
+    projectConversation(entry).calls.push(call); planSave(entry); return call;
   }
   async function verifyNewPlanFiles(entry, steps) {
     for (const step of steps) {
@@ -774,7 +778,8 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   async function planRequest(entry, plan, tier, signal, { previous, feedback } = {}) {
     const { built, files, tools, editor } = await buildPlanningContext(entry, plan);
     const connection = await planConnection(entry, tier), session = planningSession(entry, plan, connection);
-    const context = (session.ready ? 'Use the project investigation already retained in this session. Re-read source only for genuinely new evidence.' : built.text) + '\n' + editor;
+    const context = (session.ready ? 'Use the project investigation already retained in this session. Re-read source only for genuinely new evidence.' : built.text) + planningChanges(entry, session) + '\n' + editor;
+    const started = Date.now();
     entry.planBusy = { ...entry.planBusy, contextTokens: built.tokens }; post(entry);
     const response = await requestStructured({ ...connection, planning: true, session, onQuestion: request => planNativeQuestion(entry, request, signal), onProgress: update => {
       if (signal.aborted) return;
@@ -785,12 +790,12 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       entry.planBusy = { ...entry.planBusy, text: update.stage === 'usage' ? entry.planBusy?.text : update.phase === 'Writing the explanation' ? 'Drafting proposed changes' : update.phase || entry.planBusy?.text, thinkingTokens: update.thinkingTokens ?? entry.planBusy?.thinkingTokens, characters: update.characters ?? entry.planBusy?.characters, reply: update.reply ?? entry.planBusy?.reply, usage: update.usage ?? entry.planBusy?.usage }; post(entry);
     }, ...(tools ? { tools } : {}), prompt: planPrompt({ context: context + '\nINITIAL REQUEST: ' + JSON.stringify(plan.messages?.find(message => message.role === 'user')?.text || plan.goal) + '\nCONVERSATION (user requirements and clarifications):\n' + JSON.stringify((plan.messages || []).slice(-12)).slice(-12000) + '\nREJECTED FILES (do not propose changes here): ' + JSON.stringify(plan.dismissed || []), goal: plan.goal, previous, feedback }), schema: PLAN_SCHEMA, signal, showPreview: false });
     rememberNative(entry, response.nativeSession, true);
-    const real = usedTokens(response.usage);
+    const call = recordPlanCall(entry, 'draft', response, connection, started, built.tokens);
     const parsed = parsePlan(response.raw);
     await scan(entry); await includePlanFiles(entry, parsed.steps); await verifyNewPlanFiles(entry, parsed.steps);
-    return { parsed, built, files, call: { ...(response.usage ? { usage: response.usage } : {}), stage: tier === 'main' ? 'default model' : 'quick model', model: response.actualModel || connection.label, tokens: real ?? built.tokens, estimated: real === undefined } };
+    return { parsed, built, files, call };
   }
-  // Fast first; the default model only when a fixed rule rejects the draft (or for a broad goal, or when asked).
+  // One requested draft, one selected model. Validation never silently starts another model turn.
   async function planDraft(entry, { improve = false } = {}) {
     const plan = currentPlan(entry); if (!plan?.goal || !entry.graph) return;
     if (!(await planReady(entry, improve ? 'improve the plan' : 'draft the plan', () => planDraft(entry, { improve })))) return;
@@ -798,7 +803,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     const controller = new AbortController(); entry.planController = controller; entry.planError = ''; entry.planNotes = []; entry.planActivity = []; entry.planQuestion = undefined;
     const { mode } = planSettings(), calls = [], fixedStarting = plan.starting.slice(), startFiles = fixedStarting.length ? fixedStarting : (entry.planCandidates?.files || []).slice(0, 3).map(item => item.file);
     const previous = improve ? plan.steps.map(step => ({ file: step.file, lines: [step.startLine, step.endLine], title: step.title, change: step.change, why: step.why, ...(step.note ? { yourNote: step.note } : {}), ...(step.status !== 'todo' ? { status: step.status } : {}) })) : undefined;
-    let escalated = false, parsed, built;
+    let parsed, built;
     try {
       const first = improve ? 'main' : planner.routeFor(entry.graph, startFiles, mode).first;
       entry.planBusy = { stage: first, text: first === 'main' ? 'Drafting the plan with your default model…' : 'Drafting the plan with the quick model…' }; post(entry);
@@ -806,13 +811,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       if (run.parsed.question) { entry.planQuestion = run.parsed.question; plan.messages = [...(plan.messages || []), { role: 'assistant', text: run.parsed.question }]; planSave(entry); entry.planQuestionTokens = run.call.tokens; entry.planBusy = undefined; post(entry); return; }
       run.parsed.steps = run.parsed.steps.filter(step => !plan.dismissed?.includes(step.file));
       let gate = planner.validatePlan({ steps: run.parsed.steps, starting: startFiles }, entry.graph);
-      if (!gate.ok && tier === 'fast' && mode === 'auto') {
-        // Accept with a witness, reject with a named cause: ask the default model once, with the failures named.
-        escalated = true; tier = 'main';
-        entry.planBusy = { stage: 'main', text: 'The quick draft failed a check (' + gate.hard[0].text.replace(/\.$/, '') + '). Asking your default model once…' }; post(entry);
-        run = await planRequest(entry, plan, tier, controller.signal, { previous: run.parsed.steps.map(step => ({ file: step.file, lines: [step.startLine, step.endLine], title: step.title, change: step.change, why: step.why })), feedback: gate.hard.map(item => item.text) }); calls.push(run.call);
-        gate = planner.validatePlan({ steps: run.parsed.steps, starting: startFiles }, entry.graph);
-      }
+      if (!gate.ok) { entry.planNotes = gate.hard.map(item => ({ kind: 'problem', text: item.text })); throw new Error(gate.hard.map(item => item.text).join(' ') + ' No automatic retry was made. Revise the request or explicitly retry.'); }
       if (controller.signal.aborted) return;
       if (run.parsed.question) { entry.planQuestion = run.parsed.question; plan.messages = [...(plan.messages || []), { role: 'assistant', text: run.parsed.question }]; planSave(entry); entry.planQuestionTokens = run.call.tokens; entry.planBusy = undefined; post(entry); return; }
       run.parsed.steps = run.parsed.steps.filter(step => !plan.dismissed?.includes(step.file));
@@ -822,7 +821,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       if (dropped.length) throw new Error('The plan was not saved because some proposed steps could not be verified: ' + dropped.join('; ') + '. Your previous plan was kept.');
       const real = calls.every(call => !call.estimated) ? calls.reduce((sum, call) => sum + call.tokens, 0) : undefined;
       clean.messages = [...(clean.messages || []), { role: 'assistant', text: parsed.summary }].slice(-100);
-      entry.plans.current = { ...clean, id: plan.id, goal: plan.goal, createdAt: plan.createdAt, starting: plan.starting, dismissed: plan.dismissed, models: { draft: calls.at(-1).model, escalated, improved: improve }, tokens: { sent: built.tokens, whole: built.report.whole, used: real ?? 0 }, calls: [...(improve ? plan.calls || [] : []), ...calls].slice(-12) };
+      entry.plans.current = { ...clean, id: plan.id, goal: plan.goal, createdAt: plan.createdAt, starting: plan.starting, dismissed: plan.dismissed, models: { draft: calls.at(-1).model, escalated: false, improved: improve }, tokens: { sent: built.tokens, whole: built.report.whole, used: real ?? 0 }, calls: [...(improve ? plan.calls || [] : []), ...calls].slice(-12) };
     } catch (e) {
       if (!controller.signal.aborted) { entry.planError = isSetupProblem(e.message) ? e.message : 'Could not draft the plan: ' + e.message; if (isSetupProblem(e.message)) clearProviderStatus(); }
     } finally { if (entry.planController === controller) { entry.planController = undefined; entry.planBusy = undefined; } }
@@ -834,9 +833,10 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     entry.planController?.abort(); const controller = new AbortController(); entry.planController = controller; entry.planError = ''; entry.planActivity = [];
     entry.planBusy = { stage: 'revision', text: 'Updating the relevant steps…' }; post(entry);
     try {
-      const connection = entry.planSession?.preference === planningPreference() ? entry.planSession.connection : await planConnection(entry, 'main'), session = planningSession(entry, plan, connection);
       const { built, tools, editor } = await buildPlanningContext(entry, plan);
-      const prompt = planPatchPrompt({ plan, text, context: session.ready ? '' : built.text }) + '\n' + editor;
+      const connection = entry.planSession?.preference === planningPreference() ? entry.planSession.connection : await planConnection(entry, planSettings().mode), session = planningSession(entry, plan, connection);
+      const prompt = planPatchPrompt({ plan, text, context: session.ready ? '' : built.text }) + planningChanges(entry, session) + '\n' + editor;
+      const started = Date.now();
       entry.planBusy.contextTokens = Math.ceil(prompt.length / 4); post(entry);
       const response = await requestStructured({ ...connection, planning: true, session, tools, prompt, schema: PLAN_PATCH_SCHEMA, signal: controller.signal, onQuestion: request => planNativeQuestion(entry, request, controller.signal), showPreview: false, onProgress: update => {
         if (controller.signal.aborted) return;
@@ -846,14 +846,15 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       } });
       if (controller.signal.aborted || currentPlan(entry)?.id !== plan.id) return;
       rememberNative(entry, response.nativeSession, true);
+      const call = recordPlanCall(entry, 'revision', response, connection, started);
       const patch = parsePlanPatch(response.raw); await includePlanFiles(entry, [...patch.updates, ...patch.additions]); await verifyNewPlanFiles(entry, [...patch.updates, ...patch.additions]);
       const clean = planner.applyPlanPatch(plan, patch, entry.graph), tokens = usedTokens(response.usage);
       clean.messages = [...(plan.messages || []), { role: 'assistant', text: patch.question || patch.message || patch.summary || 'Updated the relevant steps.' }].slice(-100);
-      clean.calls = [...(plan.calls || []), { ...(response.usage ? { usage: response.usage } : {}), stage: 'revision', model: response.actualModel || connection.label, tokens: tokens ?? 0, estimated: tokens === undefined }].slice(-12);
+      clean.calls = [...(plan.calls || []), call].slice(-12);
       clean.tokens = { ...(plan.tokens || {}), used: (plan.tokens?.used || 0) + (tokens ?? 0) };
       entry.plans.current = clean; entry.planQuestion = patch.question || undefined; entry.planQuestionTokens = patch.question ? tokens : undefined;
     } catch (error) {
-      if (!controller.signal.aborted) { disposePlanningSession(entry.planSession); entry.planError = 'Could not update the plan: ' + error.message + ' Your saved steps were kept. You can retry or use Improve with default model for a full rewrite.'; }
+      if (!controller.signal.aborted) { entry.planError = 'Could not update the plan: ' + error.message + ' Your saved steps were kept. You can retry or use Improve with default model for a full rewrite.'; }
     } finally { if (entry.planController === controller) { entry.planController = undefined; entry.planBusy = undefined; } }
     await planAfterChange(entry);
   }
@@ -869,7 +870,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     void planEstimate(entry).then(() => post(entry)).catch(() => {});
     planSave(entry);
   }
-  // One step's before and after, on demand: the quick model, and the default model only if the check finds an invented name.
+  // Pseudocode stays on demand, with one request and no hidden fallback.
   async function planDetail(entry, id) {
     const plan = currentPlan(entry), step = plan?.steps.find(item => item.id === id); if (!step || !step.newFile && !entry.graph?.files[step.file]) return;
     if (!(await planReady(entry, 'preview this change', () => planDetail(entry, id)))) return;
@@ -884,18 +885,19 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       const source = step.newFile ? 'NEW FILE PROPOSAL: ' + step.file + '. There is no existing source or line range. Describe only the proposed behavior.' : before ? undefined : text.split('\n').slice(step.startLine - 1, Math.min(step.endLine, step.startLine + 119)).map((line, i) => (step.startLine + i) + ': ' + line).join('\n');
       const known = project.projectNames(entry.graph, entry.notes), names = sourceNames(text), calls = [];
       let value;
-      for (const tier of planSettings().mode === 'main' ? ['main'] : ['fast', 'main']) {
+      for (const tier of [planSettings().mode]) {
         const connection = await planConnection(entry, tier);
+        const started = Date.now();
         const response = await requestStructured({ ...connection, prompt: stepDetailPrompt({ step, before, source, goal: plan.goal }), schema: STEP_DETAIL_SCHEMA, signal: controller.signal, showPreview: false, onProgress: update => {
           if (controller.signal.aborted) return;
           if (update.phase && update.stage !== 'usage') entry.planActivity = [...(entry.planActivity || []), update.phase].slice(-6);
           entry.planBusy = { ...entry.planBusy, text: update.stage === 'usage' ? entry.planBusy?.text : update.phase === 'Writing the explanation' ? 'Writing proposed pseudocode' : update.phase || entry.planBusy?.text, usage: update.usage ?? entry.planBusy?.usage, characters: update.characters ?? entry.planBusy?.characters }; post(entry);
         } });
-        value = parseStepDetail(response.raw); const real = usedTokens(response.usage);
-        calls.push({ ...(response.usage ? { usage: response.usage } : {}), stage: 'pseudocode', model: response.actualModel || connection.label, tokens: real ?? 0, estimated: real === undefined });
+        calls.push(recordPlanCall(entry, 'pseudocode', response, connection, started));
+        value = parseStepDetail(response.raw);
         // Names the step coins for new code are fine; names it claims about existing code must exist.
         const bad = step.newFile ? [] : unknownNames(value.after, names, new Set([...known, ...String(step.change).match(/[A-Za-z_$][\w$]*/g) || []]));
-        if (!bad.length || tier === 'main' || planSettings().mode === 'fast') break;
+        if (bad.length) throw new Error('Unverified source names: ' + bad.join(', ') + '. Your previous preview was kept; no automatic retry was made.');
       }
       if (controller.signal.aborted) return;
       const current = currentPlan(entry)?.steps.find(item => item.id === id);
@@ -929,8 +931,8 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       await entry.store?.save('plan', entry.plans);
       const connection = await planConnection(entry, 'main'), { tools, editor } = await buildPlanningContext(entry, plan);
       const result = await implementPlan({ ...connection, provider: planningProvider(), cwd: entry.root.fsPath, signal: controller.signal, tools, session: projectConversation(entry).sessions[planningProvider()], onSession: session => rememberNative(entry, session),
-        prompt: 'The user approved this Yamori plan. Implement it now in this project. Read current source before editing; cached line numbers may have moved. Respect existing user changes and rejected files. Do not commit, push, publish, deploy or delete unrelated files. Run relevant checks. If anything remains incomplete, a check fails, or permission is missing, report status blocked and explain. Report completed only when every active step and its relevant checks are finished.\n\n' + editor + '\n\n' + journal.context(entry.plans) + '\n\n' + planner.promptFromPlan(approved) + '\n\nRejected files (do not modify): ' + JSON.stringify(plan.dismissed || []),
-        onProgress: update => { if (controller.signal.aborted || entry.planController !== controller) return; if (postReply(entry, update)) return; if (update.phase) { if (update.kind === 'tool') journal.add(entry.plans, { role: 'tool', text: update.phase, mode: 'work' }); entry.planBusy.text = update.phase; entry.planActivity.push(update.phase); entry.planActivity = entry.planActivity.slice(-100); } if (typeof update.reply === 'string') entry.planBusy.reply = update.reply; if (update.usage) entry.planBusy.usage = update.usage; post(entry); } });
+        prompt: 'The user approved this Yamori plan. Implement it now in this project. Read current source before editing; cached line numbers may have moved. Respect existing user changes and rejected files. Do not commit, push, publish, deploy or delete unrelated files. Run relevant checks. If anything remains incomplete, a check fails, or permission is missing, report status blocked and explain. Report completed only when every active step and its relevant checks are finished.\n\n' + editor + '\n\n' + journal.context(entry.plans, 12000, projectConversation(entry).sessions[planningProvider()]?.lastMessageId, { includePlan: false }) + '\n\n' + planner.promptFromPlan(approved) + '\n\nRejected files (do not modify): ' + JSON.stringify(plan.dismissed || []),
+        onProgress: update => { if (controller.signal.aborted || entry.planController !== controller) return; if (postReply(entry, update)) return; if (update.phase) { entry.planBusy.text = update.phase; entry.planActivity.push(update.phase); entry.planActivity = entry.planActivity.slice(-100); } if (typeof update.reply === 'string') entry.planBusy.reply = update.reply; if (update.usage) entry.planBusy.usage = update.usage; post(entry); } });
       if (controller.signal.aborted || currentPlan(entry) !== plan) return;
       rememberNative(entry, result.session);
       const chat = projectConversation(entry);
@@ -971,7 +973,6 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
         if (controller.signal.aborted || entry.planController !== controller) return;
         if (postReply(entry, update)) return;
         if (update.phase && update.stage !== 'usage') { entry.planBusy.text = update.phase; entry.planActivity = [...entry.planActivity, update.phase].slice(-100); }
-        if (update.kind === 'tool') { journal.add(entry.plans, { role: 'tool', mode, text: update.phase }); planSave(entry); }
         if (typeof update.reply === 'string') entry.planBusy.reply = update.reply; if (update.usage) entry.planBusy.usage = update.usage; post(entry);
       };
       let result;
@@ -1005,11 +1006,16 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     const chat = projectConversation(entry); chat.imported ||= {};
     for (const row of loaded.messages) {
       const key = loaded.provider + ':' + loaded.id + ':' + row.id;
-      if (chat.imported[key]) continue;
+      if (chat.imported[key]) {
+        // Reclassify older imported updates without deleting local history.
+        const saved = chat.messages.find(message => message.details?.provider === loaded.provider && message.details?.sessionId === loaded.id && message.details?.sourceMessageId === row.id);
+        if (saved && row.kind === 'activity') saved.kind = 'activity';
+        continue;
+      }
       chat.imported[key] = true;
       // Our structured native replies have already been shown in the journal.
       if (row.transport && chat.messages.some(message => message.role === row.role && (message.text === row.text || message.kind === 'completion' && message.text.endsWith(row.text)))) continue;
-      journal.add(entry.plans, { role: row.role, text: row.text, mode: 'work', kind: 'import', details: { provider: loaded.provider, sessionId: loaded.id, sourceMessageId: row.id } });
+      journal.add(entry.plans, { role: row.role, text: row.text, mode: 'work', kind: row.kind === 'activity' ? 'activity' : 'import', details: { provider: loaded.provider, sessionId: loaded.id, sourceMessageId: row.id } });
     }
     chat.sessions[loaded.provider] = { ...chat.sessions[loaded.provider], provider: loaded.provider, id: loaded.id, cwd: entry.root.fsPath, linked: true, title: loaded.title, ...(loaded.model ? { model: loaded.model } : {}) };
     if (select) { chat.mode = 'work'; await context.globalState.update('planningProvider', loaded.provider); journal.add(entry.plans, { role: 'assistant', mode: 'work', kind: 'handoff', text: 'Continuing ' + PROVIDERS[loaded.provider] + ': ' + loaded.title, details: { sessionId: loaded.id } }); }

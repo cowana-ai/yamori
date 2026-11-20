@@ -136,13 +136,13 @@ Open **Plan** directly from the Yamori reader header or the editor title's **Yam
 
 **New plan**, **Fit canvas**, **Copy plan**, and **Export** stay above the canvas; **Stop** appears while planning. In a file's details, use the visible change picker and previous/next buttons, then **Close** to return to the canvas. Model and effort selectors stay beside the conversation.
 
-Open **Project guide → Plan**, describe your goal, and choose starting files on the map. Matching starts locally; if matches are weak, Yamori may ask the quick model to rank files. Check the displayed context estimate and model route before pressing **Draft plan**.
+Open **Project guide → Plan**, describe your goal, and choose starting files on the map. Starting-file suggestions are local and use no AI; the planning agent investigates weak matches during the requested draft. Check the displayed context estimate and model route before pressing **Draft plan**.
 
 Drag steps to reorder them, or use the up/down buttons. Edit the title, file, source range, intended change, reason and personal notes. Click **On map** to locate a step's file; affected files and related tests help you inspect the scope. Undo/redo works within the plan. Mark steps done or skip them as you work.
 
 **Show before → after** explains one step on demand. **Copy as agent prompt** hands the plan to your coding agent; **Export Markdown** saves a readable copy. Planning does not execute code changes. Plans are saved locally, and starting over retains recent plans in history.
 
-Draft context uses bounded outlines and relevant current pseudocode, falling back to definitions when explanations are stale. Automatic model selection starts small only for narrow changes, and escalates a rejected quick draft once. Editing during an AI request stops that request so a late response cannot overwrite your changes.
+Draft context uses bounded outlines and relevant current pseudocode, falling back to definitions when explanations are stale. Drafting uses your selected model once by default. Explicit fast mode uses the quick model once. Validation failures preserve the previous plan and require an explicit retry; legacy auto settings now behave like main. Editing during an AI request stops that request so a late response cannot overwrite your changes.
 
 ### Canvas planning
 
@@ -151,6 +151,10 @@ In **Plan**, enter a goal and press **Create plan**. The agent chooses files usi
 Claude planning requests use its `--permission-mode plan` setting with only Yamori project tools available. Codex uses its native Plan collaboration mode in an isolated read-only session with the same tools. Clarification questions appear in Yamori and resume the waiting turn when answered. The selected model and effort are preserved. These modes apply inside Yamori; they do not toggle Plan in a separate Codex or Claude window. Restricted workspaces do not expose project tools. The initial context, including the file index, shares the configured budget; additional agent lookups can increase usage.
 
 ### Review and discuss proposals
+
+Plan descriptions start with an action: “I’ll do this, so this happens.” They use everyday language suitable for a reader with no coding background, with a short concrete reason and only the context needed to understand the action. Structural changes name the intended preserved behavior; behavior changes name what will work differently. Function names follow their plain-language role. The agent checks clarity within the same drafting request, without an extra reviewer call. Detailed execution steps remain available through Generate pseudocode. Existing cached plans keep their wording until you ask the agent to revise them.
+
+This writing approach draws on [Google’s change-description guidance](https://google.github.io/eng-practices/review/developer/cl-descriptions.html) (what and why), [GOV.UK acceptance criteria](https://www.gov.uk/service-manual/agile-delivery/writing-user-stories) (recognizable outcomes), [decision records](https://www.cognitect.com/blog/2011/11/15/documenting-architecture-decisions) (context, decision and consequences), and [progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) (details on demand).
 
 Proposed changes are readable text by default. **Edit** opens a monospace terminal-style editor; **Done editing** returns to the reading view. Click any proposed file to leave a comment or **Reject file**. Rejection skips every step for that file, excludes it from copied agent instructions, and prevents it from returning in an improved draft. **Restore file** includes it again.
 
@@ -175,11 +179,11 @@ Click a file to inspect one change at a time. Use the change picker to jump dire
 
 Planning keeps a read-only agent session while the plan is open. Follow-ups reuse the investigation and return only changed steps; questions can be answered without rewriting the plan. Unchanged steps keep their IDs, comments, status and cached pseudocode. A changed step's old pseudocode is cleared so it cannot be mistaken for the new proposal.
 
-Codex keeps a live ephemeral thread and closes it after 20 minutes idle. Claude resumes the same CLI session; its normal local session history is used. New plan, a provider/model/effort change, or a changed project source snapshot starts a fresh investigation. Sessions are separate from the locally saved plan, so reopening a plan after restart can need a new session.
+Codex keeps a live planning connection and closes it after 20 minutes idle; saved native session references can resume the thread. Claude resumes the same CLI session. New plan, provider/model/effort or trust changes replace the connection. Source changes retain the session and send a bounded list of changed paths, with instructions to reread affected source and check unsaved editor context. Sessions are separate from the locally saved plan, so reopening a plan after restart can need a new session.
 
 Patch output is checked with the same compiled Ajv approach as other AI responses, then validated against current step IDs and exact source bounds. Invalid updates leave the saved steps unchanged. **Improve with default model** remains available for an explicit full-plan rewrite. Local navigation, comments, and manual edits do not invoke the model.
 
-Planning keeps a stable provider output schema across draft and patch turns so changing the response format does not invalidate the prompt-cache prefix. If a session expires or source changes, its replacement receives the current plan, project context and bounded recent conversation. Cache hits and costs still depend on the provider.
+Planning keeps a stable provider output schema across draft and patch turns so changing the response format does not invalidate the prompt-cache prefix. If a session expires or source changes, its replacement receives the current plan, project context and bounded recent conversation. Cache hits and costs still depend on the provider. Draft, revision and requested-preview responses record reported usage and elapsed request time in project conversation calls, including responses later rejected by validation. Shared call IDs prevent the active plan and conversation from counting the same usage twice. Provider failures without reported usage cannot be priced accurately. Pseudocode previews run only when requested, with no automatic second model. Implementation remains a separate permission boundary; its bounded handoff includes the approved plan once rather than duplicating it in conversation context. These controls reduce avoidable work; they do not guarantee parity with native Codex.
 
 ### Approve a plan
 

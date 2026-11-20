@@ -87,19 +87,10 @@ function rippleOf(graph, planFiles, limit = 40) {
   return [...out.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([file]) => file);
 }
 
-// ---- Which model drafts: decided from the project's structure, not the answer ----
-// A cheap model drafts a narrow change well enough (the gate catches the rest);
-// a change that reaches other files gets the default model straight away. On a
-// real project the quick model drafted correct but thin plans for changes with
-// users and tests, so the model's answer can't be what decides.
-function routeFor(graph, files, mode = 'auto') {
+// Explicit fast mode is optional; default and legacy auto use the selected model once.
+function routeFor(graph, files, mode = 'main') {
   const ripple = rippleOf(graph, files);
-  if (mode === 'main') return { first: 'main', ripple: ripple.length, reason: 'set to always use your default model' };
-  if (mode === 'fast') return { first: 'fast', ripple: ripple.length, reason: 'set to always use the quick model' };
-  if (files.length >= 5) return { first: 'main', ripple: ripple.length, reason: 'it starts from ' + files.length + ' files' };
-  if (ripple.length >= 12) return { first: 'main', ripple: ripple.length, reason: 'it reaches ' + ripple.length + ' other files' };
-  if (files.length <= 2 && ripple.length <= 2) return { first: 'fast', ripple: ripple.length, reason: 'a small change: ' + (ripple.length ? 'only ' + ripple.length + ' other file' + (ripple.length === 1 ? ' uses' : 's use') + ' it' : 'nothing else uses it') };
-  return { first: 'main', ripple: ripple.length, reason: 'it reaches ' + ripple.length + ' other file' + (ripple.length === 1 ? '' : 's') };
+  return { first: mode === 'fast' ? 'fast' : 'main', ripple: ripple.length, reason: mode === 'fast' ? 'set to always use the quick model' : 'one draft with your selected model; no automatic escalation' };
 }
 
 // ---- The slice of project knowledge an AI drafts the plan from -----------------

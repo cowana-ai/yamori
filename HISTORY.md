@@ -1,5 +1,20 @@
 # Release history
 
+### 0.26.10 · 2026-11-20
+- **Action-first plans:** explain proposed work as “I’ll do this, so this happens” using everyday words, short sentences and concrete reasons. Explain source names by their role and preserve important constraints without turning proposals into compressed checklists. Applies to drafts and revisions without an extra model request.
+
+### 0.26.9 · 2026-11-20
+- **Single-pass planning:** use the selected model once by default; legacy auto is an alias. No paid starting-file ranking, automatic second draft or preview fallback. Validation preserves the saved plan for explicit retry.
+- **Retained investigation:** source edits send changed-file notices instead of replacing the planning session. Keep the separate implementation permission boundary and remove duplicate plan context from its bounded handoff.
+- **Workflow usage:** persist planning response usage and duration even when validation rejects it, and deduplicate shared call IDs in the display.
+
+### 0.26.8 · 2026-11-20
+- **Understandable change proposals:** drafts and revisions explain the current situation, proposed difference and concrete consequence before implementation names. Preserve meaningful constraints, distinguish intended refactoring from behavior changes, and check clarity in the existing request.
+
+### 0.26.7 · 2026-11-20
+- **Quiet chat:** working updates and command output stay in collapsed Activity instead of the conversation. Native session imports distinguish interim updates from answers, including previously imported updates.
+- **Clear speakers:** blue user messages and green Yamori labels, with explicit names in the terminal and accessible fallback.
+
 ### 0.26.6 · 2026-11-19
 - **Stable inline questions:** ignore selections and focus changes from embedded comment editors. Keep drafts when the source highlight collapses; dismiss explicitly or replace the selection instead. Add a visible Dismiss action.
 - **Complete plan canvas:** render every affected file even before its map metadata arrives. Fit planning independently of the project map, with a readable initial zoom centred on the most affected file.

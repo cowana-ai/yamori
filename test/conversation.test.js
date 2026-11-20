@@ -42,3 +42,12 @@ test('old handoff labels are repaired without losing messages, native sessions o
   const saved = JSON.stringify(store); journal.ensure(store); assert.equal(JSON.stringify(store), saved, 'repair runs once and survives restart');
   assert.doesNotMatch(journal.context(store), /PRIVATE_HISTORY/);
 });
+
+
+test('implementation handoff can omit the duplicate plan while retaining conversation and tool access', () => {
+  const store = { current: { id: 'p', goal: 'Update output', summary: 'Change output', steps: [{ file: 'main.py', change: 'UNIQUE_PLAN_DETAILS' }] } };
+  journal.add(store, { role: 'user', text: 'Keep the existing filename.' });
+  const context = journal.context(store, 12000, undefined, { includePlan: false });
+  assert.match(context, /Keep the existing filename/); assert.match(context, /get_conversation/);
+  assert.doesNotMatch(context, /UNIQUE_PLAN_DETAILS/); assert.match(context, /approved plan is supplied separately/);
+});

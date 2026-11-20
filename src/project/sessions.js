@@ -29,23 +29,25 @@ function decodeText(text) {
 function visible(items, provider) {
   const out = [];
   for (const [index, item] of items.entries()) {
-    let role, text;
+    let role, text, activity = false;
     const type = item.type;
     if (type === 'userMessage') { role = 'user'; text = (item.content || []).filter(part => part.type === 'text').map(part => part.text).join('\n'); }
-    else if (type === 'agentMessage') { role = 'assistant'; text = item.text; }
+    else if (type === 'agentMessage') { role = 'assistant'; text = item.text; activity = item.phase === 'commentary' || item.channel === 'commentary'; }
     else if (type === 'commandExecution') { role = 'tool'; text = 'Command: ' + item.command + (item.aggregatedOutput ? '\n' + item.aggregatedOutput : ''); }
     else if (type === 'fileChange') { role = 'tool'; text = 'Changed files: ' + (item.changes || []).map(change => change.path).join(', '); }
     else if (provider === 'claude' && ['user', 'assistant'].includes(type)) {
       const content = item.message?.content;
       role = Array.isArray(content) && content.length && content.every(part => part.type === 'tool_result') ? 'tool' : type;
-      text = typeof content === 'string' ? content : (content || []).flatMap(part => part.type === 'text' ? [part.text] : part.type === 'tool_result' ? ['Tool result: ' + (typeof part.content === 'string' ? part.content : JSON.stringify(part.content))] : part.type === 'tool_use' ? ['Tool: ' + part.name + (part.input?.file_path ? ' ' + part.input.file_path : '')] : []).join('\n');
+      text = typeof content === 'string' ? content : (content || []).flatMap(part => part.type === 'text' ? [part.text] : part.type === 'tool_result' ? ['Tool result: ' + (typeof part.content === 'string' ? part.content : JSON.stringify(part.content))] : []).join('\n');
+      activity = type === 'assistant' && (item.message?.stop_reason === 'tool_use' || Array.isArray(content) && content.some(part => part.type === 'tool_use'));
+      if (!text && activity) { role = 'tool'; text = (content || []).filter(part => part.type === 'tool_use').map(part => 'Tool: ' + part.name).join('\n'); }
     }
     if (!role || typeof text !== 'string' || !text.trim()) continue;
     // Yamori's transport prompts are already represented by real user messages
     // in its journal; don't re-import the prompt wrapper as a new user request.
     if (role === 'user' && isTransportPrompt(text)) continue;
     const transport = role === 'assistant' && decodeText(text) !== text;
-    out.push({ ...(transport ? { transport: true } : {}), id: item.id || item.uuid || provider + '-' + index, role, text: role === 'assistant' ? decodeText(text) : text, at: item.timestamp ? new Date(item.timestamp).getTime() : undefined });
+    out.push({ ...(activity || role === 'tool' ? { kind: 'activity' } : {}), ...(transport ? { transport: true } : {}), id: item.id || item.uuid || provider + '-' + index, role, text: role === 'assistant' ? decodeText(text) : text, at: item.timestamp ? new Date(item.timestamp).getTime() : undefined });
   }
   return out;
 }

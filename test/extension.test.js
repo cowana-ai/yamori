@@ -3103,7 +3103,7 @@ const GOOD_PLAN = { summary: 'Skip the hook when numbering loops.', steps: [
   { file: 'pipeline/write.py', lines: [4, 5], title: 'Match the hints', change: 'Do not hint the hook loop', why: 'Keeps hints in step' }] };
 const BAD_PLAN = { summary: 'x', steps: [{ file: 'pipeline/missing.py', lines: [1, 5], title: 't', change: 'Edit it', why: '' }] };
 
-test('planning: free starting points, a cheap draft that escalates once only when a fixed rule rejects it, edits that cost nothing, and details on demand', async () => {
+test('planning: local starting points, explicit retries, no hidden draft or preview fallback, and durable usage', async () => {
   const fs = require('node:fs/promises'), path = require('node:path');
   const calls = [], queue = [];
   const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: planEngine(calls, queue) });
@@ -3118,16 +3118,22 @@ test('planning: free starting points, a cheap draft that escalates once only whe
     await h.guide.receive({ type: 'planEdit', plan: { ...plan().plan, starting: ['pipeline/plan.py', 'pipeline/write.py'] } });
     await h.until(() => plan().estimate?.files === 2, 'the estimate follows the chosen files');
     assert.equal(calls.length, 0, 'editing the starting files uses no AI');
-    // 2. A bad quick draft: the gate names its cause, the default model is asked once.
+    // A rejected draft costs one turn; the user explicitly chooses whether to retry.
     queue.push(BAD_PLAN, GOOD_PLAN);
     await h.guide.receive({ type: 'planDraft' });
-    assert.deepEqual(calls.map(call => [call.kind, call.model]), [['plan', 'fast-test'], ['plan', '']], 'quick model first, then the default model');
-    assert.match(calls[1].prompt, /PROBLEMS TO FIX:\n- Step 1 names a file that is not in the project: pipeline\/missing\.py\./);
+    assert.equal(calls.length, 1, 'validation never silently triggers a second draft');
+    assert.match(plan().error, /No automatic retry/);
+    assert.equal(plan().plan.steps.length, 0, 'the invalid draft is not saved');
+    assert.equal(plan().conversationCalls.length, 1, 'usage for a rejected response is retained');
+    await h.guide.receive({ type: 'planDraft' });
+    assert.deepEqual(calls.map(call => [call.kind, call.model]), [['plan', ''], ['plan', '']], 'both explicit attempts use the selected model');
     assert.ok(calls[0].prompt.indexOf('You plan a code change') < calls[0].prompt.indexOf('GOAL:'));
     assert.doesNotMatch(calls[0].prompt, /def plan_loops|loops\.append/, 'no source goes to the AI');
     const drafted = plan();
-    assert.deepEqual([drafted.plan.steps.length, drafted.plan.models.escalated, drafted.plan.models.draft], [2, true, 'main-model']);
-    assert.deepEqual([drafted.plan.tokens.used, drafted.plan.calls.map(call => call.stage)], [2300, ['quick model', 'default model']], 'real usage from both calls is added up');
+    assert.deepEqual([drafted.plan.steps.length, drafted.plan.models.escalated, drafted.plan.models.draft], [2, false, 'main-model']);
+    assert.deepEqual([drafted.plan.tokens.used, drafted.plan.calls.map(call => call.stage)], [1150, ['draft']], 'the saved draft records its own response'
+    );
+    assert.equal(drafted.conversationCalls.reduce((sum, call) => sum + call.tokens, 0), 2300, 'workflow history also includes the rejected attempt');
     const [first, second] = drafted.plan.steps;
     assert.ok(drafted.impact[first.id].usedBy.some(link => link.file === 'main.py'), 'impact comes from the import graph'); assert.ok(drafted.ripple.includes('main.py'));
     // 3. Editing costs nothing and is saved.
@@ -3139,11 +3145,15 @@ test('planning: free starting points, a cheap draft that escalates once only whe
     await h.until(async () => true, 'tick');
     let saved; for (let i = 0; i < 80 && !saved?.current?.steps?.[0]?.title.includes('edited'); i++) { await new Promise(resolve => setTimeout(resolve, 25)); saved = JSON.parse(await fs.readFile(path.join(store, 'plan.json'), 'utf8').catch(() => 'null')); }
     assert.equal(saved.current.steps[0].title, 'Match the hints (edited)', 'the plan is saved with the project');
-    // 4. Before and after: quick model, default model only if the check finds an invented name.
+    // Previews only run on demand, with no hidden retry.
     const editedFirst = plan().plan.steps[1];
     queue.push({ before: '', after: 'Call ghost_helper on each loop.' }, { before: '', after: 'Number the loops from L2.' });
     await h.guide.receive({ type: 'planDetail', id: editedFirst.id });
-    assert.deepEqual(calls.slice(2).map(call => [call.kind, call.model]), [['detail', 'fast-test'], ['detail', '']], 'an invented name escalates the detail once');
+    assert.equal(calls.length, 3, 'an invalid preview is not retried automatically');
+    assert.match(plan().error, /no automatic retry/);
+    assert.equal(plan().plan.steps[1].after, undefined);
+    await h.guide.receive({ type: 'planDetail', id: editedFirst.id });
+    assert.deepEqual(calls.slice(2).map(call => [call.kind, call.model]), [['detail', ''], ['detail', '']], 'only an explicit retry starts the next preview');
     assert.match(calls[2].prompt, /SOURCE LINES 3–8/); assert.match(calls[2].prompt, /GOAL: "plan the loops and skip the hook"/);
     assert.equal(plan().plan.steps[1].after, 'Number the loops from L2.');
     // 5. Improve: the default model, keeping the user's edits.
@@ -3168,7 +3178,7 @@ test('planning: free starting points, a cheap draft that escalates once only whe
   } finally { await h.close(); }
 });
 
-test('planning: a good quick draft is kept (no escalation), a broad goal goes straight to the default model, forced modes are obeyed, and an unready AI opens setup first', async () => {
+test('planning: narrow and broad goals use one selected-model draft; explicit fast mode and setup are respected', async () => {
   const calls = [], queue = [];
   const quick = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: planEngine(calls, queue) });
   try {
@@ -3177,13 +3187,13 @@ test('planning: a good quick draft is kept (no escalation), a broad goal goes st
     // Three starting files reach other files: the default model drafts straight away.
     await quick.guide.receive({ type: 'planEdit', plan: { ...quick.guideState().plan.plan, starting: ['pipeline/plan.py', 'pipeline/write.py', 'models/script.py'] } });
     await quick.until(() => quick.guideState().plan.estimate?.route?.first === 'main', 'the route is shown before drafting');
-    assert.match(quick.guideState().plan.estimate.route.reason, /^it reaches \d+ other files?$/);
+    assert.match(quick.guideState().plan.estimate.route.reason, /no automatic escalation/);
     // One narrow starting file: the quick model.
     await quick.guide.receive({ type: 'planEdit', plan: { ...quick.guideState().plan.plan, starting: ['pipeline/write.py'] } });
-    await quick.until(() => quick.guideState().plan.estimate?.route?.first === 'fast', 'a narrow change starts cheap');
-    assert.match(quick.guideState().plan.estimate.route.reason, /^a small change: /);
+    await quick.until(() => quick.guideState().plan.estimate?.route?.first === 'main', 'narrow changes also use the selected model');
+    assert.match(quick.guideState().plan.estimate.route.reason, /no automatic escalation/);
     queue.push(GOOD_PLAN); await quick.guide.receive({ type: 'planDraft' });
-    assert.deepEqual(calls.map(call => call.model), ['fast-test'], 'a draft that passes the gate costs one cheap request');
+    assert.deepEqual(calls.map(call => call.model), [''], 'a passing draft costs one selected-model request');
     assert.deepEqual([quick.guideState().plan.plan.models.escalated, quick.guideState().plan.plan.steps.length], [false, 2]);
     assert.ok(!quick.guideState().plan.notes.some(note => note.kind === 'problem'), 'a passing draft has no problems; any soft notes cost nothing more');
     // Broad: five starting files.
@@ -3464,6 +3474,26 @@ test('the Plan tab: the same map with numbered steps, ripples and suggestions, a
   terminalData('Explain this plan'); terminalData('\r');
   assert.deepEqual(messages.at(-1), { type: 'planGoal', goal: 'Explain this plan' });
   assert.ok(terminalOutput.length);
+  const previousChatInfo = vm.runInNewContext('state.plan', sandbox);
+  const sharedCall = { id: 'shared-draft', usage: { input: 10, output: 5 } };
+  const usageFixture = planInfo(219); usageFixture.plan.calls = [sharedCall];
+  push({ ...usageFixture, conversationCalls: [sharedCall, { id: 'rejected-draft', usage: { input: 20, output: 2 } }] });
+  assert.ok(all(panel).some(el => el.className === 'plan-usage' && /30 input.*7 output/.test(el.textContent)), 'workflow usage counts each response once, including rejected drafts');
+  terminalOutput.length = 0;
+  push({ ...planInfo(220), conversation: [
+    { role: 'user', text: 'Show the latest changes' },
+    { role: 'tool', text: 'RAW_COMMAND_OUTPUT' },
+    { role: 'assistant', kind: 'activity', text: 'INTERIM_WORKING_UPDATE' },
+    { role: 'assistant', text: 'The writer now loads the profile.' }
+  ] });
+  const visibleChat = terminalOutput.join('');
+  assert.match(visibleChat, /You/); assert.match(visibleChat, /Yamori/);
+  assert.match(visibleChat, /Show the latest changes/); assert.match(visibleChat, /writer now loads/);
+  assert.doesNotMatch(visibleChat, /RAW_COMMAND_OUTPUT|INTERIM_WORKING_UPDATE/);
+  const activityTrail = all(panel).find(el => el.className === 'plan-live-trail');
+  assert.ok(activityTrail); assert.equal(activityTrail.open, false, 'Activity starts collapsed');
+  assert.ok(all(activityTrail).some(el => el.textContent === 'RAW_COMMAND_OUTPUT'), 'logs remain available on demand');
+  push(previousChatInfo);
   const wrappedInput = 'α😀 long wrapped input '.repeat(30) + '\nSecond line';
   const outputBeforeInput = terminalOutput.length;
   terminalData(wrappedInput);
@@ -3653,8 +3683,16 @@ test('planning follow-ups reuse the session and apply only validated patches; qu
     h.vscode.workspace.textDocuments = [{ isDirty: true, version: 2, uri: new h.Uri(require('node:path').join(h.root, 'pipeline', 'plan.py')) }];
     reply = { ...reply, message: 'The explanation is unchanged.', updates: [] };
     await h.guide.receive({ type: 'planChat', text: 'Check the edited source context.' });
-    assert.notEqual(requests.at(-1).session, retained, 'dirty project source invalidates the retained investigation');
-    assert.ok(requests.at(-1).prompt.includes('PROJECT FILE INDEX'), 'a replacement session receives the project context');
+    assert.equal(requests.at(-1).session, retained, 'source changes keep the native session');
+    assert.doesNotMatch(requests.at(-1).prompt, /PROJECT FILE INDEX/, 'source changes do not resend the whole index');
+    assert.match(requests.at(-1).prompt, /CHANGED PROJECT FILES[\s\S]*pipeline\/plan\.py/);
+    assert.match(requests.at(-1).prompt, /reread affected source/);
+    h.vscode.workspace.textDocuments = [];
+    await require('node:fs/promises').appendFile(require('node:path').join(h.root, 'pipeline', 'plan.py'), '\n# Updated by a pull\n');
+    await h.guide.receive({ type: 'planChat', text: 'Check the pulled changes.' });
+    assert.equal(requests.at(-1).session, retained, 'disk changes also retain the planning session');
+    assert.match(requests.at(-1).prompt, /CHANGED PROJECT FILES[\s\S]*pipeline\/plan\.py/);
+    assert.doesNotMatch(requests.at(-1).prompt, /PROJECT FILE INDEX/);
     const before = structuredClone(h.guideState().plan.plan.steps);
     reply = { ...reply, updates: [{ id: 'not-a-real-step', file: original.steps[0].file, lines: [3, 8], title: 'Invalid step', change: 'Do something', why: '' }] };
     await h.guide.receive({ type: 'planChat', text: 'Try an invalid change' });
@@ -4099,11 +4137,13 @@ test('project chat continues through planning, implementation, testing and a new
     await h.guide.receive({ type: 'planGoal', goal: 'plan the loops and skip the hook' }); const plan = h.guideState().plan.plan;
     assert.match(planningCalls[0].prompt, /How does this project write a script/); assert.equal(h.guideState().plan.mode, 'plan');
     await h.guide.receive({ type: 'planExecute', id: plan.id }); assert.equal(h.guideState().plan.plan, undefined); assert.equal(h.guideState().plan.mode, 'work');
-    assert.equal(calls[1].session.id, 'native-project-session'); assert.match(calls[1].prompt, /How does this project write a script/);
+    assert.equal(calls[1].session.id, 'native-project-session'); assert.doesNotMatch(calls[1].prompt, /How does this project write a script/, 'the resumed coding session already has earlier turns');
+    assert.match(calls[1].prompt, /approved plan is supplied separately/); assert.doesNotMatch(calls[1].prompt, /Current plan: /, 'the implementation handoff does not duplicate the approved plan');
     await h.guide.receive({ type: 'projectMessage', mode: 'work', text: 'Run the tests for those changes' });
     assert.equal(calls[2].session.id, 'native-project-session'); assert.match(calls[2].prompt, /Run the tests for those changes/);
     assert.equal(h.guideState().plan.plan, undefined, 'a testing follow-up does not start another plan');
-    const conversation = h.guideState().plan.conversation; assert.ok(conversation.some(row => row.text === 'How does this project write a script?')); assert.ok(conversation.some(row => row.kind === 'plan')); assert.ok(conversation.some(row => row.kind === 'completion')); assert.ok(conversation.some(row => row.role === 'tool'));
+    const conversation = h.guideState().plan.conversation; assert.ok(conversation.some(row => row.text === 'How does this project write a script?')); assert.ok(conversation.some(row => row.kind === 'plan')); assert.ok(conversation.some(row => row.kind === 'completion')); assert.ok(!conversation.some(row => row.role === 'tool'), 'live tool updates stay in Activity rather than durable chat messages');
+    assert.ok(h.guideState().plan.activity.some(text => /Running requested checks/.test(text)));
     const id = h.guideState().plan.conversationId; await h.guide.receive({ type: 'planClear' }); assert.equal(h.guideState().plan.conversationId, id); assert.ok(h.guideState().plan.conversation.some(row => /Run the tests for those changes/.test(row.text)));
     const fs = require('node:fs/promises'), path = require('node:path'), projects = path.join(h.temp, 'storage', 'cache', 'projects');
     await new Promise(resolve => setTimeout(resolve, 450)); const index = JSON.parse(await fs.readFile(path.join(projects, 'index.json'), 'utf8')), store = path.join(projects, index[await fs.realpath(h.root)].dir), data = JSON.parse(await fs.readFile(path.join(store, 'plan.json'), 'utf8'));

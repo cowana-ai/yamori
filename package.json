@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori",
   "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code, with a project map that shows where to start.",
-  "version": "0.26.6",
+  "version": "0.26.10",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
@@ -300,18 +300,18 @@
         },
         "yamori.planModel": {
           "type": "string",
-          "default": "auto",
+          "default": "main",
           "enum": [
             "auto",
             "main",
             "fast"
           ],
           "enumDescriptions": [
-            "Draft with the quick model and ask your default model only if a fixed rule rejects the draft, or for a broad goal.",
-            "Always use your default model.",
-            "Always use the quick model."
+            "Compatibility alias for main: one draft with your selected model, no automatic escalation.",
+            "Use your selected model for one draft.",
+            "Use the quick model for one draft. Retrying or improving requires an explicit request."
           ],
-          "description": "Which model drafts plans. auto uses the quick model first and your default model only when needed; main and fast force one.",
+          "description": "Which model drafts plans. main (default) and legacy auto use your selected model once; fast uses the quick model once. No automatic second draft or fallback model.",
           "scope": "application"
         },
         "yamori.agentTools": {
