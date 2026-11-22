@@ -3,19 +3,27 @@
 <h1 align="center">Yamori 🦎</h1>
 
 <p align="center"><strong>Read any code as pseudocode, right beside it.</strong><br>
-Short, numbered steps next to your editor, every line linked back to the source.
-Runs on the Claude or ChatGPT plan you already have. No API key.</p>
+Short, numbered steps next to your editor, every line linked back to the source.</p>
 
-<!-- demo GIF here, before any screenshot -->
+<p align="center">
+  <img src="media/demo.gif" width="720" alt="Yamori reading nanoGPT attention as numbered pseudocode with rendered formulas, each step linked to the Python, then stepping through the editor, the project Map, and Plan mode">
+</p>
+
+<p align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori">Install from the VS Code Marketplace</a>
+  &nbsp;·&nbsp;
+  <a href="https://open-vsx.org/extension/cowana-ai/yamori">Install from Open VSX</a><br>
+  No API key: runs on your Claude Code or Codex login.<br>
+  Works in VS Code and Cursor; Python, JS/TS, Go, Rust and Java.
+</p>
+
+**Quick start:** install, open a file, click the gecko (top right of the editor).
+The first time, Yamori finds Claude Code or Codex on your machine (including inside
+Claude Desktop or the ChatGPT app) and offers one button: Use, Sign in or Install.
 
 - **Two depths.** *Overview* gives the goal and main stages; *Logic* gives every meaningful step, with formulas rendered as math.
 - **Linked both ways.** Click a pseudocode line to jump to the code it stands for. Block titles appear above the code itself.
 - **Make it yours.** Edit a block, ask it to explain better, or make it shorter. Cached reads use no AI.
-
-**How it works:** install, open a file, click the gecko (top right of the editor).
-The first time, Yamori finds Claude Code or Codex on your machine (including inside
-Claude Desktop or the ChatGPT app) and offers one button: Use, Sign in or Install.
-Works in VS Code and Cursor; Python, JS/TS, Go, Rust and Java.
 
 **Also in Yamori**
 - **Project guide:** where to start reading, folder by folder; a map of how files connect; a glossary of project terms
@@ -30,7 +38,7 @@ Works in VS Code and Cursor; Python, JS/TS, Go, Rust and Java.
   <a href="https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori"><img alt="Installs" src="https://img.shields.io/visual-studio-marketplace/i/cowana-ai.yamori?label=installs&color=161616"></a>
   <a href="https://open-vsx.org/extension/cowana-ai/yamori"><img alt="Open VSX for Cursor" src="https://img.shields.io/open-vsx/v/cowana-ai/yamori?label=Open%20VSX%20(Cursor)&color=161616"></a>
   <a href="https://github.com/cowana-ai/yamori/actions/workflows/ci.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/cowana-ai/yamori/ci.yml?branch=main&label=tests"></a>
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-161616"></a>
+  <a href="https://github.com/cowana-ai/yamori/blob/HEAD/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-161616"></a>
 </p>
 
 <p align="center">

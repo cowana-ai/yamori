@@ -33,10 +33,12 @@ Launch an extension development host with:
 code --extensionDevelopmentPath=/absolute/path/to/yamori
 ```
 
-Build the installer with the VS Code packaging CLI:
+Build the installer with the VS Code packaging CLI. The base URL flags rewrite
+relative README images and links to this repository, so the Marketplace and
+Open VSX can render them. The demo GIF stays in git and out of the VSIX:
 
 ```sh
-npx @vscode/vsce package --no-dependencies
+npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/cowana-ai/yamori/blob/HEAD --baseImagesUrl https://github.com/cowana-ai/yamori/raw/HEAD
 ```
 
 ```
@@ -59,7 +61,7 @@ src/
   runner/
     trace.py          Runs one unit test and records how a function ran
 vendor/               KaTeX, CodeMirror, jsdiff and tree-sitter/ (runtime + grammars)
-media/                Icon, toolbar glyph font, README screenshots
+media/                Icon, toolbar glyph font, README screenshots, demo GIF
 test/                 Offline test suite (no AI requests)
 examples/             demo.py to try Yamori on
 docs/                 User and developer documentation
