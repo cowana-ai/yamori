@@ -7,9 +7,9 @@ const { verifyPseudocode, unknownNames, sourceNames, hiddenEffects } = require('
 const planner = require('./project/plan');
 const journal = require('./project/conversation');
 const nativeSessions = require('./project/sessions');
-const { CHAT_SCHEMA, implementPlan, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, flowPrompt, parseFlow, FLOW_SCHEMA, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./ai/engine');
+const { CHAT_SCHEMA, implementPlan, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, flowPrompt, parseFlow, FLOW_SCHEMA, FLOW_FORMAT_VERSION, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, PROMPT_FORMAT_VERSION, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./ai/engine');
 const { panelHTML } = require('./views/reader');
-const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks } = require('./storage/cache');
+const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks, verifyBlockHashes, acceptsCache, CACHE_SCHEMA_VERSION } = require('./storage/cache');
 const { mapHTML } = require('./views/guide');
 const { setupHTML } = require('./views/setup');
 const project = require('./project/graph');
@@ -588,10 +588,19 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       }
       const names = new Set(files.map(file => file.file));
       const links = entry.graph.edges.filter(edge => names.has(edge.from) && names.has(edge.to)).map(edge => ({ from: edge.from, uses: edge.to, names: (edge.names || []).slice(0, 8) }));
+      const flowKey = hash(JSON.stringify([CACHE_SCHEMA_VERSION, PROMPT_FORMAT_VERSION, FLOW_FORMAT_VERSION, 'flow', connection.provider, connection.model || '', connection.effort ?? null, found.query, files.map(file => [file.file, hash(file.excerpt), file.lines]), links, entry.notes?.overview || '']));
+      if (setting(api, 'cache', true) !== false) {
+        const hit = await cache.readFlow(flowKey).catch(() => undefined);
+        if (hit && !controller.signal.aborted && entry.search?.query === found.query) {
+          entry.flow = { state: 'done', cached: true, query: found.query, provider: PROVIDERS[chosen], model: hit.model || '', ...hit.value };
+          return;
+        }
+      }
       const response = await requestStructured({ ...connection, prompt: flowPrompt({ query: found.query, files, links, overview: entry.notes.overview }), schema: FLOW_SCHEMA, signal: controller.signal, showPreview: false });
       const flow = parseFlow(response.raw, files);
       if (controller.signal.aborted || entry.search?.query !== found.query) return;
       entry.flow = { state: 'done', query: found.query, provider: PROVIDERS[chosen], model: response.actualModel || connection.model || '', ...flow };
+      if (setting(api, 'cache', true) !== false) await cache.saveFlow(flowKey, { summary: flow.summary, sections: flow.sections, caveats: flow.caveats }, { provider: connection.provider, model: entry.flow.model, query: found.query }).catch(() => {});
     } catch (e) {
       if (controller.signal.aborted) return;
       if (isSetupProblem(e.message)) clearProviderStatus();
@@ -1973,6 +1982,7 @@ function createReader(context, navigation) {
   let missingStale = [];
   const revisionKey = (s, owner) => cacheKey(s, 'revision', owner);
   async function loadRevision(s, owner) {
+    if (!cacheEnabled()) return;
     const key = revisionKey(s, owner);
     if (revisionLoaded.has(key)) return;
     revisionLoaded.add(key);
@@ -2005,7 +2015,9 @@ function createReader(context, navigation) {
     missingStale = meta?.missingStale || [];
     stale = sourceMissing || sharedChange || staleBlocks.size > 0;
   }
+  const cacheEnabled = () => setting(vscode, 'cache', true) !== false;
   async function loadDrafts() {
+    if (!cacheEnabled()) return;
     const scope = scopeFor(); if (!scope || draftScopes.has(scope)) return;
     const rows = await disk.drafts(scope);
     draftScopes.set(scope, new Map((Array.isArray(rows) ? rows : []).filter(row => validDraft(row)).map(row => [row.key, row])));
@@ -2034,6 +2046,7 @@ function createReader(context, navigation) {
     catch { return snapshot; }
   }
   async function persistRevision(snapshot, opts, value, freshStatus = status()) {
+    if (!cacheEnabled()) return undefined;
     const revision = { id: hash(JSON.stringify(value)), level: opts.level, value, _yamori: { ...freshStatus, source: snapshot, savedAt: Date.now() } };
     try { await disk.write(path.join(cacheDir, 'revisions', revisionKey(snapshot, opts.provider) + '.json'), revision); }
     catch (e) { cacheWarning = 'Local revision could not be saved: ' + e.message; throw e; }
@@ -2059,7 +2072,9 @@ function createReader(context, navigation) {
     const metadataChanged = source.stamp?.modifiedAt !== next.stamp?.modifiedAt || source.stamp?.dirty !== next.stamp?.dirty || sourceMissing;
     if (different && busy) { cancel(); activity.push('Source changed; previous explanation kept'); }
     if (different && result) {
-      const analysis = analyzeSource(source, next, result, [...staleBlocks]);
+      const priorBlocks = result._cacheMeta?.blocks;
+      let analysis = analyzeSource(source, next, result, [...staleBlocks]);
+      if (priorBlocks) analysis = verifyBlockHashes(analysis, priorBlocks, next);
       result = analysis.value; staleBlocks = new Set(analysis.staleBlocks); removedBlocks = new Set(analysis.removedBlocks);
       changedRanges = analysis.changedRanges; sharedChange = sharedChange || analysis.shared;
       changedAt = next.stamp?.dirty || next.stamp?.modifiedAt === source.stamp?.modifiedAt ? Date.now() : next.stamp?.modifiedAt || Date.now(); changeReason = reason;
@@ -2297,12 +2312,23 @@ function createReader(context, navigation) {
       } catch (e) { error = e.message; post(); }
     }, null, context.subscriptions);
   }
+  function place(doc) {
+    const folder = vscode.workspace.getWorkspaceFolder?.(doc.uri);
+    const workspace = folder?.uri?.fsPath || '';
+    let relPath = '';
+    if (workspace) {
+      const rel = vscode.workspace.asRelativePath?.(doc.uri, false);
+      if (typeof rel === 'string' && rel && !rel.startsWith('..') && !path.isAbsolute(rel)) relPath = rel.split(path.sep).join('/');
+    }
+    return { workspace, relPath };
+  }
   function capture(doc, selection) {
     if (!['file', 'untitled'].includes(doc.uri.scheme)) throw new Error('Choose a local code file.');
+    const located = place(doc);
     if (/\.ipynb$/i.test(doc.uri.fsPath || '')) {
       const view = project.sourceView(doc.uri.fsPath, doc.getText()), text = view.text;
       if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('The notebook source is too large to explain at once.');
-      return { uri: doc.uri.toString(), name: vscode.workspace.asRelativePath(doc.uri), text, fullText: text, fullHash: hash(text), language: view.language, notebook: true, notebookCells: view.notebookCells, selected: false, startLine: 1, endLine: text.split('\n').length, stamp: { dirty: doc.isDirty !== false }, observedAt: Date.now() };
+      return { uri: doc.uri.toString(), name: vscode.workspace.asRelativePath(doc.uri), text, fullText: text, fullHash: hash(text), language: view.language, notebook: true, notebookCells: view.notebookCells, selected: false, startLine: 1, endLine: text.split('\n').length, stamp: { dirty: doc.isDirty !== false }, observedAt: Date.now(), ...located };
     }
     let start = 0, end = doc.lineCount - 1;
     const selected = selection && !selection.isEmpty;
@@ -2317,7 +2343,8 @@ function createReader(context, navigation) {
     return {
       uri: doc.uri.toString(), text, fullText: doc.getText(), observedAt: Date.now(), stamp: { dirty: doc.isDirty !== false }, language: doc.languageId, startLine: start + 1, endLine: end + 1, selected,
       fullHash: hash(doc.getText()),
-      name: vscode.workspace.asRelativePath(doc.uri) + (selected ? ` · lines ${start + 1}–${end + 1}` : '')
+      name: vscode.workspace.asRelativePath(doc.uri) + (selected ? ` · lines ${start + 1}–${end + 1}` : ''),
+      ...located
     };
   }
   function options(snapshot = source) {
@@ -2325,12 +2352,13 @@ function createReader(context, navigation) {
     return { provider, level, model, effort, refinementSteps: refinementSteps(setting(vscode, 'refinementSteps', 1)), cliPath, revision: snapshot && revisions.get(revisionKey(snapshot, provider)) };
   }
   async function cached(s, opts) {
+    if (!cacheEnabled()) return undefined;
     if (opts.revision?.level === opts.level && matchesModel(opts.revision.value, opts) && (opts.revision.value.refinement?.stepsRequested || 0) === opts.refinementSteps) return opts.revision.value;
     if (memory.has(keyFor(s, opts))) return memory.get(keyFor(s, opts));
     for (const candidate of ORDER.slice(ORDER.indexOf(opts.level))) {
       const candidateOpts = { ...opts, level: candidate };
       const entry = await disk.entry(keyFor(s, candidateOpts), s);
-      if (entry) {
+      if (entry && acceptsCache(entry.meta)) {
         if (entry.meta) Object.defineProperty(entry.value, '_cacheMeta', { value: entry.meta, configurable: true });
         remember(s, candidateOpts, entry.value);
         const found = memory.get(keyFor(s, opts));
@@ -2340,6 +2368,7 @@ function createReader(context, navigation) {
     }
   }
   async function save(s, opts, value, freshStatus = status()) {
+    if (!cacheEnabled()) return false;
     remember(s, opts, value);
     try {
       const meta = await disk.save(s, opts, value, keyFor(s, opts), freshStatus);
@@ -2429,13 +2458,13 @@ function createReader(context, navigation) {
     const opts = options(snapshot);
     await loadDrafts();
     if (force) backgroundReviews.get(keyFor(snapshot, opts))?.abort();
-    const ready = !force && memory.get(keyFor(snapshot, opts));
+    const ready = !force && cacheEnabled() && memory.get(keyFor(snapshot, opts));
     if (ready) { restoreStatus(ready._cacheMeta); result = ready; selectedModel = ready.model; error = ''; busy = false; progress = undefined; post(); resumeReview(snapshot, opts, ready); return; }
     error = ''; busy = true; startedAt = Date.now(); progress = 'Checking cache'; activity = []; selectedModel = undefined; post();
     const task = new AbortController(); controller = task;
     let pendingReview;
     try {
-      let value = force ? undefined : await cached(snapshot, opts);
+      let value = force || !cacheEnabled() ? undefined : await cached(snapshot, opts);
       if (value) restoreStatus(value._cacheMeta);
       // Pseudocode an agent saved for this exact file: shown at once, no request.
       if (!value && !force) {
@@ -2569,8 +2598,9 @@ function createReader(context, navigation) {
     }
     if (source && !stale && source.fullHash === next.fullHash && busy) { if (settings.show !== false) ensurePanel(); return inFlight; }
     cancel();
-    const saved = await disk.latest(next, options(next), true);
+    const saved = cacheEnabled() ? await disk.exact(next, options(next)) || await disk.latest(next, options(next), true) : undefined;
     if (saved) {
+      if (saved.meta) Object.defineProperty(saved.value, '_cacheMeta', { value: saved.meta, configurable: true });
       source = saved.meta.source; result = saved.value; restoreStatus(saved.meta); selectedModel = result.model; error = '';
       modelNotice = (saved.meta.opts?.refinementSteps || 0) < options().refinementSteps ? 'This cached result predates your refinement setting. Use Regenerate to apply it; opening the cache uses no AI.' : '';
       await loadDrafts(); applySource(next, 'Source changed since the cached explanation');
@@ -2631,7 +2661,7 @@ function createReader(context, navigation) {
       const saved = await save(contextSource, { ...opts, revision }, value, freshStatus);
       if (id !== serial || task.signal.aborted) return;
       source = contextSource; trackSources(); result = value; refreshBase = undefined; restoreStatus({ ...freshStatus, savedAt: saved ? cacheSavedAt : undefined });
-      selectedModel = value.model; activity.push(saved ? one ? 'Block refreshed and cached' : 'Explanation refreshed and cached' : 'Updated; local cache needs attention');
+      selectedModel = value.model; activity.push(!cacheEnabled() ? (one ? 'Block refreshed' : 'Explanation refreshed') : saved ? one ? 'Block refreshed and cached' : 'Explanation refreshed and cached' : 'Updated; local cache needs attention');
     } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; if (isSetupProblem(error)) clearProviderStatus(); finishRun('failed'); } }
     finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
   }

@@ -3,7 +3,15 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { diffArrays } = require('../../vendor/diff.min');
-const { hash, parseResult } = require('../ai/engine');
+const { hash, parseResult, PROMPT_FORMAT_VERSION, FLOW_FORMAT_VERSION } = require('../ai/engine');
+// Schema of the on-disk explanation record. Newer builds reject records above
+// this. Records from schema 1 stay readable: the explanation payload did not
+// change, and a missing promptVersion means PROMPT_FORMAT_VERSION.
+const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_MIN = 1;
+// Explanation files plus saved name-flows. Drafts, revisions and project maps
+// are not counted; they are removed by Yamori: Clear Cached Explanations.
+const CACHE_BYTE_LIMIT = 64 * 1024 * 1024;
 const linesOf = text => text.replace(/\r\n/g, '\n').split('\n');
 
 // Dates are the cheap signal; content determines whether an explanation is old.
@@ -125,8 +133,93 @@ function dependencyBlocks(source, value, symbol) {
   const found = value.sections.flatMap((section, index) => lines.slice(Math.max(0, section.startLine - source.startLine), section.endLine - source.startLine + 1).some(line => pattern.test(line)) ? [index] : []);
   return found.length ? found : value.sections.map((_, index) => index);
 }
+function filePathOf(source) {
+  if (!source || typeof source.uri !== 'string' || !source.uri.startsWith('file:')) return undefined;
+  try { return require('node:url').fileURLToPath(source.uri); } catch { return undefined; }
+}
+// Optional provenance. A commit change does not invalidate an explanation; the
+// content hash does. Reading .git avoids spawning git, including in Restricted Mode.
+async function gitCommit(filePath) {
+  if (!filePath) return undefined;
+  let directory = path.dirname(path.resolve(filePath));
+  for (;;) {
+    const marker = path.join(directory, '.git');
+    let gitDir;
+    try {
+      const stat = await fs.stat(marker);
+      if (stat.isDirectory()) gitDir = marker;
+      else {
+        const text = await fs.readFile(marker, 'utf8');
+        const match = text.match(/^gitdir:\s*(.+)\s*$/m);
+        if (match) gitDir = path.resolve(directory, match[1].trim());
+      }
+    } catch { /* not this directory */ }
+    if (gitDir) {
+      try {
+        const head = (await fs.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
+        const ref = head.match(/^ref:\s+(\S+)$/);
+        if (!ref) return /^[0-9a-f]{7,64}$/i.test(head) ? { commit: head, root: directory } : { root: directory };
+        let commit;
+        try { commit = (await fs.readFile(path.join(gitDir, ref[1]), 'utf8')).trim(); } catch { commit = ''; }
+        if (!/^[0-9a-f]{7,64}$/i.test(commit)) {
+          const packed = await fs.readFile(path.join(gitDir, 'packed-refs'), 'utf8').catch(() => '');
+          const line = packed.split('\n').find(row => row.endsWith(' ' + ref[1]) && /^[0-9a-f]{7,64}\s/i.test(row));
+          commit = line ? line.split(/\s+/)[0] : '';
+        }
+        return /^[0-9a-f]{7,64}$/i.test(commit) ? { commit, root: directory } : { root: directory };
+      } catch { return undefined; }
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+function sectionHash(source, section) {
+  const lines = linesOf(source?.fullText ?? source?.text ?? '');
+  const base = source?.fullText ? 0 : (source?.startLine || 1) - 1;
+  const start = section.startLine - base - 1, end = section.endLine - base;
+  if (start < 0 || end > lines.length || end < start) return hash('\u0000missing');
+  return hash(lines.slice(start, end).join('\n'));
+}
+function blockRecords(source, sections) {
+  return (sections || []).map(section => ({ hash: sectionHash(source, section), startLine: section.startLine, endLine: section.endLine }));
+}
+// A remapped block whose source text no longer matches the stored hash is stale.
+// Its line links are dropped so they cannot point at the wrong lines.
+function verifyBlockHashes(analysis, blocks, nextSource) {
+  if (!analysis || !Array.isArray(blocks) || !blocks.length) return analysis;
+  const stale = new Set(analysis.staleBlocks);
+  const sections = analysis.value.sections.map((section, index) => {
+    const recorded = blocks[index];
+    if (!recorded || stale.has(index)) return section;
+    if (sectionHash(nextSource, section) === recorded.hash) return section;
+    stale.add(index);
+    return { ...section, lineMap: [] };
+  });
+  return { ...analysis, value: { ...analysis.value, sections }, staleBlocks: [...stale].filter(index => index < sections.length).sort((a, b) => a - b) };
+}
+function contentIdentity(source) {
+  return [source.workspace || '', source.relPath || source.uri, hash(source.text || ''), source.fullHash || null, source.selected ? [source.startLine, source.endLine] : null];
+}
+// Workspace (or repo root) + path + content hash + the settings that change the
+// explanation. The git commit is metadata on the record, not part of this key.
+function explainAddress(source, opts) {
+  return hash(JSON.stringify(['explanation', CACHE_SCHEMA_VERSION, PROMPT_FORMAT_VERSION, ...contentIdentity(source), opts.provider, opts.level, opts.model || '', opts.effort ?? null, opts.refinementSteps || 0]));
+}
+function acceptsCache(meta) {
+  if (!meta || typeof meta.version !== 'number' || meta.version > CACHE_SCHEMA_VERSION || meta.version < CACHE_SCHEMA_MIN) return false;
+  const prompt = Object.hasOwn(meta, 'promptVersion') ? meta.promptVersion : (meta.version === 1 ? PROMPT_FORMAT_VERSION : undefined);
+  return prompt === PROMPT_FORMAT_VERSION;
+}
+function isCurrent(meta) {
+  return acceptsCache(meta) && !(meta.staleBlocks || []).length && !meta.sharedChange && !meta.sourceMissing;
+}
 class LocalCache {
-  constructor(root) { this.root = root; this.writes = new Map(); this.versions = new Map(); }
+  constructor(root, options = {}) {
+    this.root = root; this.writes = new Map(); this.versions = new Map();
+    this.maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : CACHE_BYTE_LIMIT;
+    this.accounted = 0; this.measured = false; this.evictChain = Promise.resolve(); this.useChain = Promise.resolve(); this.clock = 0;
+  }
   async json(file) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return undefined; } }
   write(file, value) {
     const previous = this.writes.get(file) || Promise.resolve();
@@ -141,6 +234,9 @@ class LocalCache {
   }
   variant(source, opts) { return hash(JSON.stringify([source.uri, source.selected ? [source.startLine, source.endLine] : null, opts.provider, opts.level, opts.model || '', opts.effort ?? null, ...(opts.refinementSteps ? ['refinement-v1', opts.refinementSteps] : [])])); }
   draftScope(source, opts) { return hash(JSON.stringify([source.uri, opts.provider, opts.level, opts.model || ''])); }
+  sameRequest(meta, source, opts) {
+    return acceptsCache(meta) && meta.source?.uri === source.uri && meta.opts?.provider === opts.provider && meta.opts?.level === opts.level && (meta.opts?.model || '') === (opts.model || '') && (meta.opts?.effort ?? null) === (opts.effort ?? null) && (meta.opts?.refinementSteps || 0) === (opts.refinementSteps || 0);
+  }
   async entry(key, source) {
     if (!/^[a-f0-9]{64}$/.test(key || '')) return undefined;
     const raw = await this.json(path.join(this.root, key + '.json'));
@@ -149,23 +245,145 @@ class LocalCache {
     if (!snapshot || typeof snapshot.text !== 'string' || typeof snapshot.uri !== 'string') return undefined;
     try { return { value: parseResult(JSON.stringify(raw), snapshot), meta: raw._yamori }; } catch { return undefined; }
   }
+  noteUse(token) {
+    this.useChain = this.useChain.catch(() => {}).then(async () => {
+      const file = path.join(this.root, 'lru.json');
+      const current = await this.json(file) || {};
+      if (!this.clock) for (const value of Object.values(current)) if (typeof value === 'number' && value > this.clock) this.clock = value;
+      this.clock = Math.max(Date.now(), this.clock + 1);
+      current[token] = this.clock;
+      await this.write(file, current);
+    });
+    return this.useChain;
+  }
+  async forget(tokens) {
+    this.useChain = this.useChain.catch(() => {}).then(async () => {
+      const file = path.join(this.root, 'lru.json');
+      const current = await this.json(file);
+      if (!current) return;
+      for (const token of tokens) delete current[token];
+      await this.write(file, current);
+    });
+    return this.useChain;
+  }
   async latest(source, opts, legacy = false) {
     const pointer = await this.json(path.join(this.root, 'latest', this.variant(source, opts) + '.json'));
     const entry = pointer && await this.entry(pointer.key);
-    if (!entry && legacy && opts.refinementSteps) return this.latest(source, { ...opts, refinementSteps: 0 });
-    if (entry?.meta?.source.uri !== source.uri || entry.meta.opts?.provider !== opts.provider || entry.meta.opts?.level !== opts.level || (entry.meta.opts?.model || '') !== (opts.model || '') || (entry.meta.opts?.effort ?? null) !== (opts.effort ?? null) || (entry.meta.opts?.refinementSteps || 0) !== (opts.refinementSteps || 0)) return undefined;
+    if (!entry && legacy && opts.refinementSteps) return this.latest(source, { ...opts, refinementSteps: 0 }, legacy);
+    if (!entry || !this.sameRequest(entry.meta, source, opts)) return undefined;
+    await this.noteUse(pointer.key + '.json');
+    return entry;
+  }
+  // Exact hit: this workspace, path and content were explained with these settings.
+  async exact(source, opts) {
+    if (!source || typeof source.text !== 'string' || typeof source.uri !== 'string') return undefined;
+    const address = explainAddress(source, opts);
+    const pointer = await this.json(path.join(this.root, 'by-content', address + '.json'));
+    const entry = pointer && await this.entry(pointer.key);
+    if (!entry || !this.sameRequest(entry.meta, source, opts)) return undefined;
+    const saved = entry.meta.source || {};
+    if (hash(saved.text || '') !== hash(source.text || '') || (saved.fullHash || null) !== (source.fullHash || null)) return undefined;
+    if (!!saved.selected !== !!source.selected) return undefined;
+    if (source.selected && (saved.startLine !== source.startLine || saved.endLine !== source.endLine)) return undefined;
+    await this.noteUse(pointer.key + '.json');
     return entry;
   }
   async save(source, opts, value, key, status = {}) {
     const variant = this.variant(source, opts), version = (this.versions.get(variant) || 0) + 1;
     this.versions.set(variant, version);
-    const meta = { version: 1, source, opts: { provider: opts.provider, level: opts.level, model: opts.model || '', effort: opts.effort ?? null, refinementSteps: opts.refinementSteps || 0 }, savedAt: Date.now(), staleBlocks: [], removedBlocks: [], ...status };
-    await this.write(path.join(this.root, key + '.json'), { ...value, _yamori: meta });
+    const git = await gitCommit(filePathOf(source)).catch(() => undefined);
+    const contentHash = hash(source.text || '');
+    const meta = {
+      staleBlocks: [], removedBlocks: [], ...status,
+      version: CACHE_SCHEMA_VERSION, promptVersion: PROMPT_FORMAT_VERSION,
+      source, opts: { provider: opts.provider, level: opts.level, model: opts.model || '', effort: opts.effort ?? null, refinementSteps: opts.refinementSteps || 0 },
+      savedAt: Date.now(), contentHash, workspace: source.workspace || '', relPath: source.relPath || '',
+      git: git || null, blocks: blockRecords(source, value.sections)
+    };
+    const file = path.join(this.root, key + '.json');
+    await this.write(file, { ...value, _yamori: meta });
+    await this.write(path.join(this.root, 'by-content', explainAddress(source, opts) + '.json'), { key });
     if (this.versions.get(variant) === version) await this.write(path.join(this.root, 'latest', variant + '.json'), { key });
+    await this.noteUse(key + '.json');
+    await this.track(file, key + '.json');
     return meta;
+  }
+  async readFlow(key) {
+    if (!/^[a-f0-9]{64}$/.test(key || '')) return undefined;
+    const file = path.join(this.root, 'flows', key + '.json');
+    const record = await this.json(file);
+    if (!record || record.version !== CACHE_SCHEMA_VERSION || record.promptVersion !== PROMPT_FORMAT_VERSION || record.flowVersion !== FLOW_FORMAT_VERSION) return undefined;
+    if (!record.value || typeof record.value.summary !== 'string' || !Array.isArray(record.value.sections)) return undefined;
+    await this.noteUse('flows/' + key + '.json');
+    return record;
+  }
+  async saveFlow(key, value, meta = {}) {
+    if (!/^[a-f0-9]{64}$/.test(key || '')) return undefined;
+    const record = { version: CACHE_SCHEMA_VERSION, promptVersion: PROMPT_FORMAT_VERSION, flowVersion: FLOW_FORMAT_VERSION, savedAt: Date.now(), ...meta, value };
+    const file = path.join(this.root, 'flows', key + '.json');
+    await this.write(file, record);
+    await this.noteUse('flows/' + key + '.json');
+    await this.track(file, 'flows/' + key + '.json');
+    return record;
+  }
+  async track(file, protect) {
+    const stat = await fs.stat(file).catch(() => undefined);
+    if (!this.measured) { this.measured = true; await this.enqueueEvict(protect); }
+    this.accounted += stat?.size || 0;
+    if (this.maxBytes > 0 && this.accounted > this.maxBytes) {
+      await this.enqueueEvict(protect);
+      this.accounted = Math.min(this.accounted, this.maxBytes);
+    }
+  }
+  enqueueEvict(protect) {
+    const run = this.evictChain.catch(() => {}).then(() => this.evict(protect));
+    this.evictChain = run;
+    return run;
+  }
+  async evict(protect) {
+    if (!(this.maxBytes > 0)) return;
+    const files = [];
+    const consider = async (dir, prefix) => {
+      let names = [];
+      try { names = await fs.readdir(dir); } catch { return; }
+      for (const name of names) {
+        if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+        const file = path.join(dir, name);
+        try {
+          const stat = await fs.stat(file);
+          if (stat.isFile()) files.push({ file, token: prefix + name, key: name.slice(0, -5), mtime: stat.mtimeMs, size: stat.size });
+        } catch { /* removed while measuring */ }
+      }
+    };
+    await consider(this.root, '');
+    await consider(path.join(this.root, 'flows'), 'flows/');
+    let total = files.reduce((sum, item) => sum + item.size, 0);
+    if (total <= this.maxBytes) return;
+    const order = await this.json(path.join(this.root, 'lru.json')) || {};
+    const removed = new Set(), removedTokens = [];
+    for (const item of files.sort((a, b) => (order[a.token] || a.mtime) - (order[b.token] || b.mtime) || (a.token < b.token ? -1 : 1))) {
+      if (total <= this.maxBytes) break;
+      if (item.token === protect) continue;
+      await fs.unlink(item.file).catch(() => {});
+      total -= item.size; removed.add(item.key); removedTokens.push(item.token);
+    }
+    if (removedTokens.length) await this.forget(removedTokens);
+    if (!removed.size) return;
+    const dir = path.join(this.root, 'by-content');
+    let pointers = [];
+    try { pointers = await fs.readdir(dir); } catch { return; }
+    for (const name of pointers) {
+      const pointer = await this.json(path.join(dir, name));
+      if (pointer && removed.has(pointer.key)) await fs.unlink(path.join(dir, name)).catch(() => {});
+    }
   }
   async drafts(scope) { return await this.json(path.join(this.root, 'drafts', scope + '.json')) || []; }
   saveDrafts(scope, rows) { return this.write(path.join(this.root, 'drafts', scope + '.json'), rows); }
-  async flush() { while (this.writes.size) await Promise.all([...this.writes.values()].map(promise => promise.catch(() => {}))); }
+  async flush() {
+    await this.useChain.catch(() => {});
+    while (this.writes.size) await Promise.all([...this.writes.values()].map(promise => promise.catch(() => {})));
+    await this.evictChain.catch(() => {});
+    while (this.writes.size) await Promise.all([...this.writes.values()].map(promise => promise.catch(() => {})));
+  }
 }
-module.exports = { LocalCache, linePlan, currentSnapshot, analyzeSource, dependencyBlocks };
+module.exports = { LocalCache, linePlan, currentSnapshot, analyzeSource, dependencyBlocks, verifyBlockHashes, sectionHash, explainAddress, gitCommit, acceptsCache, isCurrent, CACHE_SCHEMA_VERSION, CACHE_SCHEMA_MIN, CACHE_BYTE_LIMIT, PROMPT_FORMAT_VERSION };

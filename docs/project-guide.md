@@ -64,7 +64,7 @@ that look and read like the reader's own: one block per stop in a file, titled w
 happens there and its file and line range. Each block holds numbered pseudocode written
 with the same rules, with notes, **emphasis** and formulas. Click a line to open the
 source lines it stands for; hover it to find its file on the map. The side panel widens
-while a flow is shown. On `plan_loops` in a real project, Opus answered in about 15 seconds. Steps that point outside the
+while a flow is shown. The same query, excerpts, model and prompt are saved with the explanation cache, so asking again does not call the model. On `plan_loops` in a real project, Opus answered in about 15 seconds. Steps that point outside the
 searched files are dropped.
 
 **AI notes (automatic).** When the guide maps a folder, Yamori asks your selected

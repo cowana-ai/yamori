@@ -198,13 +198,20 @@ edits/instructions are sent through the selected provider. Nothing is sent
 until you request generation, refresh, folder processing or a block update.
 
 Explanations stay in local VS Code/Cursor extension storage, outside your
-project, under `globalStorage/cowana-ai.yamori/cache/`. Completed views, approved
-revisions, source snapshots, supporting definitions, modification dates and
-content fingerprints are saved on this device. Block drafts, instructions,
-cursor position and undo history are autosaved too. There is no automatic
-100-response eviction; entries remain until you run **Yamori: Clear Cached
-Explanations**, which also removes revisions and drafts. Local cache write
-failures are shown instead of silently claiming a save succeeded.
+project, under `globalStorage/cowana-ai.yamori/cache/`. Each saved explanation
+is keyed by the workspace, the file path and a hash of the file contents, plus
+the provider, model, effort, detail level and prompt format. A git commit is
+stored beside the record and does not affect the key. Reopening an unchanged
+file reads that record and does not call a model. Completed views, approved
+revisions, source snapshots, line links, supporting definitions, modification
+dates and content fingerprints are saved on this device. Block drafts,
+instructions, cursor position and undo history are autosaved too. The cache
+keeps about 64 MB of explanations and name flows, dropping the least recently
+opened ones. **Yamori: Clear Cached Explanations** removes the rest, including
+revisions and drafts. Set `yamori.cache` to false to generate again every time.
+An explanation from a different prompt format, cache schema, model or provider
+is not shown as current. Local cache write failures are shown instead of
+silently claiming a save succeeded.
 
 **When code changes:** Yamori watches editor changes and filesystem events,
 including Git checkouts and files outside the current workspace. It uses dates

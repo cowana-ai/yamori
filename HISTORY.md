@@ -1,5 +1,10 @@
 # Release history
 
+### Unreleased
+- **Instant reopen:** explanations and their line links are stored on this computer, keyed by workspace, file path and content hash. Reopening an unchanged file shows the saved pseudocode with no model request. A git commit is kept as metadata and does not change the key.
+- **Freshness:** a changed file, a different model or provider, or a new prompt or cache format is never shown as the current explanation. Unchanged blocks keep their pseudocode and their line links move with the code; changed blocks are regenerated when you update.
+- **Cache controls:** `yamori.cache` turns saving off. **Yamori: Clear Cached Explanations** still clears it. Saved explanations and name flows stay under about 64 MB, dropping the least recently opened ones. Name-flow answers are cached the same way. The reading-order tour stays local and does not call a model.
+
 ### 0.26.10 · 2026-11-20
 - **Action-first plans:** explain proposed work as “I’ll do this, so this happens” using everyday words, short sentences and concrete reasons. Explain source names by their role and preserve important constraints without turning proposals into compressed checklists. Applies to drafts and revisions without an extra model request.
 
