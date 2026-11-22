@@ -120,5 +120,7 @@ function yamoriLearn() {
 export default defineConfig({
   base: process.env.VITE_BASE || '/',
   plugins: [yamoriLearn()],
+  server: { allowedHosts: true },
+  preview: { allowedHosts: true },
   build: { chunkSizeWarningLimit: 2000, outDir: 'dist' }
 });
