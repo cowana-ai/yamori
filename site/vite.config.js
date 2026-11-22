@@ -96,6 +96,15 @@ function yamoriLearn() {
       if (id === '\0yamori:courses') return coursesModule();
     },
     configureServer(server) {
+      const reloadCourses = file => {
+        if (!file || !file.startsWith(contentRoot)) return;
+        const mod = server.moduleGraph.getModuleById('\0yamori:courses');
+        if (mod) server.moduleGraph.invalidateModule(mod);
+        server.ws.send({ type: 'full-reload' });
+      };
+      server.watcher.add(contentRoot);
+      server.watcher.on('change', reloadCourses);
+      server.watcher.on('add', reloadCourses);
       server.middlewares.use((req, res, next) => {
         if (!req.url?.split('?')[0].endsWith('/katex.min.js')) return next();
         res.setHeader('Content-Type', 'text/javascript');

@@ -21,7 +21,6 @@ export function renderReader(parent, ctx) {
   const page = el('section', 'reader');
   const bar = el('div', 'reader-bar');
   bar.append(tour(file));
-  if (saved && onCoursePath(data, file)) bar.append(coachCard());
   if (saved) {
     const group = el('div', 'segments');
     group.setAttribute('role', 'group');
@@ -258,23 +257,6 @@ function sessionLevel(file) {
 
 function onCoursePath(data, file) {
   return data.course?.steps?.some(step => step.file === file);
-}
-
-function coachCard() {
-  if (localStorage.getItem('yamori-coach-dismissed')) return el('span', 'coach-spacer');
-  const card = el('div', 'coach-card');
-  card.append(el('p', 'coach-title', 'Quick tip'));
-  card.append(el('p', '', 'Overview is selected on purpose — read one numbered block at a time and click it to see the matching Python. Switch to Logic when you want every branch.'));
-  const row = el('div', 'coach-actions');
-  const dismiss = el('button', '', 'Got it');
-  dismiss.type = 'button';
-  dismiss.addEventListener('click', () => {
-    localStorage.setItem('yamori-coach-dismissed', '1');
-    card.replaceWith(el('span', 'coach-spacer'));
-  });
-  row.append(dismiss);
-  card.append(row);
-  return card;
 }
 
 function missing(file, ctx) {

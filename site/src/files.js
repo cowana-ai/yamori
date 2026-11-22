@@ -10,8 +10,8 @@ export function renderFiles(parent, ctx) {
   const steps = api.readingPathFor(data.graph, data.notes, folder);
   const page = el('div', 'start-page');
   const head = el('div', 'start-head');
-  head.append(el('p', 'eyebrow', 'Files'));
-  head.append(el('h1', '', folder ? folder + '/' : 'Start here'));
+  head.append(el('p', 'eyebrow', 'Library'));
+  head.append(el('h1', '', folder ? folder + '/' : 'All files'));
   head.append(el('p', '', data.notes.overview));
   page.append(head);
   const body = el('div', 'start-body');

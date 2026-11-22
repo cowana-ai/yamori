@@ -73,7 +73,7 @@ export function renderLessonRail(parent, ctx, file, onProgressChange) {
   const step = course.steps.find(item => item.file === file);
   if (!step) return null;
 
-  const rail = el('aside', 'lesson-rail');
+  const rail = el('div', 'lesson-rail');
   rail.append(el('p', 'eyebrow', 'Lesson'));
   rail.append(el('h2', 'lesson-rail-title', step.title));
   if (step.minutes) rail.append(el('p', 'lesson-meta', '~' + step.minutes + ' min · Overview first'));
@@ -112,7 +112,7 @@ export function renderLessonRail(parent, ctx, file, onProgressChange) {
   box.checked = isComplete(course.id, file);
   box.addEventListener('change', () => {
     setComplete(course.id, file, box.checked);
-    rail.closest('.reader-layout')?.querySelector('.syllabus-item.current')?.classList.toggle('done', box.checked);
+    rail.querySelector('.syllabus-item.current')?.classList.toggle('done', box.checked);
     onProgressChange?.();
   });
   toggle.append(box, document.createTextNode(' Mark lesson complete'));

@@ -36,7 +36,7 @@ export function renderMap(parent, ctx) {
   const edges = svg('g');
   const boxes = svg('g');
   const nodes = svg('g');
-  viewport.append(edges, boxes, nodes);
+  viewport.append(boxes, edges, nodes);
   canvas.append(defs, viewport);
   const hits = el('aside', 'search-panel');
   hits.hidden = true;
