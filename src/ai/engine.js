@@ -34,12 +34,18 @@ function lowerView(value, from, to) {
   }) };
 }
 function hash(text) { return crypto.createHash('sha256').update(text).digest('hex'); }
+// Bump when explanation prompts or the pseudocode shape change, so a saved
+// explanation from an older prompt is not shown as current. Revision keys stay
+// on their own version so approved edits survive a prompt bump.
+const PROMPT_FORMAT_VERSION = 10;
+// Bump when the name-flow prompt or its block shape changes.
+const FLOW_FORMAT_VERSION = 1;
 function cacheKey(source, level, provider, model = '') {
   // Keep approved user edits reachable across prompt/context upgrades.
   if (level === 'revision') return hash(JSON.stringify([5, source.uri, source.text, source.startLine, level, provider, model]));
   // The project-map slice joins the key only when present, so caches made
   // before (or without) a project map keep their keys.
-  return hash(JSON.stringify([10, source.uri, source.text, source.startLine, level, provider, model, source.callContext || null, ...(source.projectContext?.fingerprint ? [source.projectContext.fingerprint] : [])]));
+  return hash(JSON.stringify([PROMPT_FORMAT_VERSION, source.uri, source.text, source.startLine, level, provider, model, source.callContext || null, ...(source.projectContext?.fingerprint ? [source.projectContext.fingerprint] : [])]));
 }
 function projectContextData(source) {
   if (!source.projectContext) return '';
@@ -1459,4 +1465,4 @@ ${reviewTask}`;
   }
 
 }
-module.exports = { partialReply, CHAT_SCHEMA, implementPlan, IMPLEMENTATION_SCHEMA, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, WRITING_RULES, LABEL_RULE, flowPrompt, parseFlow, FLOW_SCHEMA, reviewModel, reviewDraft, writeParts, partPrompt, clampToPart, providerStatus, clearProviderStatus, readStatus, cliSource, isSetupProblem, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, TOOLS_SECTION, MCP_NAME, describeToolCall, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, projectContextData, reviewSchema, refinementContext, selectionPrompt, parseSelection, SELECTION_SCHEMA, refineExplanation, reviewPrompt, refinementPrompt, parseReview, refinementSteps, REFINEMENT_VERSION, READ_COST_WEIGHT, REVIEW_SCHEMA, listEfforts, listModels, editPrompt, revisionPrompt, refreshPrompt, partialView, streamCodex, schemaFor, lowerView, ORDER, LEVELS, PROVIDERS, SCHEMA, cacheKey, promptFor, parseResult, findCLI, cliLaunch, runProcess, generate, hash };
+module.exports = { partialReply, CHAT_SCHEMA, implementPlan, IMPLEMENTATION_SCHEMA, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, WRITING_RULES, LABEL_RULE, flowPrompt, parseFlow, FLOW_SCHEMA, FLOW_FORMAT_VERSION, reviewModel, reviewDraft, writeParts, partPrompt, clampToPart, providerStatus, clearProviderStatus, readStatus, cliSource, isSetupProblem, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, TOOLS_SECTION, MCP_NAME, describeToolCall, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, projectContextData, reviewSchema, refinementContext, selectionPrompt, parseSelection, SELECTION_SCHEMA, refineExplanation, reviewPrompt, refinementPrompt, parseReview, refinementSteps, REFINEMENT_VERSION, READ_COST_WEIGHT, REVIEW_SCHEMA, listEfforts, listModels, editPrompt, revisionPrompt, refreshPrompt, partialView, streamCodex, schemaFor, lowerView, ORDER, LEVELS, PROVIDERS, SCHEMA, PROMPT_FORMAT_VERSION, cacheKey, promptFor, parseResult, findCLI, cliLaunch, runProcess, generate, hash };

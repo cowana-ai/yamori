@@ -1,5 +1,10 @@
 # Release history
 
+### 0.26.17 · 2026-11-22
+- **Instant reopen:** explanations and their line links are stored on this computer, keyed by workspace, file path and content hash. Reopening an unchanged file shows the saved pseudocode with no model request. A git commit is kept as metadata and does not change the key.
+- **Freshness:** a changed file, a different model or provider, or a new prompt or cache format is never shown as the current explanation. Unchanged blocks keep their pseudocode and their line links move with the code; changed blocks are regenerated when you update.
+- **Cache controls:** `yamori.cache` turns saving off. **Yamori: Clear Cached Explanations** still clears it. Saved explanations and name flows stay under about 64 MB, dropping the least recently opened ones. Name-flow answers are cached the same way. The reading-order tour stays local and does not call a model.
+
 ### 0.26.16 · 2026-11-22
 - **Refresh retries:** keep successful blocks fresh when reconciling mixed historical snapshots against identical current source and dependency context; preserve sub-block boundaries instead of widening them. Older unfinished blocks cannot invalidate completed batches again.
 - **Visible batch progress:** show batch number, saved blocks and remaining work, with elapsed time for the whole refresh instead of restarting the timer per batch.

@@ -1762,7 +1762,7 @@ function drawSearch() {
     else {
       box.append(node('h2', 'How “' + flow.query + '” flows'), node('p', flow.summary), flowBlocks(flow));
       if (flow.caveats) box.append(node('p', flow.caveats, 'muted'));
-      box.append(node('p', 'AI-written from the excerpts' + (flow.model ? ' · ' + flow.model : '') + '. Verify against the source.', 'muted'));
+      box.append(node('p', (flow.cached ? 'Saved flow · no new request' : 'AI-written from the excerpts') + (flow.model ? ' · ' + flow.model : '') + '. Verify against the source.', 'muted'));
     }
     panel.append(box);
   }

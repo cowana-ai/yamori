@@ -57,7 +57,7 @@ src/
     graph.js          Scan, imports, ranking, reading paths, layouts, parts, tests
     mcp.js            Read-only knowledge server the AI can query (MCP)
   storage/
-    cache.js          Atomic local storage, source alignment, change analysis
+    cache.js          Content-hash cache, eviction, source alignment, change analysis
   runner/
     trace.py          Runs one unit test and records how a function ran
 vendor/               KaTeX, CodeMirror, jsdiff and tree-sitter/ (runtime + grammars)

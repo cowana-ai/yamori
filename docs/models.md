@@ -42,6 +42,8 @@ policies can cap or override it.
 
 ### Speed: parallel parts and background review
 
+Reopening an unchanged file does not call the model. The saved explanation and its line links are read from this computer; in tests that lookup is a few local file reads, against 17 seconds for a new draft of a 354-line file. A change keeps the saved pseudocode for blocks whose source is the same and moves their line links. Updating asks the model only for the blocks that changed. `yamori.cache` turns this off.
+
 A new Logic explanation of a bigger file is written by several requests at once,
 and reviewed after you can already read it. Measured on a 354-line Python file
 (Claude, Opus at low effort, one review step):

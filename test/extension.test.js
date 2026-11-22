@@ -2822,6 +2822,10 @@ test('guide search: a visible header box highlights every file that mentions a n
     assert.deepEqual(JSON.parse(JSON.stringify(first.lineMap)), [{ pseudocodeLine: 2, startLine: 1, endLine: 2 }], 'links on notes or past the file are dropped');
     assert.match(flows[0], /sections: the flow as Yamori reading blocks/); assert.match(flows[0], /VOICE AND INFORMATION DENSITY/, 'the reader\'s own writing rules');
     assert.match(flows[0], /searched this project for "plan_loops"/); assert.match(flows[0], /FILE "pipeline\/plan\.py".*defines it/);
+    await h.guide.receive({ type: 'explainFlow' });
+    assert.equal(flows.length, 1, 'an unchanged flow is reused from disk');
+    assert.equal(h.guideState().flow.cached, true);
+    assert.equal(h.guideState().flow.summary, flow.summary);
     await h.guide.receive({ type: 'search', query: '' });
     assert.equal(h.guideState().search, undefined); assert.equal(h.guideState().flow, undefined, 'clearing the search clears its flow');
     // No AI ready: Explain opens setup instead.
@@ -4479,4 +4483,35 @@ test('refresh retry after a shared constant change never rewrites successful lat
     assert.deepEqual(h.last(reader).result.sections.slice(4), successful);
     assert.equal(h.last(reader).stale, false);
   } finally { await h.close(); }
+});
+
+test('yamori.cache serves an unchanged file from disk and generates again when it is off', async () => {
+  const path = require('node:path');
+  const openMain = async h => {
+    const uri = 'file://' + path.join(h.root, 'main.py');
+    await h.commands.get('yamori.openAt')(uri, 1);
+    await h.until(() => h.last(h.readers().at(-1)).result, 'the explanation is shown');
+  };
+  // Drop the extension the way a VS Code restart does, then activate again on the same storage.
+  const restart = async h => {
+    await Promise.all(h.context.subscriptions.splice(0).map(item => item?.dispose?.()));
+    h.panels.length = 0;
+    await h.exports.activate(h.context);
+  };
+  const on = await readerHarness({ prefetchNext: false, autoNotes: false });
+  try {
+    await openMain(on);
+    assert.equal(on.generated.filter(file => file === 'main.py').length, 1);
+    await restart(on);
+    await openMain(on);
+    assert.equal(on.generated.filter(file => file === 'main.py').length, 1, 'reopening an unchanged file does not call the model');
+    assert.equal(on.last(on.readers().at(-1)).stale, false);
+  } finally { await on.close(); }
+  const off = await readerHarness({ cache: false, prefetchNext: false, autoNotes: false });
+  try {
+    await openMain(off);
+    await restart(off);
+    await openMain(off);
+    assert.equal(off.generated.filter(file => file === 'main.py').length, 2, 'cache off generates again for the same file');
+  } finally { await off.close(); }
 });
