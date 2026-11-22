@@ -1,7 +1,7 @@
 {
   "name": "yamori",
-  "displayName": "Yamori",
-  "description": "Yamori turns any file into short, numbered pseudocode next to your editor, every line linked back to the source, using the Claude or ChatGPT plan you already have. No API key.",
+  "displayName": "Yamori: Read Code as Pseudocode",
+  "description": "Read any code as pseudocode beside your editor, every line linked to the source. No API key: runs on your Claude Code or Codex login. Python, JS/TS, Go, Rust and Java.",
   "version": "0.26.10",
   "publisher": "cowana-ai",
   "license": "MIT",
@@ -10,6 +10,7 @@
   },
   "categories": [
     "Education",
+    "Machine Learning",
     "Visualization"
   ],
   "main": "./src/extension.js",
@@ -384,6 +385,10 @@
     "HISTORY.md"
   ],
   "icon": "media/yamori.png",
+  "galleryBanner": {
+    "color": "#0B3A38",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/cowana-ai/yamori.git"
@@ -395,20 +400,33 @@
   "keywords": [
     "pseudocode",
     "code explanation",
+    "code reading",
+    "understand code",
+    "explain code",
     "code understanding",
     "code comprehension",
     "code navigation",
-    "code reading",
+    "onboarding",
+    "machine learning",
+    "math",
+    "AI",
+    "Claude Code",
+    "Codex",
+    "ChatGPT",
+    "MCP",
+    "project map",
     "source code",
     "programming",
     "algorithm",
-    "project map",
+    "learning",
     "VS Code",
     "Cursor",
-    "Claude Code",
-    "Codex",
     "Python",
-    "TypeScript"
+    "JavaScript",
+    "TypeScript",
+    "Go",
+    "Rust",
+    "Java"
   ],
   "devDependencies": {
     "@vscode/tree-sitter-wasm": "0.3.1",
