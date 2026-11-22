@@ -2,6 +2,7 @@
   "overview": {
     "title": "Score GPT-2 large",
     "summary": "Load GPT-2 large (774M) and exit after one score.",
+    "hash": "52f07f35a1c7a45c30f0c59a39ab3804fcefd505bcd69973ff06e19a57e079bc",
     "sections": [
       {
         "title": "Score GPT-2 large",
@@ -41,12 +42,12 @@
           }
         ]
       }
-    ],
-    "hash": "52f07f35a1c7a45c30f0c59a39ab3804fcefd505bcd69973ff06e19a57e079bc"
+    ]
   },
   "logic": {
     "title": "Score GPT-2 large",
     "summary": "Load GPT-2 large (774M) and exit after one score.",
+    "hash": "52f07f35a1c7a45c30f0c59a39ab3804fcefd505bcd69973ff06e19a57e079bc",
     "sections": [
       {
         "title": "Score GPT-2 large",
@@ -86,7 +87,6 @@
           }
         ]
       }
-    ],
-    "hash": "52f07f35a1c7a45c30f0c59a39ab3804fcefd505bcd69973ff06e19a57e079bc"
+    ]
   }
 }

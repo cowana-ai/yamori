@@ -2,6 +2,7 @@
   "overview": {
     "title": "Turn Tiny Shakespeare into character ids",
     "summary": "Download the plays, treat each character as a token, and write the binaries and the codec training will read.",
+    "hash": "d5fbea0686d146748cf36017d6c34136a2fe9c41f065f1429529ad55a992c692",
     "sections": [
       {
         "title": "Get the text and build a character codec",
@@ -49,12 +50,12 @@
           }
         ]
       }
-    ],
-    "hash": "d5fbea0686d146748cf36017d6c34136a2fe9c41f065f1429529ad55a992c692"
+    ]
   },
   "logic": {
     "title": "Turn Tiny Shakespeare into character ids",
     "summary": "Download the play text if needed, map each character to an integer, and write train and validation binaries.",
+    "hash": "d5fbea0686d146748cf36017d6c34136a2fe9c41f065f1429529ad55a992c692",
     "sections": [
       {
         "title": "Download the text if it is not here yet",
@@ -200,7 +201,6 @@
           }
         ]
       }
-    ],
-    "hash": "d5fbea0686d146748cf36017d6c34136a2fe9c41f065f1429529ad55a992c692"
+    ]
   }
 }

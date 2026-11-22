@@ -58,6 +58,10 @@ h1 { font-size: 40px; line-height: 1.15; letter-spacing: -.03em; margin: 0; max-
 .path-more summary { cursor: pointer; font-weight: 600; color: var(--read-muted); }
 .path-more .steps-hint { margin: 10px 0 0; color: var(--read-muted); }
 .reading-hint { font-size: 14px; color: var(--read-muted); margin: 0 0 16px; max-width: 56ch; }
+.block-blog { padding: 4px 16px 16px; background: var(--read-page); border-top: 1px dashed var(--read-border); }
+.blog-digest h3, .blog-next h3 { margin: 12px 0 6px; font: 600 11px/1.4 ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; color: var(--read-muted); }
+.blog-digest p, .blog-next p { margin: 0 0 8px; font-size: 14.5px; line-height: 1.55; max-width: 68ch; }
+.blog-next { margin-top: 4px; padding-top: 2px; border-top: 1px solid var(--read-border); }
 .coach-card { flex: 1 1 220px; padding: 8px 12px; border: 1px dashed var(--read-accent); background: var(--read-page); font-size: 12px; max-width: 360px; }
 .coach-title { margin: 0 0 4px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--read-accent); }
 .coach-card p { margin: 0; line-height: 1.45; }

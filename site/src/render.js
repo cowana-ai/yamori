@@ -99,8 +99,25 @@ export function renderBlock(parent, section, index, ctx) {
     rows.push({ row, mapping });
   });
   block.append(heading, code);
+  const aside = ctx.asides?.[index];
+  if (aside?.digest) block.append(blogNote(aside));
   parent.append(block);
   return rows;
+}
+
+function blogNote(aside) {
+  const box = el('div', 'block-blog');
+  const digest = el('div', 'blog-digest');
+  digest.append(el('h3', '', 'Digest'));
+  for (const paragraph of aside.digest.split(/\n\n+/)) digest.append(el('p', '', paragraph));
+  box.append(digest);
+  if (aside.next) {
+    const next = el('div', 'blog-next');
+    next.append(el('h3', '', 'What to expect next'));
+    for (const paragraph of aside.next.split(/\n\n+/)) next.append(el('p', '', paragraph));
+    box.append(next);
+  }
+  return box;
 }
 
 export function renderBlocks(parent, sections, ctx) {

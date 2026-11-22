@@ -76,7 +76,7 @@ export function renderLessonRail(parent, ctx, file, onProgressChange) {
   const rail = el('div', 'lesson-rail');
   rail.append(el('p', 'eyebrow', 'Lesson'));
   rail.append(el('h2', 'lesson-rail-title', step.title));
-  if (step.minutes) rail.append(el('p', 'lesson-meta', '~' + step.minutes + ' min · Overview first'));
+  if (step.minutes) rail.append(el('p', 'lesson-meta', '~' + step.minutes + ' min'));
   if (step.primer) rail.append(el('p', 'lesson-primer', step.primer));
 
   if (step.objectives?.length) {

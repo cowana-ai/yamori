@@ -2,6 +2,7 @@
   "overview": {
     "title": "Encode Tiny Shakespeare with the GPT-2 tokenizer",
     "summary": "The same plays as the character dataset, packed as GPT-2 tokens instead of single characters.",
+    "hash": "f8d47267f00963138314bb969e75071211bf1140c248bf31b9e60e7750027f06",
     "sections": [
       {
         "title": "Download, split, encode, and save",
@@ -26,12 +27,12 @@
           }
         ]
       }
-    ],
-    "hash": "f8d47267f00963138314bb969e75071211bf1140c248bf31b9e60e7750027f06"
+    ]
   },
   "logic": {
     "title": "Encode Tiny Shakespeare with the GPT-2 tokenizer",
     "summary": "Download the plays, split them, and write GPT-2 token ids for a small fine-tune.",
+    "hash": "f8d47267f00963138314bb969e75071211bf1140c248bf31b9e60e7750027f06",
     "sections": [
       {
         "title": "Download the text if it is missing",
@@ -114,7 +115,6 @@
           }
         ]
       }
-    ],
-    "hash": "f8d47267f00963138314bb969e75071211bf1140c248bf31b9e60e7750027f06"
+    ]
   }
 }

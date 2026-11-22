@@ -2,6 +2,7 @@
   "overview": {
     "title": "Time a short GPT training loop",
     "summary": "A stripped training loop that reports step time and a rough utilization for a 12-layer GPT.",
+    "hash": "984f54a60df9d1aa844e7e0aef10000e7090a00109d13e43587ccb077ef340bb",
     "sections": [
       {
         "title": "Bench a few steps of a GPT-2 sized model",
@@ -41,12 +42,12 @@
           }
         ]
       }
-    ],
-    "hash": "984f54a60df9d1aa844e7e0aef10000e7090a00109d13e43587ccb077ef340bb"
+    ]
   },
   "logic": {
     "title": "Time a short GPT training loop",
     "summary": "Run a few forward and backward steps on a 12-layer GPT and report milliseconds and estimated utilization.",
+    "hash": "984f54a60df9d1aa844e7e0aef10000e7090a00109d13e43587ccb077ef340bb",
     "sections": [
       {
         "title": "Fixed bench settings",
@@ -248,7 +249,6 @@
           }
         ]
       }
-    ],
-    "hash": "984f54a60df9d1aa844e7e0aef10000e7090a00109d13e43587ccb077ef340bb"
+    ]
   }
 }

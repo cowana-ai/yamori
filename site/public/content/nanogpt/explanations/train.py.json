@@ -2,6 +2,7 @@
   "overview": {
     "title": "Fit a GPT by predicting the next token",
     "summary": "A config may replace the GPT-2 defaults, then each step lowers next-token cross-entropy and the master process saves checkpoints.",
+    "hash": "413bd97b40bb400a2a0d01230e2946f056c263ebac1b7281c2367d964a123085",
     "sections": [
       {
         "title": "Defaults describe a GPT-2 run, until a config replaces them",
@@ -153,12 +154,12 @@
           }
         ]
       }
-    ],
-    "hash": "413bd97b40bb400a2a0d01230e2946f056c263ebac1b7281c2367d964a123085"
+    ]
   },
   "logic": {
     "title": "Fit a GPT by predicting the next token",
     "summary": "Load token windows, score the following ids, and step AdamW, saving checkpoints from the master process.",
+    "hash": "413bd97b40bb400a2a0d01230e2946f056c263ebac1b7281c2367d964a123085",
     "sections": [
       {
         "title": "Start from GPT-2 sized defaults",
@@ -946,7 +947,6 @@
           }
         ]
       }
-    ],
-    "hash": "413bd97b40bb400a2a0d01230e2946f056c263ebac1b7281c2367d964a123085"
+    ]
   }
 }

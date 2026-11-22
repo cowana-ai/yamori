@@ -2,6 +2,7 @@
   "overview": {
     "title": "Fine-tune GPT-2 XL on Shakespeare",
     "summary": "A short fine-tune of the largest GPT-2 on the tokenized Shakespeare set.",
+    "hash": "e78caf73a286e22df3ad069b39ed6162490b8e033ca1e2ceb8477eee159c7948",
     "sections": [
       {
         "title": "Fine-tune GPT-2 XL on Shakespeare",
@@ -76,12 +77,12 @@
           }
         ]
       }
-    ],
-    "hash": "e78caf73a286e22df3ad069b39ed6162490b8e033ca1e2ceb8477eee159c7948"
+    ]
   },
   "logic": {
     "title": "Fine-tune GPT-2 XL on Shakespeare",
     "summary": "A short fine-tune of the largest GPT-2 on the tokenized Shakespeare set.",
+    "hash": "e78caf73a286e22df3ad069b39ed6162490b8e033ca1e2ceb8477eee159c7948",
     "sections": [
       {
         "title": "Fine-tune GPT-2 XL on Shakespeare",
@@ -156,7 +157,6 @@
           }
         ]
       }
-    ],
-    "hash": "e78caf73a286e22df3ad069b39ed6162490b8e033ca1e2ceb8477eee159c7948"
+    ]
   }
 }

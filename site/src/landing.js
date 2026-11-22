@@ -49,9 +49,9 @@ export function renderLanding(parent, ctx, catalog) {
   const learn = el('section', 'learn-grid beginner-tips');
   learn.append(el('h2', '', 'How to read a lesson'));
   for (const [title, body] of [
-    ['Start in Overview', 'Plain-language steps first. You can read an entire file without touching the formulas.'],
+    ['Opens in Logic', 'The full step-by-step reading. Each step points at a short span of the real file.'],
     ['Click any step', 'The pseudocode highlights what matters; the Python on the right shows exactly where it lives.'],
-    ['Go deeper when ready', 'Logic adds the full decision tree — same file, more detail. Switch any time.']
+    ['Overview is the short pass', 'Fewer blocks, same file. Switch to it when you want the shape without every branch.']
   ]) {
     const card = el('article');
     card.append(el('h3', '', title), el('p', '', body));

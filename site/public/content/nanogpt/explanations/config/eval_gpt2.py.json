@@ -2,6 +2,7 @@
   "overview": {
     "title": "Score the base GPT-2",
     "summary": "Load GPT-2 (124M) and exit after one validation-style score.",
+    "hash": "054665ef6b977e5a03fa94f4365206d5258305f8660589c5b534949d946418e8",
     "sections": [
       {
         "title": "Score the base GPT-2",
@@ -41,12 +42,12 @@
           }
         ]
       }
-    ],
-    "hash": "054665ef6b977e5a03fa94f4365206d5258305f8660589c5b534949d946418e8"
+    ]
   },
   "logic": {
     "title": "Score the base GPT-2",
     "summary": "Load GPT-2 (124M) and exit after one validation-style score.",
+    "hash": "054665ef6b977e5a03fa94f4365206d5258305f8660589c5b534949d946418e8",
     "sections": [
       {
         "title": "Score the base GPT-2",
@@ -86,7 +87,6 @@
           }
         ]
       }
-    ],
-    "hash": "054665ef6b977e5a03fa94f4365206d5258305f8660589c5b534949d946418e8"
+    ]
   }
 }

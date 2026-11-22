@@ -21,7 +21,7 @@ export function renderCourse(parent, ctx) {
 
   const begin = el('section', 'onboard-card');
   begin.append(el('h2', '', 'Start here'));
-  begin.append(el('p', '', first.lesson || 'Open the first lesson and read in Overview.'));
+  begin.append(el('p', '', first.lesson || 'Open the first lesson. It starts in Logic.'));
   const open = el('a', 'primary', 'Lesson 1 · ' + first.title);
   open.href = url(firstHref);
   open.addEventListener('click', event => { event.preventDefault(); go(firstHref); });

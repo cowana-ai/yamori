@@ -2,6 +2,7 @@
   "overview": {
     "title": "Score GPT-2 medium",
     "summary": "Load GPT-2 medium (350M) and exit after one score.",
+    "hash": "7ced6fb2cbc2c16fbb9c6c256eac403f3e1a88d1317ef0f85a1688f8b7988a2b",
     "sections": [
       {
         "title": "Score GPT-2 medium",
@@ -41,12 +42,12 @@
           }
         ]
       }
-    ],
-    "hash": "7ced6fb2cbc2c16fbb9c6c256eac403f3e1a88d1317ef0f85a1688f8b7988a2b"
+    ]
   },
   "logic": {
     "title": "Score GPT-2 medium",
     "summary": "Load GPT-2 medium (350M) and exit after one score.",
+    "hash": "7ced6fb2cbc2c16fbb9c6c256eac403f3e1a88d1317ef0f85a1688f8b7988a2b",
     "sections": [
       {
         "title": "Score GPT-2 medium",
@@ -86,7 +87,6 @@
           }
         ]
       }
-    ],
-    "hash": "7ced6fb2cbc2c16fbb9c6c256eac403f3e1a88d1317ef0f85a1688f8b7988a2b"
+    ]
   }
 }

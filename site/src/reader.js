@@ -35,8 +35,8 @@ export function renderReader(parent, ctx) {
       button.setAttribute('aria-pressed', String(level === id));
       button.addEventListener('click', () => {
         level = id;
-        sessionStorage.setItem('yamori-level:' + file, id);
-        localStorage.setItem('yamori-default-level', id);
+        sessionStorage.setItem('yamori-level:v2:' + file, id);
+        localStorage.setItem('yamori-level-pref', id);
         paint();
       });
       group.append(button);
@@ -121,6 +121,7 @@ export function renderReader(parent, ctx) {
       }
       const symbols = data.symbols[file] || [];
       rows = renderBlocks(pseudo, view.sections, {
+        asides: data.asides?.[file]?.[level],
         glossary: data.glossary,
         terms: glossaryMatcher(data.glossary),
         symbols: glossaryMatcher(symbols.map(item => ({ term: item.name }))),
@@ -255,10 +256,10 @@ export function renderReader(parent, ctx) {
 }
 
 function sessionLevel(file) {
-  const saved = sessionStorage.getItem('yamori-level:' + file);
+  const saved = sessionStorage.getItem('yamori-level:v2:' + file);
   if (saved === 'overview' || saved === 'logic') return saved;
-  const pref = localStorage.getItem('yamori-default-level');
-  return pref === 'logic' ? 'logic' : 'overview';
+  const pref = localStorage.getItem('yamori-level-pref');
+  return pref === 'overview' ? 'overview' : 'logic';
 }
 
 function onCoursePath(data, file) {

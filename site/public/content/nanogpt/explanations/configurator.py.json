@@ -2,6 +2,7 @@
   "overview": {
     "title": "Replace a script's settings from the command line",
     "summary": "Executed by train.py and sample.py so a config file or flags overwrite their global settings.",
+    "hash": "5cc23aca26b4ab3c0d9e5f82740f4781f9444f42718c15abcee70d93c5aabe8f",
     "sections": [
       {
         "title": "A path is executed; a flag overwrites one name",
@@ -26,12 +27,12 @@
           }
         ]
       }
-    ],
-    "hash": "5cc23aca26b4ab3c0d9e5f82740f4781f9444f42718c15abcee70d93c5aabe8f"
+    ]
   },
   "logic": {
     "title": "Replace a script's settings from the command line",
     "summary": "Run inside train.py or sample.py and override their globals from a config file or --key=value flags.",
+    "hash": "5cc23aca26b4ab3c0d9e5f82740f4781f9444f42718c15abcee70d93c5aabe8f",
     "sections": [
       {
         "title": "Run a config file, or override one global",
@@ -121,7 +122,6 @@
           }
         ]
       }
-    ],
-    "hash": "5cc23aca26b4ab3c0d9e5f82740f4781f9444f42718c15abcee70d93c5aabe8f"
+    ]
   }
 }

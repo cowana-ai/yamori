@@ -2,6 +2,7 @@
   "overview": {
     "title": "Pack OpenWebText into token binaries",
     "summary": "Download OpenWebText, mark document boundaries, and write the binaries a full GPT-2 run trains on.",
+    "hash": "77f3ef0cc8132d77f90c2bd5f9c3be86d1b3da7428e100559c58aee2bcb6eb12",
     "sections": [
       {
         "title": "Download, mark documents, and save bins",
@@ -31,12 +32,12 @@
           }
         ]
       }
-    ],
-    "hash": "77f3ef0cc8132d77f90c2bd5f9c3be86d1b3da7428e100559c58aee2bcb6eb12"
+    ]
   },
   "logic": {
     "title": "Pack OpenWebText into token binaries",
     "summary": "Download OpenWebText, encode it with the GPT-2 tokenizer, and write one memory-mapped binary per split.",
+    "hash": "77f3ef0cc8132d77f90c2bd5f9c3be86d1b3da7428e100559c58aee2bcb6eb12",
     "sections": [
       {
         "title": "Download the corpus and hold out a tiny validation set",
@@ -147,7 +148,6 @@
           }
         ]
       }
-    ],
-    "hash": "77f3ef0cc8132d77f90c2bd5f9c3be86d1b3da7428e100559c58aee2bcb6eb12"
+    ]
   }
 }

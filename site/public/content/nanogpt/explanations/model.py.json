@@ -2,6 +2,7 @@
   "overview": {
     "title": "A GPT that predicts the next token",
     "summary": "A stack of causal blocks turns token ids into next-token scores, and can draw new ids one at a time.",
+    "hash": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c",
     "sections": [
       {
         "title": "Size the GPT with seven numbers",
@@ -181,12 +182,12 @@
           }
         ]
       }
-    ],
-    "hash": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c"
+    ]
   },
   "logic": {
     "title": "A GPT that predicts the next token",
     "summary": "Turn token ids into next-token scores, using stacked blocks that may look only at earlier tokens.",
+    "hash": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c",
     "sections": [
       {
         "title": "Choose the model's sizes",
@@ -1024,7 +1025,6 @@
           }
         ]
       }
-    ],
-    "hash": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c"
+    ]
   }
 }

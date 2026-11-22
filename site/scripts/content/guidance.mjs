@@ -10,16 +10,16 @@ export const platform = {
   ],
   studyGuide: [
     {
-      title: 'Read in Overview first',
-      body: 'Each file opens in Overview: short blocks in plain language. Stay there until the story makes sense.'
+      title: 'Lessons open in Logic',
+      body: 'Each file opens on the step-by-step reading, with a short source range on every step.'
     },
     {
       title: 'Click to connect story and source',
       body: 'Select a numbered block (or a line of Python). The other pane lights up so you always know where the idea lives.'
     },
     {
-      title: 'Use Logic when you want depth',
-      body: 'Logic adds branches, shapes, and math — same file, more steps. Toggle any time; nothing is hidden.'
+      title: 'Overview is the short pass',
+      body: 'Switch to Overview for fewer blocks and the shape of the file. Toggle any time.'
     },
     {
       title: 'Follow the lessons in order',
@@ -51,7 +51,7 @@ export const steps = {
       'See where attention blocks sit in the stack.',
       'Separate training loss from sampling.'
     ],
-    primer: 'This is the densest lesson. Stay on Overview and take one block at a time.',
+    primer: 'This is the densest lesson. Take one block at a time.',
     takeaway: 'A GPT here is embeddings, repeated blocks, and a shared table that both reads tokens and writes scores.',
     checks: [
       'What does block_size limit?',

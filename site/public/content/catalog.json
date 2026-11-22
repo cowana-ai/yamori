@@ -9,7 +9,7 @@
       "title": "Transformers through nanoGPT",
       "repo": "karpathy/nanoGPT",
       "upstream": "https://github.com/karpathy/nanoGPT",
-      "blurb": "Karpathy's nanoGPT in six browser lessons — data first, then the model, training, sampling, and config. Plain Overview steps beside the real Python.",
+      "blurb": "Karpathy's nanoGPT in six browser lessons — data first, then the model, training, sampling, and config. Logic steps beside the real Python.",
       "files": 6
     }
   ]

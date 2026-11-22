@@ -68,6 +68,7 @@ function loadCourse(id) {
     explanations,
     sources,
     glossary: project.glossaryOf(graph, notes),
+    asides: existsSync(path.join(dir, 'asides.json')) ? read('asides.json') : {},
     symbols
   };
 }

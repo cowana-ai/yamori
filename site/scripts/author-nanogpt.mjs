@@ -16,6 +16,7 @@ import { configurator } from './content/configurator.mjs';
 import { prepareChar } from './content/prepare-char.mjs';
 import { shorts } from './content/shorts.mjs';
 import { notesBody, course as courseBase } from './content/notes.mjs';
+import { blog } from './content/blog.mjs';
 import { platform, steps as stepGuidance } from './content/guidance.mjs';
 import { flows } from './content/flows.mjs';
 
@@ -63,13 +64,35 @@ for (const [rel, note] of Object.entries(notesBody.files)) {
 writeFileSync(path.join(root, 'notes.json'), JSON.stringify(notes, null, 2) + '\n');
 writeFileSync(path.join(root, 'flows.json'), JSON.stringify(flows, null, 2) + '\n');
 
+const asides = {};
 for (const [rel, views] of Object.entries(explanations)) {
   const digest = hash(sourceText(rel));
   const out = {};
-  for (const level of ['overview', 'logic']) out[level] = { ...views[level], hash: digest };
+  const notes = blog[rel];
+  if (!notes) throw new Error('No blog copy for ' + rel);
+  asides[rel] = {};
+  for (const level of ['overview', 'logic']) {
+    const sections = views[level].sections;
+    const copy = notes[level];
+    if (!copy || copy.length !== sections.length) {
+      throw new Error(rel + ' ' + level + ' has ' + sections.length + ' blocks and ' + (copy ? copy.length : 0) + ' blog notes.');
+    }
+    asides[rel][level] = copy.map((item, index) => ({
+      title: sections[index].title,
+      digest: item.digest,
+      next: item.next
+    }));
+    out[level] = {
+      title: views[level].title,
+      summary: views[level].summary,
+      hash: digest,
+      sections: sections.map(({ title, startLine, endLine, pseudocode, lineMap }) => ({ title, startLine, endLine, pseudocode, lineMap }))
+    };
+  }
   const dest = path.join(root, 'explanations', rel + '.json');
   mkdirSync(path.dirname(dest), { recursive: true });
   writeFileSync(dest, JSON.stringify(out, null, 2) + '\n');
 }
+writeFileSync(path.join(root, 'asides.json'), JSON.stringify(asides, null, 2) + '\n');
 
 console.log('Wrote ' + Object.keys(explanations).length + ' explanations, notes, course, and flows.');

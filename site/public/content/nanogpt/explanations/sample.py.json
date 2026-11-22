@@ -2,6 +2,7 @@
   "overview": {
     "title": "Draw text from a trained GPT",
     "summary": "Load the model training saved, encode a short prompt with the matching alphabet, and print sampled continuations.",
+    "hash": "1c4bb3716ec55395be2e6ad136693614b0b38de9defda889041efe2057a0c1f1",
     "sections": [
       {
         "title": "Sampling knobs, then any override",
@@ -72,12 +73,12 @@
           }
         ]
       }
-    ],
-    "hash": "1c4bb3716ec55395be2e6ad136693614b0b38de9defda889041efe2057a0c1f1"
+    ]
   },
   "logic": {
     "title": "Draw text from a trained GPT",
     "summary": "Load a checkpoint or a published GPT-2, encode a prompt, and print several sampled continuations.",
+    "hash": "1c4bb3716ec55395be2e6ad136693614b0b38de9defda889041efe2057a0c1f1",
     "sections": [
       {
         "title": "Choose how to sample, then apply overrides",
@@ -316,7 +317,6 @@
           }
         ]
       }
-    ],
-    "hash": "1c4bb3716ec55395be2e6ad136693614b0b38de9defda889041efe2057a0c1f1"
+    ]
   }
 }

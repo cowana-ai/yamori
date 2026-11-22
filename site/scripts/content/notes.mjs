@@ -164,7 +164,7 @@ export const course = {
   intro: [
     'Language models look mysterious until you see the pipeline: text becomes numbers, numbers go through a network, training adjusts the network, sampling turns numbers back into text.',
     'nanoGPT is the smallest serious version of that story — the repo people actually read when they want to understand GPT-style models. Here it is already translated into short steps you can click through in the browser.',
-    'Take it one lesson at a time. Stay on Overview until a step feels familiar; switch to Logic when you want every branch and formula.'
+    'Each lesson opens in Logic, one step at a time beside the source. Switch to Overview for a shorter pass over the same file.'
   ],
   learn: [
     'How a Shakespeare file becomes a trainable stream of character ids.',

@@ -2,6 +2,7 @@
   "overview": {
     "title": "The GPT-2 OpenWebText run",
     "summary": "Settings that train a 124M GPT on OpenWebText with a large token batch.",
+    "hash": "0add8a916edf704e001e87aaf63647eea9d6df964c10129ff60ad479bdbd55c4",
     "sections": [
       {
         "title": "The GPT-2 OpenWebText run",
@@ -56,12 +57,12 @@
           }
         ]
       }
-    ],
-    "hash": "0add8a916edf704e001e87aaf63647eea9d6df964c10129ff60ad479bdbd55c4"
+    ]
   },
   "logic": {
     "title": "The GPT-2 OpenWebText run",
     "summary": "Settings that train a 124M GPT on OpenWebText with a large token batch.",
+    "hash": "0add8a916edf704e001e87aaf63647eea9d6df964c10129ff60ad479bdbd55c4",
     "sections": [
       {
         "title": "The GPT-2 OpenWebText run",
@@ -116,7 +117,6 @@
           }
         ]
       }
-    ],
-    "hash": "0add8a916edf704e001e87aaf63647eea9d6df964c10129ff60ad479bdbd55c4"
+    ]
   }
 }

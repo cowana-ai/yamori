@@ -2,6 +2,7 @@
   "overview": {
     "title": "A laptop-sized Shakespeare GPT",
     "summary": "Settings for a 6-layer character model on Tiny Shakespeare, the run the README suggests first.",
+    "hash": "9b41cdfb2c917259d796a8184d835221a349c23cd18a0a63b46da431d95d9c05",
     "sections": [
       {
         "title": "A laptop-sized Shakespeare GPT",
@@ -36,12 +37,12 @@
           }
         ]
       }
-    ],
-    "hash": "9b41cdfb2c917259d796a8184d835221a349c23cd18a0a63b46da431d95d9c05"
+    ]
   },
   "logic": {
     "title": "A laptop-sized Shakespeare GPT",
     "summary": "Settings for a 6-layer character model on Tiny Shakespeare, the run the README suggests first.",
+    "hash": "9b41cdfb2c917259d796a8184d835221a349c23cd18a0a63b46da431d95d9c05",
     "sections": [
       {
         "title": "A laptop-sized Shakespeare GPT",
@@ -131,7 +132,6 @@
           }
         ]
       }
-    ],
-    "hash": "9b41cdfb2c917259d796a8184d835221a349c23cd18a0a63b46da431d95d9c05"
+    ]
   }
 }

@@ -2,6 +2,7 @@
   "overview": {
     "title": "Score GPT-2 XL",
     "summary": "Load GPT-2 XL (1558M) and exit after one score.",
+    "hash": "8bb8d85b53f2daf35d11c403b0a0e0dfbe69cd1d052f38ea09b826fa3ed2ae65",
     "sections": [
       {
         "title": "Score GPT-2 XL",
@@ -41,12 +42,12 @@
           }
         ]
       }
-    ],
-    "hash": "8bb8d85b53f2daf35d11c403b0a0e0dfbe69cd1d052f38ea09b826fa3ed2ae65"
+    ]
   },
   "logic": {
     "title": "Score GPT-2 XL",
     "summary": "Load GPT-2 XL (1558M) and exit after one score.",
+    "hash": "8bb8d85b53f2daf35d11c403b0a0e0dfbe69cd1d052f38ea09b826fa3ed2ae65",
     "sections": [
       {
         "title": "Score GPT-2 XL",
@@ -86,7 +87,6 @@
           }
         ]
       }
-    ],
-    "hash": "8bb8d85b53f2daf35d11c403b0a0e0dfbe69cd1d052f38ea09b826fa3ed2ae65"
+    ]
   }
 }

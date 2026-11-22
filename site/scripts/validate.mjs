@@ -16,6 +16,7 @@ const notes = JSON.parse(readFileSync(path.join(root, 'notes.json'), 'utf8'));
 const graph = JSON.parse(readFileSync(path.join(root, 'graph.json'), 'utf8'));
 const flows = JSON.parse(readFileSync(path.join(root, 'flows.json'), 'utf8'));
 const course = JSON.parse(readFileSync(path.join(root, 'course.json'), 'utf8'));
+const asides = JSON.parse(readFileSync(path.join(root, 'asides.json'), 'utf8'));
 const meta = JSON.parse(readFileSync(path.join(root, 'meta.json'), 'utf8'));
 const problems = [];
 const fail = message => problems.push(message);
@@ -84,6 +85,16 @@ for (const rel of walk(path.join(root, 'explanations'))) {
           fail(file + ' ' + level + ' / ' + section.title + ' links L' + link.startLine + '–' + link.endLine + ' outside the block range.');
         }
       }
+    }
+    const aside = asides[file]?.[level];
+    if (!aside || aside.length !== parsed.sections.length) {
+      fail(file + ' ' + level + ' blog notes do not match the block count.');
+    } else {
+      aside.forEach((item, index) => {
+        if (item.title !== parsed.sections[index].title) fail(file + ' ' + level + ' blog note ' + index + ' has a stale title.');
+        if (words(item.digest) < 40) fail(file + ' ' + level + ' / ' + item.title + ' digest is under 40 words.');
+        if (words(item.next) < 20) fail(file + ' ' + level + ' / ' + item.title + ' next-preview is under 20 words.');
+      });
     }
     const report = verifyPseudocode({ source: { text, startLine: 1 }, sections: parsed.sections, known: names, level, complete: level === 'logic' });
     for (const finding of report.findings) {
