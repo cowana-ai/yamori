@@ -1,5 +1,6 @@
 import { glossaryMatcher } from 'yamori:reading';
 import { el } from './dom.js';
+import { highlightSource } from './highlight.js';
 import { renderBlocks } from './render.js';
 import { renderLessonRail } from './lesson-panel.js';
 
@@ -12,6 +13,8 @@ export function renderReader(parent, ctx) {
     parent.append(missing(file, ctx));
     return;
   }
+  const language = data.graph.files[file]?.language || (file.endsWith('.py') ? 'python' : '');
+  const colored = highlightSource(source, language);
   const narrow = window.matchMedia('(max-width: 900px)').matches;
   let pane = narrow ? 'pseudo' : 'split';
   let level = sessionLevel(file);
@@ -155,12 +158,15 @@ export function renderReader(parent, ctx) {
     head.append(el('span', 'eyebrow', 'Source'), el('strong', '', file));
     code.append(head);
     const body = el('div', 'source-code');
-    source.split('\n').forEach((line, index) => {
+    colored.forEach((tokens, index) => {
       const number = index + 1;
       const row = el('div', 'source-line' + (hot.has(number) ? ' hot' : ''));
       row.dataset.line = String(number);
       row.append(el('span', 'source-gutter', String(number)));
-      const text = el('code', /^\s*#/.test(line) ? 'comment' : '', line.length ? line : ' ');
+      const text = el('code');
+      for (const token of tokens) {
+        text.append(token.kind ? el('span', 'tok-' + token.kind, token.text) : document.createTextNode(token.text));
+      }
       row.append(text);
       row.addEventListener('click', () => reveal(number, true));
       body.append(row);
