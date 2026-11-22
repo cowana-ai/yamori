@@ -1,5 +1,5 @@
 {
-  "overview": "nanoGPT is a small, readable GPT you can train and sample. model.py is the transformer; train.py fits it by predicting the next token; sample.py draws text from the result. A config file and configurator.py swap in a specific experiment, such as the character-level Shakespeare run.",
+  "overview": "Six short stops through Andrej Karpathy's nanoGPT: what the training data looks like, how the model is built, how one training step works, how text comes back out, and how a tiny Shakespeare run is configured.",
   "clusters": [
     {
       "name": "The model",
@@ -61,28 +61,28 @@
   ],
   "readingPath": [
     {
-      "file": "model.py",
-      "why": "The transformer itself: attention, the stack, the loss, and how new tokens are drawn."
+      "file": "data/shakespeare_char/prepare.py",
+      "why": "Start with plain text becoming numbers — no neural network yet."
     },
     {
-      "file": "data/shakespeare_char/prepare.py",
-      "why": "See how text becomes the integer ids the small Shakespeare run trains on."
+      "file": "model.py",
+      "why": "Now the network: how those numbers flow through a small GPT."
     },
     {
       "file": "train.py",
-      "why": "Follow one optimization step, from a window of ids to an updated model."
+      "why": "One step of learning: compare predictions to the next character and nudge the weights."
     },
     {
       "file": "sample.py",
-      "why": "Turn a trained model back into text, one sampled id at a time."
+      "why": "Run the trained model backward: numbers become text you can read."
     },
     {
       "file": "config/train_shakespeare_char.py",
-      "why": "The small Shakespeare settings the README tells you to run."
+      "why": "The cozy Shakespeare-sized settings from the README."
     },
     {
       "file": "configurator.py",
-      "why": "How that config file and command-line flags replace train.py defaults."
+      "why": "How that config file actually reaches the variables in train.py."
     }
   ],
   "files": {

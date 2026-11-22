@@ -1,7 +1,7 @@
 const term = (term, meaning, line, aliases = []) => ({ term, aliases, meaning, line });
 
 export const notesBody = {
-  overview: 'nanoGPT is a small, readable GPT you can train and sample. model.py is the transformer; train.py fits it by predicting the next token; sample.py draws text from the result. A config file and configurator.py swap in a specific experiment, such as the character-level Shakespeare run.',
+  overview: 'Six short stops through Andrej Karpathy\'s nanoGPT: what the training data looks like, how the model is built, how one training step works, how text comes back out, and how a tiny Shakespeare run is configured.',
   clusters: [
     { name: 'The model', summary: 'The GPT definition: embeddings, causal blocks, the next-token loss, and sampling.', files: ['model.py'] },
     { name: 'Training', summary: 'The optimization loop, plus a short benchmark of the same step.', files: ['train.py', 'bench.py'] },
@@ -11,12 +11,12 @@ export const notesBody = {
     { name: 'Notes', summary: 'The project introduction, plus notebooks that estimate size and scaling.', files: ['README.md', 'scaling_laws.ipynb', 'transformer_sizing.ipynb'] }
   ],
   readingPath: [
-    { file: 'model.py', why: 'The transformer itself: attention, the stack, the loss, and how new tokens are drawn.' },
-    { file: 'data/shakespeare_char/prepare.py', why: 'See how text becomes the integer ids the small Shakespeare run trains on.' },
-    { file: 'train.py', why: 'Follow one optimization step, from a window of ids to an updated model.' },
-    { file: 'sample.py', why: 'Turn a trained model back into text, one sampled id at a time.' },
-    { file: 'config/train_shakespeare_char.py', why: 'The small Shakespeare settings the README tells you to run.' },
-    { file: 'configurator.py', why: 'How that config file and command-line flags replace train.py defaults.' }
+    { file: 'data/shakespeare_char/prepare.py', why: 'Start with plain text becoming numbers — no neural network yet.' },
+    { file: 'model.py', why: 'Now the network: how those numbers flow through a small GPT.' },
+    { file: 'train.py', why: 'One step of learning: compare predictions to the next character and nudge the weights.' },
+    { file: 'sample.py', why: 'Run the trained model backward: numbers become text you can read.' },
+    { file: 'config/train_shakespeare_char.py', why: 'The cozy Shakespeare-sized settings from the README.' },
+    { file: 'configurator.py', why: 'How that config file actually reaches the variables in train.py.' }
   ],
   files: {
     'model.py': {
@@ -159,27 +159,27 @@ export const notesBody = {
 export const course = {
   id: 'nanogpt',
   title: 'Transformers through nanoGPT',
-  kicker: 'Learning path',
-  summary: 'Six files, in the order that makes a GPT legible: the model, the integers it trains on, the training step, sampling, the small Shakespeare config, and the few lines that apply that config.',
+  kicker: 'A gentle read',
+  summary: 'Walk through a famous tiny GPT in six files — starting with data, not math. No install, no GPU, just plain-English steps beside the real code.',
   intro: [
-    'A transformer language model reads a sequence of token ids and scores what the next id should be. nanoGPT is Andrej Karpathy\'s short, complete version of that idea: one model file, one training script, and one sampling script.',
-    'You will not install PyTorch or train anything here. Each lesson is the same side-by-side reading Yamori shows in the editor. Pseudocode on one side, the real Python on the other, and a click on a step highlights the lines it stands for.',
-    'The path starts at the math, not at main. model.py is the GPT. The character-level Shakespeare prepare script shows what an id actually is. train.py is one optimization step. sample.py turns ids back into text. The last two files are how the README\'s small run replaces the GPT-2-sized defaults.'
+    'Language models look mysterious until you see the pipeline: text becomes numbers, numbers go through a network, training adjusts the network, sampling turns numbers back into text.',
+    'nanoGPT is the smallest serious version of that story — the repo people actually read when they want to understand GPT-style models. Here it is already translated into short steps you can click through in the browser.',
+    'Take it one lesson at a time. Stay on Overview until a step feels familiar; switch to Logic when you want every branch and formula.'
   ],
   learn: [
-    'Causal attention: each position may look at earlier positions, not later ones, through queries, keys, and values.',
-    'How token vectors and position vectors enter a stack of residual blocks, and why the input table and the output head share weights.',
-    'Next-token cross-entropy: the training target at each position is the following id.',
-    'What a step does: a learning rate that warms up and then cosines down, accumulated micro-batches, and a checkpoint.',
-    'Sampling with temperature and top-k, feeding each new id back into the context.',
-    'How a config file actually reaches those globals: configurator.py is executed, not imported.'
+    'How a Shakespeare file becomes a trainable stream of character ids.',
+    'What a GPT module is doing when it scores the next character.',
+    'What happens in a single training step (loss in, updated weights out).',
+    'How sampling turns scores into readable text.',
+    'How the README\'s small Shakespeare run is wired up.',
+    'Where "config" files actually plug into the training script.'
   ],
   steps: [
-    { file: 'model.py', title: 'The GPT', lesson: 'What the network computes, from a token id to a distribution over the next id.' },
-    { file: 'data/shakespeare_char/prepare.py', title: 'Characters become ids', lesson: 'The smallest dataset: one character is one token, saved as binaries plus a codec.' },
-    { file: 'train.py', title: 'One training step', lesson: 'How those ids become a loss, and how AdamW changes the weights.' },
-    { file: 'sample.py', title: 'Text out the other side', lesson: 'Load the checkpoint, encode a prompt with the same codec, and print samples.' },
-    { file: 'config/train_shakespeare_char.py', title: 'The small run', lesson: 'The settings the README uses: a 6-layer model, context 256, Shakespeare characters.' },
-    { file: 'configurator.py', title: 'How a config lands', lesson: 'The few lines that execute that file into train.py\'s globals, or apply a --key=value flag.' }
+    { file: 'data/shakespeare_char/prepare.py', title: 'Text to numbers', lesson: 'Download Tiny Shakespeare and save it the way the trainer expects — one character, one id.' },
+    { file: 'model.py', title: 'The GPT', lesson: 'The network itself: embeddings, attention blocks, and a guess for the next token.' },
+    { file: 'train.py', title: 'One training step', lesson: 'Pull a batch of ids, measure how wrong the guesses are, and update the weights once.' },
+    { file: 'sample.py', title: 'Text out the other side', lesson: 'Load a checkpoint and print new Shakespeare-ish lines.' },
+    { file: 'config/train_shakespeare_char.py', title: 'The small run', lesson: 'The cozy settings: a 6-layer model, 256 characters of context, character vocabulary.' },
+    { file: 'configurator.py', title: 'How a config lands', lesson: 'The tiny script that copies those settings into train.py when you run the README command.' }
   ]
 };

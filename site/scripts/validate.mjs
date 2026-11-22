@@ -47,6 +47,17 @@ if (JSON.stringify(courseFiles) !== JSON.stringify(notes.readingPath.map(step =>
 }
 for (const step of notes.readingPath) if (words(step.why) > 25) fail(step.file + ' reading-path why is over 25 words.');
 
+if (!course.platform?.studyGuide?.length) fail('course.platform.studyGuide is missing.');
+for (const step of course.steps) {
+  if (!step.objectives?.length) fail('Lesson ' + step.file + ' is missing objectives.');
+  if (step.objectives.length < 2 || step.objectives.length > 5) fail('Lesson ' + step.file + ' should have 2–5 objectives.');
+  for (const line of step.objectives) if (words(line) > 22) fail(step.file + ' objective is over 22 words.');
+  if (!step.checks?.length) fail('Lesson ' + step.file + ' is missing checks.');
+  for (const line of step.checks) if (words(line) > 18) fail(step.file + ' check is over 18 words.');
+  if (step.primer && words(step.primer) > 25) fail(step.file + ' primer is over 25 words.');
+  if (step.takeaway && words(step.takeaway) > 25) fail(step.file + ' takeaway is over 25 words.');
+}
+
 const explained = new Set();
 for (const rel of walk(path.join(root, 'explanations'))) {
   const file = rel.slice(0, -'.json'.length);

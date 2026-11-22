@@ -22,14 +22,16 @@ export function shell(app, ctx, page) {
     const img = el('img');
     img.src = LOGO;
     img.alt = '';
-    brand.append(img, el('span', 'wordmark', 'yamori'));
+    const mark = el('span', 'wordmark', '');
+    mark.append(el('span', '', 'yamori'), el('span', 'wordmark-learn', ' learn'));
+    brand.append(img, mark);
     brand.addEventListener('click', event => { event.preventDefault(); go('/'); });
     row.append(brand);
 
     if (route.course && ctx.data) {
       const nav = el('nav', 'workspace-nav');
-      nav.setAttribute('aria-label', 'Lesson');
-      for (const [id, label, href] of [['path', 'Path', '/learn/' + route.course], ['files', 'Files', '/learn/' + route.course + '/files'], ['map', 'Map', '/learn/' + route.course + '/map']]) {
+      nav.setAttribute('aria-label', 'Course sections');
+      for (const [id, label, href] of [['path', 'Course', '/learn/' + route.course], ['files', 'Library', '/learn/' + route.course + '/files'], ['map', 'Map', '/learn/' + route.course + '/map']]) {
         const button = el('a', id === route.view ? 'current-view' : '', label);
         button.href = url(href);
         if (id === route.view) button.setAttribute('aria-current', 'page');

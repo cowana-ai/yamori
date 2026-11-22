@@ -1,6 +1,7 @@
 import { glossaryMatcher } from 'yamori:reading';
 import { el } from './dom.js';
 import { renderBlocks } from './render.js';
+import { renderLessonRail } from './lesson-panel.js';
 
 export function renderReader(parent, ctx) {
   const { data, route, go, url } = ctx;
@@ -20,16 +21,22 @@ export function renderReader(parent, ctx) {
   const page = el('section', 'reader');
   const bar = el('div', 'reader-bar');
   bar.append(tour(file));
+  if (saved && onCoursePath(data, file)) bar.append(coachCard());
   if (saved) {
     const group = el('div', 'segments');
     group.setAttribute('role', 'group');
     group.setAttribute('aria-label', 'Detail');
-    for (const [id, label, title] of [['overview', 'Overview', 'Short: the goal and the main stages'], ['logic', 'Logic', 'Step by step: decisions, data and useful math']]) {
+    for (const [id, label, title] of [['overview', 'Overview', 'Plain story: goals and big moves'], ['logic', 'Logic', 'Full detail: branches, data shapes, and math']]) {
       const button = el('button', '', label);
       button.type = 'button';
       button.title = title;
       button.setAttribute('aria-pressed', String(level === id));
-      button.addEventListener('click', () => { level = id; sessionStorage.setItem('yamori-level:' + file, id); paint(); });
+      button.addEventListener('click', () => {
+        level = id;
+        sessionStorage.setItem('yamori-level:' + file, id);
+        localStorage.setItem('yamori-default-level', id);
+        paint();
+      });
       group.append(button);
     }
     bar.append(group);
@@ -53,7 +60,17 @@ export function renderReader(parent, ctx) {
   code.tabIndex = 0;
   code.setAttribute('aria-label', 'Source of ' + file);
   split.append(pseudo, code);
-  page.append(bar, split);
+  const onPath = onCoursePath(data, file);
+  const main = el('div', 'reader-main');
+  main.append(bar, split);
+  if (onPath) {
+    const layout = el('div', 'reader-layout');
+    renderLessonRail(layout, ctx, file);
+    layout.append(main);
+    page.append(layout);
+  } else {
+    page.append(bar, split);
+  }
   parent.append(page);
   paint();
   if (route.line) reveal(route.line, true);
@@ -71,31 +88,35 @@ export function renderReader(parent, ctx) {
     } else {
       pseudo.append(el('h1', '', view.title));
       pseudo.append(el('p', 'summary', view.summary));
-      const outline = el('nav', 'logic-map');
-      outline.setAttribute('aria-label', 'Script logic map');
-      const caption = el('div', 'map-caption');
-      caption.append(el('h2', '', 'Logic map'), el('span', 'eyebrow', view.sections.length + ' parts'));
-      outline.append(caption);
-      const list = el('ol');
-      view.sections.forEach((section, index) => {
-        const item = el('li');
-        const button = el('button', 'map-item');
-        button.type = 'button';
-        button.append(
-          el('span', 'map-number', String(index + 1).padStart(2, '0')),
-          el('span', 'map-title', section.title),
-          el('span', 'map-range', 'L' + section.startLine + '–' + section.endLine),
-          el('span', 'map-arrow', '→')
-        );
-        button.addEventListener('click', () => {
-          pseudo.querySelectorAll('.reading-block')[index]?.scrollIntoView({ block: 'start' });
-          show(section.startLine, section.endLine, true);
+      if (level === 'logic') {
+        const outline = el('nav', 'logic-map');
+        outline.setAttribute('aria-label', 'Sections in this file');
+        const caption = el('div', 'map-caption');
+        caption.append(el('h2', '', 'Jump to a section'), el('span', 'eyebrow', view.sections.length + ' parts'));
+        outline.append(caption);
+        const list = el('ol');
+        view.sections.forEach((section, index) => {
+          const item = el('li');
+          const button = el('button', 'map-item');
+          button.type = 'button';
+          button.append(
+            el('span', 'map-number', String(index + 1).padStart(2, '0')),
+            el('span', 'map-title', section.title),
+            el('span', 'map-range', 'L' + section.startLine + '–' + section.endLine),
+            el('span', 'map-arrow', '→')
+          );
+          button.addEventListener('click', () => {
+            pseudo.querySelectorAll('.reading-block')[index]?.scrollIntoView({ block: 'start' });
+            show(section.startLine, section.endLine, true);
+          });
+          item.append(button);
+          list.append(item);
         });
-        item.append(button);
-        list.append(item);
-      });
-      outline.append(list);
-      pseudo.append(outline);
+        outline.append(list);
+        pseudo.append(outline);
+      } else if (view.sections.length > 1) {
+        pseudo.append(el('p', 'reading-hint', view.sections.length + ' short sections below — click any step to light up the code on the right.'));
+      }
       const symbols = data.symbols[file] || [];
       rows = renderBlocks(pseudo, view.sections, {
         glossary: data.glossary,
@@ -114,9 +135,11 @@ export function renderReader(parent, ctx) {
         // The matcher stores the index from forEach on the array we passed, which matches `symbols`.
         rows.symbolTable = table;
       }
-      const foot = el('footer');
-      foot.append(el('span', '', 'Prepared in Yamori\'s format · ' + data.meta.title + ' ' + data.meta.commit.slice(0, 12) + ' · Verify against the source'));
-      pseudo.append(foot);
+      if (level === 'logic') {
+        const foot = el('footer');
+        foot.append(el('span', '', 'Prepared in Yamori\'s format · ' + data.meta.title + ' ' + data.meta.commit.slice(0, 12) + ' · Verify against the source'));
+        pseudo.append(foot);
+      }
     }
     paintSource();
     page.dataset.pane = pane;
@@ -186,12 +209,13 @@ export function renderReader(parent, ctx) {
     nav.setAttribute('aria-label', 'Reading tour');
     const row = el('div', 'tour-row');
     if (index >= 0) {
-      row.append(el('span', 'tour-where', data.course.title + ' · Step ' + (index + 1) + ' of ' + steps.length));
-      if (index > 0) row.append(jump(steps[index - 1].file, '← ' + steps[index - 1].file.split('/').at(-1), 'tour-prev'));
-      if (index < steps.length - 1) row.append(jump(steps[index + 1].file, 'Next: ' + steps[index + 1].file.split('/').at(-1) + ' →', 'tour-next primary'));
-      else row.append(el('span', 'tour-status', 'Last step'));
+      const step = steps[index];
+      row.append(el('span', 'tour-where', 'Lesson ' + (index + 1) + ' of ' + steps.length + ' · ' + step.title));
+      if (index > 0) row.append(jump(steps[index - 1].file, '← ' + steps[index - 1].title, 'tour-prev'));
+      if (index < steps.length - 1) row.append(jump(steps[index + 1].file, 'Next: ' + steps[index + 1].title + ' →', 'tour-next primary'));
+      else row.append(el('span', 'tour-status', 'You finished the path'));
     } else row.append(el('span', 'tour-where', 'On the map · outside the guided path'));
-    const guide = el('a', 'tour-guide', 'Path');
+    const guide = el('a', 'tour-guide', 'Course');
     guide.href = url('/learn/' + route.course);
     guide.addEventListener('click', event => { event.preventDefault(); go('/learn/' + route.course); });
     row.append(guide);
@@ -227,7 +251,30 @@ export function renderReader(parent, ctx) {
 
 function sessionLevel(file) {
   const saved = sessionStorage.getItem('yamori-level:' + file);
-  return saved === 'overview' ? 'overview' : 'logic';
+  if (saved === 'overview' || saved === 'logic') return saved;
+  const pref = localStorage.getItem('yamori-default-level');
+  return pref === 'logic' ? 'logic' : 'overview';
+}
+
+function onCoursePath(data, file) {
+  return data.course?.steps?.some(step => step.file === file);
+}
+
+function coachCard() {
+  if (localStorage.getItem('yamori-coach-dismissed')) return el('span', 'coach-spacer');
+  const card = el('div', 'coach-card');
+  card.append(el('p', 'coach-title', 'Quick tip'));
+  card.append(el('p', '', 'Overview is selected on purpose — read one numbered block at a time and click it to see the matching Python. Switch to Logic when you want every branch.'));
+  const row = el('div', 'coach-actions');
+  const dismiss = el('button', '', 'Got it');
+  dismiss.type = 'button';
+  dismiss.addEventListener('click', () => {
+    localStorage.setItem('yamori-coach-dismissed', '1');
+    card.replaceWith(el('span', 'coach-spacer'));
+  });
+  row.append(dismiss);
+  card.append(row);
+  return card;
 }
 
 function missing(file, ctx) {

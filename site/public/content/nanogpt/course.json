@@ -1,51 +1,150 @@
 {
   "id": "nanogpt",
   "title": "Transformers through nanoGPT",
-  "kicker": "Learning path",
-  "summary": "Six files, in the order that makes a GPT legible: the model, the integers it trains on, the training step, sampling, the small Shakespeare config, and the few lines that apply that config.",
+  "kicker": "A gentle read",
+  "summary": "Walk through a famous tiny GPT in six files — starting with data, not math. No install, no GPU, just plain-English steps beside the real code.",
   "intro": [
-    "A transformer language model reads a sequence of token ids and scores what the next id should be. nanoGPT is Andrej Karpathy's short, complete version of that idea: one model file, one training script, and one sampling script.",
-    "You will not install PyTorch or train anything here. Each lesson is the same side-by-side reading Yamori shows in the editor. Pseudocode on one side, the real Python on the other, and a click on a step highlights the lines it stands for.",
-    "The path starts at the math, not at main. model.py is the GPT. The character-level Shakespeare prepare script shows what an id actually is. train.py is one optimization step. sample.py turns ids back into text. The last two files are how the README's small run replaces the GPT-2-sized defaults."
+    "Language models look mysterious until you see the pipeline: text becomes numbers, numbers go through a network, training adjusts the network, sampling turns numbers back into text.",
+    "nanoGPT is the smallest serious version of that story — the repo people actually read when they want to understand GPT-style models. Here it is already translated into short steps you can click through in the browser.",
+    "Take it one lesson at a time. Stay on Overview until a step feels familiar; switch to Logic when you want every branch and formula."
   ],
   "learn": [
-    "Causal attention: each position may look at earlier positions, not later ones, through queries, keys, and values.",
-    "How token vectors and position vectors enter a stack of residual blocks, and why the input table and the output head share weights.",
-    "Next-token cross-entropy: the training target at each position is the following id.",
-    "What a step does: a learning rate that warms up and then cosines down, accumulated micro-batches, and a checkpoint.",
-    "Sampling with temperature and top-k, feeding each new id back into the context.",
-    "How a config file actually reaches those globals: configurator.py is executed, not imported."
+    "How a Shakespeare file becomes a trainable stream of character ids.",
+    "What a GPT module is doing when it scores the next character.",
+    "What happens in a single training step (loss in, updated weights out).",
+    "How sampling turns scores into readable text.",
+    "How the README's small Shakespeare run is wired up.",
+    "Where \"config\" files actually plug into the training script."
   ],
   "steps": [
     {
-      "file": "model.py",
-      "title": "The GPT",
-      "lesson": "What the network computes, from a token id to a distribution over the next id."
+      "file": "data/shakespeare_char/prepare.py",
+      "title": "Text to numbers",
+      "lesson": "Download Tiny Shakespeare and save it the way the trainer expects — one character, one id.",
+      "minutes": 12,
+      "objectives": [
+        "See where Tiny Shakespeare lives on disk after this script runs.",
+        "Understand why one character maps to one integer id here.",
+        "Name the files train.py will open later."
+      ],
+      "primer": "No training yet — just housekeeping: download, encode, write binaries.",
+      "takeaway": "Training data is not \"text files\"; it is packed integers plus a small codec.",
+      "checks": [
+        "What is stored in train.bin versus meta.pkl?",
+        "Why build stoi and itos before writing bytes?"
+      ]
     },
     {
-      "file": "data/shakespeare_char/prepare.py",
-      "title": "Characters become ids",
-      "lesson": "The smallest dataset: one character is one token, saved as binaries plus a codec."
+      "file": "model.py",
+      "title": "The GPT",
+      "lesson": "The network itself: embeddings, attention blocks, and a guess for the next token.",
+      "minutes": 20,
+      "objectives": [
+        "Follow one token id from embedding to next-token scores.",
+        "See where attention blocks sit in the stack.",
+        "Separate training loss from sampling."
+      ],
+      "primer": "This is the densest lesson. Stay on Overview and take one block at a time.",
+      "takeaway": "A GPT here is embeddings, repeated blocks, and a shared table that both reads tokens and writes scores.",
+      "checks": [
+        "What does block_size limit?",
+        "Where do logits get compared to the next id?"
+      ]
     },
     {
       "file": "train.py",
       "title": "One training step",
-      "lesson": "How those ids become a loss, and how AdamW changes the weights."
+      "lesson": "Pull a batch of ids, measure how wrong the guesses are, and update the weights once.",
+      "minutes": 18,
+      "objectives": [
+        "Trace one optimizer step from batch to weight update.",
+        "See where loss is computed and backprop starts.",
+        "Notice what gets saved as a checkpoint."
+      ],
+      "primer": "Imagine the binaries from lesson 1 feeding this loop — you are only reading one pass.",
+      "takeaway": "Training is repeated: sample windows, predict next ids, nudge weights, occasionally save.",
+      "checks": [
+        "What does gradient accumulation change about batch size?",
+        "When does the learning rate schedule matter?"
+      ]
     },
     {
       "file": "sample.py",
       "title": "Text out the other side",
-      "lesson": "Load the checkpoint, encode a prompt with the same codec, and print samples."
+      "lesson": "Load a checkpoint and print new Shakespeare-ish lines.",
+      "minutes": 12,
+      "objectives": [
+        "Load weights and run the model in eval mode.",
+        "See how temperature and top_k change randomness.",
+        "Watch ids decode back to characters."
+      ],
+      "primer": "You are running the model backwards — from prompt ids to printed text.",
+      "takeaway": "Sampling reuses the same codec as training; each new id is fed back as context.",
+      "checks": [
+        "Why divide by temperature before softmax?",
+        "What happens after each sampled id?"
+      ]
     },
     {
       "file": "config/train_shakespeare_char.py",
       "title": "The small run",
-      "lesson": "The settings the README uses: a 6-layer model, context 256, Shakespeare characters."
+      "lesson": "The cozy settings: a 6-layer model, 256 characters of context, character vocabulary.",
+      "minutes": 10,
+      "objectives": [
+        "List the hyperparameters that shrink GPT-2 defaults.",
+        "Connect dataset path to lesson 1.",
+        "See how a README command names this file."
+      ],
+      "primer": "A config file is just variable assignments — no magic syntax.",
+      "takeaway": "The small run is mostly smaller width, depth, and context plus the char dataset path.",
+      "checks": [
+        "Which settings make this \"character Shakespeare\" instead of GPT-2 scale?",
+        "Where is the dataset path set?"
+      ]
     },
     {
       "file": "configurator.py",
       "title": "How a config lands",
-      "lesson": "The few lines that execute that file into train.py's globals, or apply a --key=value flag."
+      "lesson": "The tiny script that copies those settings into train.py when you run the README command.",
+      "minutes": 8,
+      "objectives": [
+        "See how a config file executes into train.py globals.",
+        "Read one command-line override path.",
+        "Understand why this is exec, not import."
+      ],
+      "primer": "Short file, big payoff — this is how experiments swap without editing train.py.",
+      "takeaway": "Running with a config path replaces defaults by executing Python in train's namespace.",
+      "checks": [
+        "What happens when you pass config/train_shakespeare_char.py?",
+        "How could a --key=value flag override one variable?"
+      ]
     }
-  ]
+  ],
+  "platform": {
+    "name": "Yamori Learn",
+    "format": "Self-paced · browser only · about 90 minutes",
+    "audience": "Curious beginners who learn best by reading real code",
+    "prerequisites": [
+      "You can skim Python without running it.",
+      "You do not need PyTorch, a GPU, or prior transformer coursework."
+    ],
+    "studyGuide": [
+      {
+        "title": "Read in Overview first",
+        "body": "Each file opens in Overview: short blocks in plain language. Stay there until the story makes sense."
+      },
+      {
+        "title": "Click to connect story and source",
+        "body": "Select a numbered block (or a line of Python). The other pane lights up so you always know where the idea lives."
+      },
+      {
+        "title": "Use Logic when you want depth",
+        "body": "Logic adds branches, shapes, and math — same file, more steps. Toggle any time; nothing is hidden."
+      },
+      {
+        "title": "Follow the lessons in order",
+        "body": "The path is deliberate: data, model, training, sampling, then how the small Shakespeare run is configured."
+      }
+    ]
+  }
 }

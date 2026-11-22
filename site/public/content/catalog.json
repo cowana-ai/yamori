@@ -1,11 +1,15 @@
 {
+  "platform": {
+    "name": "Yamori Learn",
+    "tagline": "Courses built from real repositories — pseudocode, maps, and guided lessons, prepared ahead of time."
+  },
   "courses": [
     {
       "id": "nanogpt",
       "title": "Transformers through nanoGPT",
       "repo": "karpathy/nanoGPT",
       "upstream": "https://github.com/karpathy/nanoGPT",
-      "blurb": "A GPT, end to end: causal attention, next-token loss, the training step, and sampling. Six files, already read as pseudocode.",
+      "blurb": "Karpathy's nanoGPT in six browser lessons — data first, then the model, training, sampling, and config. Plain Overview steps beside the real Python.",
       "files": 6
     }
   ]

@@ -15,7 +15,8 @@ import { sample } from './content/sample.mjs';
 import { configurator } from './content/configurator.mjs';
 import { prepareChar } from './content/prepare-char.mjs';
 import { shorts } from './content/shorts.mjs';
-import { notesBody, course } from './content/notes.mjs';
+import { notesBody, course as courseBase } from './content/notes.mjs';
+import { platform, steps as stepGuidance } from './content/guidance.mjs';
 import { flows } from './content/flows.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'content', 'nanogpt');
@@ -48,6 +49,11 @@ writeFileSync(path.join(root, 'meta.json'), JSON.stringify({
   prepared: 'Pseudocode, file notes, and flow traces were written to Yamori\'s stored JSON shape from that source. This site does not call a model.'
 }, null, 2) + '\n');
 
+const course = {
+  ...courseBase,
+  platform,
+  steps: courseBase.steps.map(step => ({ ...step, ...(stepGuidance[step.file] || {}) }))
+};
 writeFileSync(path.join(root, 'course.json'), JSON.stringify(course, null, 2) + '\n');
 
 const notes = { overview: notesBody.overview, clusters: notesBody.clusters, readingPath: notesBody.readingPath, files: {} };
