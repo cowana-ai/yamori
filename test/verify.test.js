@@ -96,3 +96,12 @@ test('a selection keeps its own line numbers', () => {
   const found = verifyPseudocode({ source: { text: 'a = 1\nrate = 0.37\n', startLine: 40 }, sections: [{ title: 'T', startLine: 41, endLine: 41, pseudocode: 'Set the rate.' }] });
   assert.match(found.findings[0].text, /0\.37/);
 });
+
+
+test('inline formatting alone is not evidence of a source identifier', () => {
+  const source = sourceNames('def render(items):\n    return items\n');
+  assert.deepEqual(unknownNames('Compare `before` and `after`. Keep the `existing behavior` and `output`.', source), []);
+  assert.deepEqual(unknownNames('Call `ghost_helper`, then `warmUpTheModel`.', source).sort(), ['ghost_helper', 'warmUpTheModel']);
+  assert.deepEqual(unknownNames('Call `phantom()` or read `cache.value`.', source).sort(), ['cache', 'phantom', 'value']);
+  assert.deepEqual(unknownNames('Call `render(items)`.', source), []);
+});

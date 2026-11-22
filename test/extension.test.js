@@ -1124,12 +1124,13 @@ test('a batched source refresh returns only changed blocks and merges untouched 
     const reply = {title:previous.title,summary:previous.summary,sections:[{...previous.sections[0],index:0,pseudocode:'Set x to 2.'}]};
     await fs.writeFile(binary, 'const fs=require("node:fs"),a=process.argv.slice(2),schema=JSON.parse(fs.readFileSync(a[a.indexOf("--output-schema")+1],"utf8"));'+
       'if(schema.properties.views||schema.properties.sections.maxItems!==1||schema.properties.sections.items.properties.index.enum[0]!==0)process.exit(3);'+
-      'let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{if(!prompt.includes("CACHED DOCUMENT DATA")||!prompt.includes("Keep this useful cached note"))process.exit(4);const reply='+JSON.stringify(reply)+';if(a.includes("bad"))reply.sections[0].index=1;fs.writeFileSync(a[a.indexOf("--output-last-message")+1],JSON.stringify(reply))});');
+      'let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{if(!prompt.includes("CACHED DOCUMENT DATA")||!prompt.includes("Keep this useful cached note"))process.exit(4);const reply='+JSON.stringify(reply)+';if(a.includes("bad"))reply.sections[0].index=1;if(a.includes("bounds")){reply.sections[0].startLine=11;reply.sections[0].endLine=11;}fs.writeFileSync(a[a.indexOf("--output-last-message")+1],JSON.stringify(reply))});');
     const options={source:{...source,text:'x = 2\nprint(x)'},level:'logic',provider:'codex',cliPath:binary,sourceRefresh:{previous,patch:true,staleBlocks:[0]}};
     const value=await generate(options);
     assert.equal(value.sections[0].pseudocode,'Set x to 2.'); assert.deepEqual(value.sections[1],previous.sections[1]);
     assert.equal(value.views,undefined,'other levels are refreshed lazily from the new cached revision');
     await assert.rejects(generate({...options,model:'bad'}),/unexpected block patch/);
+    await assert.rejects(generate({...options,model:'bounds'}),/changed source boundaries/);
   } finally {await fs.rm(temp,{recursive:true,force:true});}
 });
 
@@ -3673,6 +3674,8 @@ test('planning follow-ups reuse the session and apply only validated patches; qu
     assert.equal(requests.at(-1).schema, real.PLAN_PATCH_SCHEMA);
     assert.equal(requests[0].session, requests[1].session, 'the prior investigation is retained');
     assert.ok(!requests.at(-1).prompt.includes('PROJECT FILE INDEX'), 'a retained follow-up does not resend the initial project index');
+    assert.match(requests.at(-1).prompt, /RECENT SHARED CHAT/);
+    assert.ok(requests.at(-1).recoveryContext.includes('PROJECT FILE INDEX'), 'a failed resume can restore full context before its first turn');
     assert.deepEqual(h.guideState().plan.plan.steps, original.steps, 'a question leaves every proposed step unchanged');
     assert.match(h.guideState().plan.conversation.at(-1).text, /introduction/);
     reply = { ...reply, message: 'Updated one step.', updates: [{ id, file: original.steps[0].file, lines: [3, 8], title: 'Count only body loops', change: 'Number body loops from L2', why: 'Skip the hook.' }] };
@@ -4323,5 +4326,91 @@ test('selection questions enter the existing project chat with source metadata a
       const panel = h.panels.filter(panel => panel.type === 'yamoriMap').at(-1), state = panel.messages.filter(message => message.type === 'map').at(-1).state;
       assert.equal(state.plan.mode, 'chat'); assert.equal(state.plan.plan, undefined); const question = state.plan.conversation.find(row => row.role === 'user'); assert.equal(question.details.selection.file, 'models/script.py'); assert.equal(question.details.selection.unsaved, true); assert.match(question.text, /SAY/);
     } finally { await map.dispose(); }
+  } finally { await h.close(); }
+});
+
+
+test('implementation exposes newer tool completions, provider retries and idle gaps; fatal errors do not silently hang', async () => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const { streamCodex, IMPLEMENTATION_SCHEMA } = require('../src/ai/engine');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-implementation-progress-')), binary = path.join(root, 'fixture.js');
+  try {
+    await fs.writeFile(binary, `const out=x=>console.log(JSON.stringify(x));require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.method==='initialize')out({id:m.id,result:{}});if(m.method==='thread/start')out({id:m.id,result:{thread:{id:'progress'},model:'fixture'}});if(m.method==='turn/start'){out({id:m.id,result:{turn:{id:'t'}}});if(m.params.input[0].text==='fatal'){out({method:'error',params:{threadId:'progress',turnId:'t',willRetry:false,error:{message:'Provider usage limit reached'}}});return;}out({method:'item/started',params:{item:{type:'dynamicToolCall',tool:'exec'}}});out({method:'item/completed',params:{item:{type:'dynamicToolCall',tool:'exec',status:'completed'}}});out({method:'item/completed',params:{item:{type:'commandExecution',command:'pytest',status:'completed'}}});out({method:'error',params:{threadId:'progress',turnId:'t',willRetry:true,error:{message:'Connection interrupted'}}});setTimeout(()=>{out({method:'item/completed',params:{item:{type:'agentMessage',text:'{"status":"completed","summary":"Checked."}'}}});out({method:'turn/completed',params:{turn:{status:'completed'}}});},100);}});`);
+    const stages = [], activity = [];
+    const result = await streamCodex(binary, 'work', IMPLEMENTATION_SCHEMA, { cwd: root, execution: 'work', heartbeatMs: 10, idleNoticeMs: 20, onPhase: phase => stages.push(phase), onActivity: text => activity.push(text) });
+    assert.equal(JSON.parse(result).status, 'completed');
+    assert.ok(activity.some(text => /Running Codex tool: exec/.test(text)));
+    assert.ok(activity.some(text => /Finished Codex tool: exec/.test(text)));
+    assert.ok(activity.some(text => /Finished: pytest/.test(text)), 'completed command events are visible even without a start event');
+    assert.ok(stages.some(text => /reconnecting.*Connection interrupted/.test(text)));
+    assert.ok(stages.some(text => /No new Codex activity.*Stop/.test(text)), 'quiet periods are labelled without starting another run');
+    await assert.rejects(streamCodex(binary, 'fatal', IMPLEMENTATION_SCHEMA, { cwd: root, execution: 'work' }), /Provider usage limit reached/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+
+test('whole-file refresh isolates failed affected batches, caches successes and retries only remaining blocks', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const calls = []; let fail = true;
+  const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 0 }, { engine: () => ({ generate: async options => {
+    if (!options.sourceRefresh) return { title: 'Functions', summary: '', sections: Array.from({ length: 7 }, (_,i) => ({ title: 'part' + i, startLine: i * 3 + 1, endLine: i * 3 + 2, pseudocode: 'Return 1.', lineMap: [] })) };
+    const refresh = options.sourceRefresh; calls.push([...refresh.staleBlocks]);
+    if (fail && refresh.staleBlocks.includes(0)) { const error = new Error('Fixture fidelity failure'); error.code = 'YAMORI_FIDELITY'; throw error; }
+    return { ...refresh.previous, views: undefined, sections: refresh.previous.sections.map((section,i) => refresh.staleBlocks.includes(i) ? { ...section, pseudocode: 'Return 2.' } : section) };
+  } }) });
+  try {
+    const file = path.join(h.root, 'sample.py'), original = Array.from({ length: 7 }, (_,i) => 'def part' + i + '():\n    return 1\n').join('\n');
+    await fs.writeFile(file, original); await h.commands.get('yamori.openAt')(h.Uri.file(file).toString(), 1);
+    const reader = h.readers().at(-1); await h.until(() => h.last(reader).result?.sections.length === 7, 'initial cache');
+    await fs.writeFile(file, original.replace(/return 1/g, (value,offset) => offset < original.indexOf('def part6') ? 'return 2' : value));
+    await reader.receive({ type: 'refresh' });
+    assert.equal(calls.length, 2); assert.ok(calls.every(batch => batch.length <= 4));
+    assert.match(h.last(reader).error, /2 blocks updated and cached; 4 still need review/);
+    assert.deepEqual(h.last(reader).staleBlocks, [0,1,2,3]);
+    assert.equal(h.last(reader).result.sections[4].pseudocode, 'Return 2.');
+    assert.equal(h.last(reader).result.sections[0].pseudocode, 'Return 1.', 'failed work keeps the previous readable text');
+    assert.equal(h.last(reader).result.sections[6].pseudocode, 'Return 1.', 'unaffected text is untouched');
+    fail = false; calls.length = 0; await reader.receive({ type: 'refresh' });
+    assert.deepEqual(calls, [[0,1,2,3]], 'successful batches are not regenerated on retry');
+    assert.equal(h.last(reader).stale, false);
+  } finally { await h.close(); }
+});
+
+test('plan revisions carry the latest discussion across chat and plan modes', async () => {
+  const requests = [];
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: () => ({
+    requestStructured: async options => { requests.push(options); options.session.ready = true; return { raw: JSON.stringify(requests.length === 1 ? GOOD_PLAN : { message: 'Ready to simplify the loop.', summary: '', question: '', updates: [], additions: [], removals: [] }), actualModel: 'test' }; },
+    implementPlan: async () => ({ summary: 'Use one ordered loop and pass earlier results into the next section.' })
+  }) });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.guide.receive({ type: 'planGoal', goal: 'Review the pipeline' });
+    await h.guide.receive({ type: 'projectMessage', mode: 'chat', text: 'Can the section writing be simpler?' });
+    await h.guide.receive({ type: 'planChat', text: 'Plan this simplification' });
+    assert.match(requests.at(-1).prompt, /Can the section writing be simpler/);
+    assert.match(requests.at(-1).prompt, /Use one ordered loop and pass earlier results/);
+    assert.match(requests.at(-1).prompt, /USER: "Plan this simplification"/);
+    assert.equal(requests.length, 2, 'one planning call per request');
+  } finally { await h.close(); }
+});
+
+
+test('plan previews accept formatted prose but retain name validation and prior previews', async () => {
+  const calls = [], queue = [GOOD_PLAN];
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false }, { engine: planEngine(calls, queue) });
+  try {
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    await h.guide.receive({ type: 'planGoal', goal: 'Simplify the pipeline' });
+    const step = h.guideState().plan.plan.steps[0], after = 'Keep the `before` behavior.\nNumber the loops from L2.';
+    queue.push({ before: '', after });
+    await h.guide.receive({ type: 'planDetail', id: step.id });
+    assert.equal(h.guideState().plan.error, '');
+    assert.equal(h.guideState().plan.plan.steps[0].after, after);
+    assert.equal(calls.length, 2, 'formatted prose succeeds with one preview request');
+    queue.push({ before: '', after: 'Call `ghost_helper()`.' });
+    await h.guide.receive({ type: 'planDetail', id: step.id });
+    assert.match(h.guideState().plan.error, /Unverified source names: ghost_helper/);
+    assert.equal(h.guideState().plan.plan.steps[0].after, after, 'a genuinely unverified call keeps the previous preview');
+    assert.equal(calls.length, 3, 'invalid names do not trigger paid retries');
   } finally { await h.close(); }
 });

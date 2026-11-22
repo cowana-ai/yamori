@@ -1,5 +1,19 @@
 # Release history
 
+### 0.26.14 · 2026-11-22
+- **Preview validation:** inline formatting alone no longer turns ordinary prose into an unverified source name. Identifier-shaped names and explicit calls/member references still receive source checks; failed checks keep the saved preview without automatic retries.
+
+### 0.26.13 · 2026-11-20
+- **Planning reconnect:** a saved Codex thread owned by another writer is left alone; start a new read-only planning thread with saved context before sending one model turn. Other provider failures still stop without retrying inference.
+- **Chat-to-plan continuity:** plan revisions receive bounded recent shared conversation, so requests referring to the previous chat carry their context across modes. Saved steps remain intact on failure.
+
+### 0.26.12 · 2026-11-20
+- **Selective source refresh:** match cached explanations to parsed current definitions and previously fresh source, remove obsolete blocks, preserve unchanged explanations, and update affected blocks in bounded batches. Successful batches are cached even when another fails fidelity review.
+- **Precise dependencies:** invalidate actual callers, not every block; dependency signatures include reachable helpers and module context. Patch writers and reviewers receive affected source, with stable boundaries enforced locally. No project-specific exceptions or automatic generation on file changes.
+
+### 0.26.11 · 2026-11-20
+- **Visible implementation activity:** show newer Codex tool events and completion, provider retry notices and waiting states. Report long periods without new activity instead of silently looking frozen. Non-retryable provider errors stop with the saved plan intact. No automatic implementation retry.
+
 ### 0.26.10 · 2026-11-20
 - **Action-first plans:** explain proposed work as “I’ll do this, so this happens” using everyday words, short sentences and concrete reasons. Explain source names by their role and preserve important constraints without turning proposals into compressed checklists. Applies to drafts and revisions without an extra model request.
 

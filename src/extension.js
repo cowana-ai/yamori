@@ -9,7 +9,7 @@ const journal = require('./project/conversation');
 const nativeSessions = require('./project/sessions');
 const { CHAT_SCHEMA, implementPlan, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, flowPrompt, parseFlow, FLOW_SCHEMA, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./ai/engine');
 const { panelHTML } = require('./views/reader');
-const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks } = require('./storage/cache');
+const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks, dependencyFingerprint, reconcileRefresh, refreshSupport } = require('./storage/cache');
 const { mapHTML } = require('./views/guide');
 const { setupHTML } = require('./views/setup');
 const project = require('./project/graph');
@@ -88,7 +88,11 @@ async function collectCallContext(snapshot, api = vscode, timeout = 1600) {
         const text = chunks.map(chunk => lines.slice(chunk.start, chunk.end).map((line, i) => `${chunk.start + i + 1}: ${line}`).join('\n').slice(0, chunks.length > 1 ? 2100 : 4400)).join('\n... omitted intervening lines ...\n');
         if (finished || budget < text.length) return;
         locations.add(key); resolved.add(call.symbol); budget -= text.length;
-        definitions.push({ symbol: call.symbol, file: api.workspace.asRelativePath(uri), uri: uri.toString(), startLine: start + 1, text, fullHash: hash(fullText) });
+        partIndexer ||= new project.Indexer();
+        const syntax = await partIndexer.extract(uri.fsPath, fullText);
+        const declaration = (syntax.defs || []).filter(def => def.line <= start + 1 && (def.end || def.line) >= start + 1 && ['function','class','method'].includes(def.kind)).sort((a,b) => (a.end - a.line) - (b.end - b.line))[0];
+        const watchSignature = declaration && dependencyFingerprint(fullText, syntax.defs, declaration.name, declaration.kind);
+        definitions.push({ ...(watchSignature ? { watchSignature, watchName: declaration.name, watchKind: declaration.kind } : {}), symbol: call.symbol, file: api.workspace.asRelativePath(uri), uri: uri.toString(), startLine: start + 1, text, fullHash: hash(fullText) });
       }
     }
   }));
@@ -781,7 +785,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     const context = (session.ready ? 'Use the project investigation already retained in this session. Re-read source only for genuinely new evidence.' : built.text) + planningChanges(entry, session) + '\n' + editor;
     const started = Date.now();
     entry.planBusy = { ...entry.planBusy, contextTokens: built.tokens }; post(entry);
-    const response = await requestStructured({ ...connection, planning: true, session, onQuestion: request => planNativeQuestion(entry, request, signal), onProgress: update => {
+    const response = await requestStructured({ ...connection, planning: true, session, recoveryContext: session.ready ? built.text : '', onQuestion: request => planNativeQuestion(entry, request, signal), onProgress: update => {
       if (signal.aborted) return;
       if (postReply(entry, update)) return;
       entry.planActivity ||= [];
@@ -835,10 +839,10 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     try {
       const { built, tools, editor } = await buildPlanningContext(entry, plan);
       const connection = entry.planSession?.preference === planningPreference() ? entry.planSession.connection : await planConnection(entry, planSettings().mode), session = planningSession(entry, plan, connection);
-      const prompt = planPatchPrompt({ plan, text, context: session.ready ? '' : built.text }) + planningChanges(entry, session) + '\n' + editor;
+      const prompt = planPatchPrompt({ plan, text, context: session.ready ? '' : built.text, conversation: journal.context(entry.plans, 10000, undefined, { includePlan: false }) }) + planningChanges(entry, session) + '\n' + editor;
       const started = Date.now();
       entry.planBusy.contextTokens = Math.ceil(prompt.length / 4); post(entry);
-      const response = await requestStructured({ ...connection, planning: true, session, tools, prompt, schema: PLAN_PATCH_SCHEMA, signal: controller.signal, onQuestion: request => planNativeQuestion(entry, request, controller.signal), showPreview: false, onProgress: update => {
+      const response = await requestStructured({ ...connection, planning: true, session, recoveryContext: session.ready ? built.text : '', tools, prompt, schema: PLAN_PATCH_SCHEMA, signal: controller.signal, onQuestion: request => planNativeQuestion(entry, request, controller.signal), showPreview: false, onProgress: update => {
         if (controller.signal.aborted) return;
         if (postReply(entry, update)) return;
         if (update.phase && update.stage !== 'usage' && entry.planActivity.at(-1) !== update.phase) entry.planActivity = [...(entry.planActivity || []), update.phase].slice(-6);
@@ -2070,13 +2074,17 @@ function createReader(context, navigation) {
     if (different || metadataChanged) { clearHighlight(); queuePersist(); }
     post();
   }
-  function dependencyChanged(uri, text, modifiedAt) {
+  async function dependencyChanged(uri, text, modifiedAt) {
     if (!source?.callContext?.definitions || !result) return;
     const fingerprint = typeof text === 'string' ? hash(text) : 'missing';
     if (observedDependencies.get(uri) === fingerprint) return;
     observedDependencies.set(uri, fingerprint);
-    const definitions = source.callContext.definitions.filter(def => def.uri === uri && (!text || def.fullHash !== hash(text)));
+    partIndexer ||= new project.Indexer();
+    const syntax = typeof text === 'string' ? await partIndexer.extract(vscode.Uri.parse(uri).fsPath, text) : undefined;
+    const definitions = source.callContext.definitions.filter(def => def.uri === uri && (!text || def.fullHash !== hash(text)) && (!def.watchSignature || !syntax || dependencyFingerprint(text, syntax.defs, def.watchName, def.watchKind) !== def.watchSignature));
     if (!definitions.length) return;
+    const affected = new Set(definitions.flatMap(def => dependencyBlocks(source, result, def.symbol)));
+    if (!affected.size) return;
     if (busy) cancel();
     for (const def of definitions) dependencyBlocks(source, result, def.symbol).forEach(index => { staleBlocks.add(index); if (sourceMissing && !missingStale.includes(index)) missingStale.push(index); });
     result = { ...result, views: undefined, sections: result.sections.map((section, index) => staleBlocks.has(index) ? { ...section, lineMap: [] } : section) };
@@ -2100,12 +2108,12 @@ function createReader(context, navigation) {
         const text = notebookView ? notebookView.text : raw;
         if (token !== checkTokens.get(target) || disposed) return;
         if (main) applySource({ ...currentSnapshot(source, text, { modifiedAt: stat.mtimeMs, size: stat.size, dirty: !!doc?.isDirty }), ...(notebookView ? { notebookCells: notebookView.notebookCells } : {}) }, doc?.isDirty ? 'Unsaved code changed' : 'Source file changed');
-        else dependencyChanged(target, text, stat.mtimeMs);
+        else await dependencyChanged(target, text, stat.mtimeMs);
       } catch (e) {
         if (token !== checkTokens.get(target) || disposed) return;
         if (main && (kind === 'delete' || !doc || doc.isDirty === false)) {
           unavailable('Source file is unavailable');
-        } else if (!main) dependencyChanged(target, undefined);
+        } else if (!main) await dependencyChanged(target, undefined);
       }
     }
   }
@@ -2596,6 +2604,70 @@ function createReader(context, navigation) {
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(source.uri));
     if (!disposed) await vscode.window.showTextDocument(doc, { viewColumn: sourceColumn, preserveFocus: true });
   }
+  async function refreshAffected(base, contextSource, previousSource) {
+    cancel(); const id = serial, opts = options(contextSource), task = new AbortController(); controller = task;
+    busy = true; error = ''; startedAt = Date.now(); activity = []; progress = 'Matching cached blocks to current source'; post();
+    const explicitRewrite = !stale;
+    let current = base, remaining = new Set(staleBlocks), savedCount = 0, failure;
+    const alive = async () => id === serial && !task.signal.aborted && source.fullHash === previousSource.fullHash && await stillCurrent(contextSource);
+    const commit = async value => {
+      const freshStatus = { ...status(), staleBlocks: [...remaining], removedBlocks: [], changedRanges: remaining.size ? changedRanges : [], sharedChange: false, sourceMissing: false, checkedAt: Date.now() };
+      const revision = await persistRevision(contextSource, opts, value, freshStatus);
+      const saved = await save(contextSource, { ...opts, revision }, value, freshStatus);
+      if (id !== serial || task.signal.aborted) return;
+      source = contextSource; trackSources(); result = current = value; refreshBase = undefined; restoreStatus({ ...freshStatus, savedAt: saved ? cacheSavedAt : undefined }); selectedModel = value.model; post();
+    };
+    try {
+      partIndexer ||= new project.Indexer();
+      const origins = await disk.origins(contextSource, opts, base);
+      const layout = await reconcileRefresh(contextSource, base, origins, partIndexer);
+      if (!await alive()) return;
+      if (layout) { current = { ...layout.value, refinement: undefined }; remaining = new Set(layout.staleBlocks); activity.push('Matched source locally; ' + remaining.size + ' blocks need updating' + (layout.removed ? ', ' + layout.removed + ' obsolete blocks removed' : '')); }
+      else if (removedBlocks.size) {
+        const retained = current.sections.map((section,index) => ({ section, index })).filter(row => !removedBlocks.has(row.index));
+        remaining = new Set(retained.flatMap((row,index) => staleBlocks.has(row.index) ? [index] : []));
+        current = { ...current, views: undefined, sections: retained.map(row => row.section) };
+      }
+      if (!current.sections.length) throw new Error('Cached blocks cannot be matched safely. Use a fresh explanation for the new source structure.');
+      if (explicitRewrite || !remaining.size && sharedChange && !layout) remaining = new Set(current.sections.map((_,i) => i));
+      // Save local ownership repairs before inference. Existing text remains
+      // marked stale until its own patch passes fidelity review.
+      await commit(current);
+      const groups = []; let group = [], size = 0;
+      for (const index of remaining) {
+        const section = current.sections[index]; if (!section) continue;
+        const bytes = contextSource.text.split('\n').slice(section.startLine - contextSource.startLine, section.endLine - contextSource.startLine + 1).join('\n').length;
+        if (group.length && (group.length >= 4 || size + bytes > 12000)) { groups.push(group); group = []; size = 0; }
+        group.push(index); size += bytes;
+      }
+      if (group.length) groups.push(group);
+      const fast = groups.length ? await quickModel(opts.provider, opts.cliPath) : undefined;
+      const review = groups.length && opts.refinementSteps ? await reviewerFor(opts) : undefined;
+      const syntax = await partIndexer.extract(contextSource.name || vscode.Uri.parse(contextSource.uri).fsPath, contextSource.text);
+      for (const indices of groups) {
+        if (!await alive()) return;
+        progress = 'Updating ' + indices.length + ' affected blocks · ' + savedCount + ' saved';
+        startRun(contextSource, opts, undefined, progress); post();
+        try {
+          const sharedContext = refreshSupport(contextSource, indices.map(index => current.sections[index]), syntax.defs || []);
+          const updated = await generate({ source: contextSource, ...opts, fast, review, sourceRefresh: { patch: true, previous: current, staleBlocks: indices, changedRanges, sharedContext }, signal: task.signal, onProgress: progressFor(id, task) });
+          if (!await alive()) return;
+          const prior = new Set(remaining); indices.forEach(index => remaining.delete(index));
+          try { await commit(updated); } catch (error) { remaining = prior; throw error; }
+          savedCount += indices.length; activity.push('Saved ' + indices.length + ' updated blocks; ' + remaining.size + ' remaining');
+        } catch (error) {
+          if (task.signal.aborted || id !== serial) return;
+          failure = error; activity.push('Kept cached text for ' + indices.length + ' blocks: ' + error.message); finishRun('failed');
+        }
+      }
+      if (failure) { error = savedCount + ' blocks updated and cached; ' + remaining.size + ' still need review. ' + failure.message; finishRun('failed'); }
+      else activity.push(savedCount ? 'Affected blocks updated and cached; unchanged explanations reused' : 'Source alignment updated locally; no generation needed');
+    } catch (errorValue) {
+      if (id === serial && !task.signal.aborted) { error = errorValue.message; finishRun('failed'); }
+    } finally {
+      if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); }
+    }
+  }
   async function refresh(index) {
     if (!source) return navigation.open();
     if (busy) return;
@@ -2612,6 +2684,7 @@ function createReader(context, navigation) {
     const requestSource = one ? await collectCallContext(scope) : scope;
     if (source.fullHash !== previousSource.fullHash || !await stillCurrent(contextSource)) { await inspect(undefined, 'change'); return; }
     if (Buffer.byteLength(requestSource.text) > MAX_BYTES) throw new Error('Select a smaller code range before refreshing.');
+    if (!one) { await refreshAffected(base, contextSource, previousSource); return; }
     cancel(); const id = serial, opts = options(contextSource), task = new AbortController(); controller = task;
     busy = true; error = ''; startedAt = Date.now(); activity = []; progress = one ? 'Updating cached block' : 'Updating cached explanation'; post();
     try {

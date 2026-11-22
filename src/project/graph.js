@@ -149,6 +149,13 @@ function statementOf(node) {
 }
 // Where a definition's code ends: the defining node, not just its name.
 const DEFINITION_NODES = /definition|declaration|_item$|^method_definition$|^class_body$|^type_spec$|^variable_declarator$|^assignment$|^const_spec$|^var_spec$|^enum_constant$|^enum_variant$/;
+function definitionStart(node) {
+  for (let current = node.parent; current; current = current.parent) {
+    if (DEFINITION_NODES.test(current.type)) return (current.parent?.type === 'decorated_definition' ? current.parent : current).startPosition.row + 1;
+    if (current.type === 'block' || current.type === 'program' || current.type === 'module' || current.type === 'source_file') break;
+  }
+  return node.startPosition.row + 1;
+}
 function definitionEnd(node) {
   for (let current = node.parent; current; current = current.parent) {
     if (DEFINITION_NODES.test(current.type)) return (current.parent?.type === 'decorated_definition' ? current.parent : current).endPosition.row + 1;
@@ -174,7 +181,7 @@ function fromCaptures(grammar, captures, rel, text) {
     if (name === 'test.name') { const open = cases.findLast(item => item.line <= line && item.end >= line && !item.name); if (open) open.name = value.slice(0, 120); continue; }
     if (name.startsWith('def.')) {
       const key = value + ':' + line;
-      if (!seen.has(key)) { seen.add(key); defs.push({ name: value, kind: name.slice(4), line, end: definitionEnd(node) }); }
+      if (!seen.has(key)) { seen.add(key); defs.push({ name: value, kind: name.slice(4), line, start: definitionStart(node), end: definitionEnd(node) }); }
       continue;
     }
     const statement = statementOf(node), id = statement.id ?? statement.startIndex;

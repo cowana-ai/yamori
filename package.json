@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori: Read Code as Pseudocode",
   "description": "Read any code as pseudocode beside your editor, every line linked to the source. No API key: runs on your Claude Code or Codex login. Python, JS/TS, Go, Rust and Java.",
-  "version": "0.26.10",
+  "version": "0.26.14",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {

@@ -247,3 +247,12 @@ limited to 500 source files; map files over 500 KB are skipped. Each model reque
 and ten at higher effort, with Stop available throughout. Local files and VS Code 1.90+ or a compatible Cursor version are required.
 
 </details>
+
+
+### Selective source updates
+
+When you choose **Update from code**, Yamori matches cached blocks to parsed definitions using previously fresh source snapshots. It reuses unchanged explanations, removes obsolete blocks, and creates placeholders for newly uncovered definitions locally. Changed helpers also mark their callers for review. If the parser or historical cache cannot establish ownership, the block stays uncertain; source equality is not assumed.
+
+Affected blocks are generated in bounded batches. Writers and reviewers receive those source ranges and relevant supporting definitions. Each successful batch is cached immediately. A fidelity failure keeps the earlier readable text marked stale for that batch; retrying updates the remaining stale blocks. Invalid navigation links may be disabled, but fidelity failures are not bypassed. Updating a dependency does not automatically rewrite every block, and file changes do not start generation.
+
+Refreshing an already-current explanation remains an explicit regeneration request, including after selecting a different model. No project-specific file names or function-name exceptions are used.

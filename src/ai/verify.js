@@ -57,7 +57,12 @@ function unknownNames(pseudocode, source, known) {
   const found = new Set(), flatNames = new Set([...source, ...(known || [])].map(flat));
   for (const raw of String(pseudocode).split('\n')) {
     if (/^\s*#\s*Unresolved:/i.test(raw)) continue;
-    const quoted = [...raw.matchAll(/`([^`\n]+)`/g)].flatMap(match => match[1].match(IDENTIFIER) || []).filter(name => name.length > 2);
+    // Backticks also emphasize ordinary prose. Formatting alone does not prove
+    // that a word names source code; require identifier shape or call/member syntax.
+    const quoted = [...raw.matchAll(/`([^`\n]+)`/g)].flatMap(match => {
+      const span = match[1], explicit = new Set([...span.matchAll(/([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+|[A-Za-z_$][\w$]*(?=\s*\())/g)].flatMap(item => item[0].match(IDENTIFIER) || []));
+      return (span.match(IDENTIFIER) || []).filter(name => name.length > 2 && (codeLike(name) || explicit.has(name)));
+    });
     // Names after e.g. / such as / like are examples, not claims about the code.
     const line = stripMath(raw).split(/(?:\be\.g\.|\b(?:for example|for instance|such as|like)\b)/i)[0].replace(/`/g, ' ').replace(/\*\*/g, ' ');
     for (const name of [...(line.match(IDENTIFIER) || []), ...quoted]) {
