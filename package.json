@@ -1,7 +1,7 @@
 {
   "name": "yamori",
   "displayName": "Yamori",
-  "description": "Programming context, made explicit. Read code as friendly, navigable pseudocode in Cursor and VS Code, with a project map that shows where to start.",
+  "description": "Yamori turns any file into short, numbered pseudocode next to your editor, every line linked back to the source, using the Claude or ChatGPT plan you already have. No API key.",
   "version": "0.26.10",
   "publisher": "cowana-ai",
   "license": "MIT",

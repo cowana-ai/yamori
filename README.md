@@ -1,11 +1,29 @@
-<p align="center">
-  <img src="media/yamori.png" width="180" alt="Yamori, a teal gecko samurai with a white robe and staff">
-</p>
+<p align="center"><img src="https://github.com/cowana-ai/yamori/raw/HEAD/media/yamori.png" width="160" alt="Yamori, a teal gecko samurai"></p>
 
-<h1 align="center">Yamori</h1>
+<h1 align="center">Yamori 🦎</h1>
 
-<p align="center"><strong>Programming context, made explicit.</strong><br>
-Read any code as clear pseudocode in VS Code and Cursor, explained by the Claude or ChatGPT plan you already have.</p>
+<p align="center"><strong>Read any code as pseudocode, right beside it.</strong><br>
+Short, numbered steps next to your editor, every line linked back to the source.
+Runs on the Claude or ChatGPT plan you already have. No API key.</p>
+
+<!-- demo GIF here, before any screenshot -->
+
+- **Two depths.** *Overview* gives the goal and main stages; *Logic* gives every meaningful step, with formulas rendered as math.
+- **Linked both ways.** Click a pseudocode line to jump to the code it stands for. Block titles appear above the code itself.
+- **Make it yours.** Edit a block, ask it to explain better, or make it shorter. Cached reads use no AI.
+
+**How it works:** install, open a file, click the gecko (top right of the editor).
+The first time, Yamori finds Claude Code or Codex on your machine (including inside
+Claude Desktop or the ChatGPT app) and offers one button: Use, Sign in or Install.
+Works in VS Code and Cursor; Python, JS/TS, Go, Rust and Java.
+
+**Also in Yamori**
+- **Project guide:** where to start reading, folder by folder; a map of how files connect; a glossary of project terms
+- **Explain how it flows:** search any name and trace it across files
+- **Run with a test:** watch a function run line by line, with values (a real Python test, or a labelled simulation)
+- **Chat & plan:** turn a goal into steps on the map, then let your agent implement after you approve
+- **For your agents:** an MCP server so Claude Code and Codex can use the same map and pseudocode
+- **Local and private:** explanations cached on your machine; works in Restricted Mode
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori"><img alt="VS Code Marketplace" src="https://img.shields.io/visual-studio-marketplace/v/cowana-ai.yamori?label=VS%20Code%20Marketplace&color=161616"></a>
@@ -18,12 +36,6 @@ Read any code as clear pseudocode in VS Code and Cursor, explained by the Claude
 <p align="center">
   <img src="media/screenshots/reader.png" width="760" alt="Yamori explaining the gradient-descent loop of a small Python classifier as numbered pseudocode with formulas and Why and Insight notes">
 </p>
-
-Yamori is for people who can handle difficult ideas but lose time on programming
-conventions: callbacks, mutable state, a training loop's hidden steps. It turns code
-into short, navigable pseudocode beside your editor and explains the connections
-that make it work. The mathematics stays precise, and the programming context gets
-explained where it matters.
 
 ## Features
 
