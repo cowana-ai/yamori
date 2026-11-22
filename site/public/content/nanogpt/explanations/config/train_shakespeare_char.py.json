@@ -1,0 +1,137 @@
+{
+  "overview": {
+    "title": "A laptop-sized Shakespeare GPT",
+    "summary": "Settings for a 6-layer character model on Tiny Shakespeare, the run the README suggests first.",
+    "sections": [
+      {
+        "title": "A laptop-sized Shakespeare GPT",
+        "startLine": 4,
+        "endLine": 37,
+        "pseudocode": "Train shakespeare_char with context 256, batch 64, one accumulation step, and a 6-layer model of width 384.\nDrop out at 0.2, learn at 1e-3 for 5000 steps, and decay to 1e-4.\nScore every 250 steps with 200 batches, log every 10 steps, and save only when validation improves.\nUse Adam's second moment 0.99 and warm up for 100 steps.\n# Insight: This is the small run: one GPU, a few minutes, character-level Shakespeare.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 16,
+            "endLine": 24
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 25,
+            "endLine": 30
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 5,
+            "endLine": 10
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 31,
+            "endLine": 33
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 19,
+            "endLine": 28
+          }
+        ]
+      }
+    ],
+    "hash": "9b41cdfb2c917259d796a8184d835221a349c23cd18a0a63b46da431d95d9c05"
+  },
+  "logic": {
+    "title": "A laptop-sized Shakespeare GPT",
+    "summary": "Settings for a 6-layer character model on Tiny Shakespeare, the run the README suggests first.",
+    "sections": [
+      {
+        "title": "A laptop-sized Shakespeare GPT",
+        "startLine": 4,
+        "endLine": 37,
+        "pseudocode": "Write this run to out-shakespeare-char.\nScore every 250 steps, using 200 batches.\nLog every 10 steps.\nSave a checkpoint only when validation improves.\nLeave the run log off.\nName the log shakespeare-char and the run mini-gpt, if you turn it on.\nTrain on the shakespeare_char dataset.\nUse one micro-batch step, a batch of 64, and context 256.\nUse 6 layers, 6 heads, and width 384.\nDrop out with probability 0.2.\nLearn at 1e-3 for 5000 steps.\nDecay the rate over those same 5000 steps, down to 1e-4.\nUse a second Adam moment of 0.99.\nWarm up for 100 steps.\n# Insight: These assignments replace train.py globals only because configurator.py executes this file.\n# Context: Context 256 is 256 characters, not 256 GPT-2 pieces. The model is much smaller than the 12-layer default.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 4,
+            "endLine": 4
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 5,
+            "endLine": 6
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 7,
+            "endLine": 7
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 10,
+            "endLine": 10
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 12,
+            "endLine": 12
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 13,
+            "endLine": 14
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 16,
+            "endLine": 16
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 17,
+            "endLine": 19
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 22,
+            "endLine": 24
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 25,
+            "endLine": 25
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 27,
+            "endLine": 28
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 29,
+            "endLine": 30
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 31,
+            "endLine": 31
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 33,
+            "endLine": 33
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 4,
+            "endLine": 33
+          },
+          {
+            "pseudocodeLine": 16,
+            "startLine": 19,
+            "endLine": 24
+          }
+        ]
+      }
+    ],
+    "hash": "9b41cdfb2c917259d796a8184d835221a349c23cd18a0a63b46da431d95d9c05"
+  }
+}

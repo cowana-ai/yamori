@@ -1,0 +1,952 @@
+{
+  "overview": {
+    "title": "Fit a GPT by predicting the next token",
+    "summary": "A config may replace the GPT-2 defaults, then each step lowers next-token cross-entropy and the master process saves checkpoints.",
+    "sections": [
+      {
+        "title": "Defaults describe a GPT-2 run, until a config replaces them",
+        "startLine": 32,
+        "endLine": 78,
+        "pseudocode": "Assume OpenWebText, context 1024, 12 layers, 12 heads, width 768, and 600000 steps.\nAccumulate 5 times 8 micro-batches of 12 sequences.\nStart the learning rate at 6e-4, warm up for 2000 steps, and decay to 6e-5.\nUse Adam moments 0.9 and 0.95, and weight decay 1e-1.\nRun configurator.py so a config file or flags can replace any of these.\n# Insight: That run executes the config. It is how the Shakespeare experiment takes over this file.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 47,
+            "endLine": 59
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 48,
+            "endLine": 49
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 58,
+            "endLine": 68
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 60,
+            "endLine": 62
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 77,
+            "endLine": 77
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 77,
+            "endLine": 77
+          }
+        ]
+      },
+      {
+        "title": "One process or many GPUs share one global batch",
+        "startLine": 81,
+        "endLine": 112,
+        "pseudocode": "A distributed launch splits the accumulation steps and lets rank 0 log and save.\nSeed from 1337, and run the forward in autocast on cuda.\n# Insight: Each GPU sees fewer micro-batches, but the tokens per step stay the same.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 82,
+            "endLine": 95
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 106,
+            "endLine": 112
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 92,
+            "endLine": 101
+          }
+        ]
+      },
+      {
+        "title": "Batches are token windows and the following ids",
+        "startLine": 114,
+        "endLine": 144,
+        "pseudocode": "Memory-map the dataset binaries and take **block_size** ids, then the next **block_size** as targets.\nIf meta.pkl exists, use its vocabulary. Otherwise remember a best loss of 1e9 as a placeholder.\n# Why: The target at each position is the next id, so the loss is next-token prediction.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 119,
+            "endLine": 125
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 135,
+            "endLine": 143
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 124,
+            "endLine": 125
+          }
+        ]
+      },
+      {
+        "title": "The model is new, resumed, or a published GPT-2",
+        "startLine": 146,
+        "endLine": 212,
+        "pseudocode": "From scratch, use the dataset vocabulary or 50304.\nFrom a checkpoint, restore weights, the optimizer, and the step.\nFrom a gpt2 name, load those weights.\nCrop the context if this run wants a shorter one, then compile if asked.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 153,
+            "endLine": 157
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 161,
+            "endLine": 201
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 184,
+            "endLine": 185
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 190,
+            "endLine": 208
+          }
+        ]
+      },
+      {
+        "title": "Each step lowers the loss, then may save",
+        "startLine": 214,
+        "endLine": 336,
+        "pseudocode": "Warm the learning rate, then follow a cosine down using the 0.5 mix.\nOn score intervals the master measures loss with dropout off and writes ckpt.pt.\nMicro-batches divide the loss, sync gradients only at the end, clip, and step AdamW.\nAfter 5 steps, smooth a utilization estimate with weights 0.9 and 0.1.\nPrint milliseconds times 1000 and percent times 100, then stop after **max_iters**.\n# Insight: The saved file holds weights, optimizer state, and the config, so sample.py and a later resume can continue.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 233,
+            "endLine": 242
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 263,
+            "endLine": 286
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 292,
+            "endLine": 314
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 324,
+            "endLine": 326
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 327,
+            "endLine": 333
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 277,
+            "endLine": 286
+          }
+        ]
+      }
+    ],
+    "hash": "413bd97b40bb400a2a0d01230e2946f056c263ebac1b7281c2367d964a123085"
+  },
+  "logic": {
+    "title": "Fit a GPT by predicting the next token",
+    "summary": "Load token windows, score the following ids, and step AdamW, saving checkpoints from the master process.",
+    "sections": [
+      {
+        "title": "Start from GPT-2 sized defaults",
+        "startLine": 32,
+        "endLine": 78,
+        "pseudocode": "Write checkpoints to **out**.\nScore the model every 2000 steps, using 200 batches.\nLog every step.\nExit after the first score if eval_only is set.\nOtherwise always save a checkpoint after a score.\nStart **init_from** scratch, or resume, or a GPT-2 name.\nLeave the Weights & Biases log off unless asked.\nRead the **dataset** named openwebtext.\nAccumulate 5 times 8 micro-batches.\nEach micro-batch has 12 sequences of **block_size** 1024.\nUse 12 layers, 12 heads, and width 768.\nUse dropout 0 for pretraining.\nLeave linear and layer-norm bias off.\nStart **learning_rate** at 6e-4.\nTrain for **max_iters** of 600000 steps.\nDecay weights by 1e-1.\nUse Adam moments 0.9 and 0.95.\nClip gradients at 1, unless clipping is disabled.\nWarm up for 2000 steps.\nDecay the rate until step 600000.\nDo not decay below 6e-5, about learning_rate/10.\nTalk to other GPUs with the nccl backend.\nTrain on cuda, in bfloat16 when the GPU supports it, else float16.\nCompile the model when PyTorch can.\n\nRemember every simple setting for the log.\nRun configurator.py, which executes a config file and applies flags.\nKeep the settings that remain.\n# Insight: The script you pass, such as config/train_shakespeare_char.py, runs inside this process and replaces these defaults.\n# Context: Executing that file is intentional. It is not an import. Names like **block_size** are globals of this script.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 35,
+            "endLine": 35
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 36,
+            "endLine": 38
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 37,
+            "endLine": 37
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 39,
+            "endLine": 39
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 40,
+            "endLine": 40
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 41,
+            "endLine": 41
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 43,
+            "endLine": 45
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 47,
+            "endLine": 47
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 48,
+            "endLine": 48
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 49,
+            "endLine": 50
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 52,
+            "endLine": 54
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 55,
+            "endLine": 55
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 56,
+            "endLine": 56
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 58,
+            "endLine": 58
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 59,
+            "endLine": 59
+          },
+          {
+            "pseudocodeLine": 16,
+            "startLine": 60,
+            "endLine": 60
+          },
+          {
+            "pseudocodeLine": 17,
+            "startLine": 61,
+            "endLine": 62
+          },
+          {
+            "pseudocodeLine": 18,
+            "startLine": 63,
+            "endLine": 63
+          },
+          {
+            "pseudocodeLine": 19,
+            "startLine": 66,
+            "endLine": 66
+          },
+          {
+            "pseudocodeLine": 20,
+            "startLine": 67,
+            "endLine": 67
+          },
+          {
+            "pseudocodeLine": 21,
+            "startLine": 68,
+            "endLine": 68
+          },
+          {
+            "pseudocodeLine": 22,
+            "startLine": 70,
+            "endLine": 70
+          },
+          {
+            "pseudocodeLine": 23,
+            "startLine": 72,
+            "endLine": 73
+          },
+          {
+            "pseudocodeLine": 24,
+            "startLine": 74,
+            "endLine": 74
+          },
+          {
+            "pseudocodeLine": 26,
+            "startLine": 76,
+            "endLine": 76
+          },
+          {
+            "pseudocodeLine": 27,
+            "startLine": 77,
+            "endLine": 77
+          },
+          {
+            "pseudocodeLine": 28,
+            "startLine": 78,
+            "endLine": 78
+          },
+          {
+            "pseudocodeLine": 29,
+            "startLine": 77,
+            "endLine": 77
+          },
+          {
+            "pseudocodeLine": 30,
+            "startLine": 77,
+            "endLine": 78
+          }
+        ]
+      },
+      {
+        "title": "Use one GPU, or share the step across many",
+        "startLine": 81,
+        "endLine": 112,
+        "pseudocode": "If RANK is set, this is a distributed run.\nJoin the process group.\nRead this process's rank, local GPU, and world size.\nPin this process to its own cuda device.\nLet rank 0 be the master. It logs and saves.\nOffset the seed by the rank.\nRequire the accumulation steps to divide by the world size.\nGive each process an equal share of those steps.\nOtherwise one process is the master, with seed offset 0.\n\nCount tokens per step: accumulation, times world size, times batch, times **block_size**.\nPrint that count.\nCreate the output directory on the master.\nSeed PyTorch from 1337 plus the offset.\nAllow tf32 matrix multiplies.\nTreat the device as cuda only when its name contains cuda.\nPick the matching floating-point type.\nOn cuda, run the forward in autocast. On cpu, do not.\n# Insight: Splitting accumulation keeps the global batch the same while each GPU holds a smaller piece.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 82,
+            "endLine": 82
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 84,
+            "endLine": 84
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 85,
+            "endLine": 87
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 88,
+            "endLine": 89
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 90,
+            "endLine": 90
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 91,
+            "endLine": 91
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 94,
+            "endLine": 94
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 95,
+            "endLine": 95
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 97,
+            "endLine": 100
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 101,
+            "endLine": 101
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 102,
+            "endLine": 102
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 104,
+            "endLine": 105
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 106,
+            "endLine": 106
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 107,
+            "endLine": 108
+          },
+          {
+            "pseudocodeLine": 16,
+            "startLine": 109,
+            "endLine": 109
+          },
+          {
+            "pseudocodeLine": 17,
+            "startLine": 111,
+            "endLine": 111
+          },
+          {
+            "pseudocodeLine": 18,
+            "startLine": 112,
+            "endLine": 112
+          },
+          {
+            "pseudocodeLine": 19,
+            "startLine": 92,
+            "endLine": 95
+          }
+        ]
+      },
+      {
+        "title": "Read a window of ids and the ids that follow",
+        "startLine": 114,
+        "endLine": 131,
+        "pseudocode": "Point at data/<dataset>/.\nMemory-map train.bin or val.bin as uint16.\nDraw random starts that still leave room for **block_size**.\nStack **block_size** ids from each start as the input.\nStack the next **block_size** ids as the targets.\nCast those ids to int64.\nOn cuda, pin the batch and copy it without blocking.\nOtherwise copy it to the device.\nReturn the input and the targets.\n# Why: The target window is the input window shifted by one. Position t is trained to name the id at t+1.\n# Insight: The map is reopened every batch. The source does this to avoid a memory leak in long runs.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 115,
+            "endLine": 115
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 119,
+            "endLine": 122
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 123,
+            "endLine": 123
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 124,
+            "endLine": 124
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 125,
+            "endLine": 125
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 124,
+            "endLine": 125
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 126,
+            "endLine": 128
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 130,
+            "endLine": 130
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 131,
+            "endLine": 131
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 124,
+            "endLine": 125
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 117,
+            "endLine": 122
+          }
+        ]
+      },
+      {
+        "title": "Take the vocabulary from the dataset, if it saved one",
+        "startLine": 133,
+        "endLine": 144,
+        "pseudocode": "Start at step 0.\nTreat 1e9 as a stand-in for the best validation loss.\nLook for meta.pkl beside the binaries.\nIf it exists, read it and keep **vocab_size**.\nPrint the size that was found.\n# Context: The character-level prepare script writes this file. OpenWebText's prepare script does not, so training then falls back to the GPT-2 vocabulary.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 134,
+            "endLine": 134
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 135,
+            "endLine": 135
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 138,
+            "endLine": 140
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 141,
+            "endLine": 143
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 144,
+            "endLine": 144
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 137,
+            "endLine": 143
+          }
+        ]
+      },
+      {
+        "title": "Build a new model, resume, or load GPT-2",
+        "startLine": 146,
+        "endLine": 193,
+        "pseudocode": "Start the model args from the settings above.\nIf starting from scratch:\n    Use the dataset vocabulary, or 50304 when there is none.\n    Build a new GPT.\nIf resuming:\n    Load ckpt.pt from the output directory onto the device.\n    Copy depth, heads, width, context, bias, and vocabulary from the checkpoint.\n    Build that GPT and load its weights.\n    Strip a _orig_mod. prefix torch.compile sometimes leaves on names.\n    Restore the step count and the best validation loss.\nIf the name starts with gpt2:\n    Load that OpenAI checkpoint, overriding dropout.\n    Read the resulting sizes back into the args.\nIf the requested context is shorter than the model's, crop it.\nMove the model to the device.\n# Insight: Resume must match the checkpoint's shape. Dropout and other settings may still come from the command line.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 147,
+            "endLine": 148
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 149,
+            "endLine": 149
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 153,
+            "endLine": 155
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 156,
+            "endLine": 157
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 158,
+            "endLine": 158
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 161,
+            "endLine": 162
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 166,
+            "endLine": 167
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 169,
+            "endLine": 178
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 174,
+            "endLine": 177
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 179,
+            "endLine": 180
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 181,
+            "endLine": 181
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 184,
+            "endLine": 185
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 187,
+            "endLine": 188
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 190,
+            "endLine": 192
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 193,
+            "endLine": 193
+          },
+          {
+            "pseudocodeLine": 16,
+            "startLine": 164,
+            "endLine": 167
+          }
+        ]
+      },
+      {
+        "title": "Scale gradients, compile, and wrap extra GPUs",
+        "startLine": 195,
+        "endLine": 212,
+        "pseudocode": "Enable the gradient scaler only for float16.\nBuild AdamW from the model's decay groups.\nIf resuming, load the optimizer state too.\nDrop the checkpoint from memory.\nIf compile is on, compile the model. This can take about a minute.\nIf this is distributed, wrap the model so gradients sync.\n# Context: bfloat16 does not need the scaler. float16 does, because its range underflows on small gradients.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 196,
+            "endLine": 196
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 199,
+            "endLine": 199
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 200,
+            "endLine": 201
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 202,
+            "endLine": 202
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 205,
+            "endLine": 208
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 211,
+            "endLine": 212
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 195,
+            "endLine": 196
+          }
+        ]
+      },
+      {
+        "title": "Score both splits without changing weights",
+        "startLine": 214,
+        "endLine": 228,
+        "pseudocode": "Switch the model to eval.\nFor train and for val, average **eval_iters** batches.\nRun each batch under the same autocast as training.\nRecord the loss as a plain number.\nSwitch the model back to train.\nReturn both averages.\n# Insight: eval turns dropout off, and no_grad keeps this measurement from creating a graph or stepping the weights.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 218,
+            "endLine": 218
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 219,
+            "endLine": 225
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 223,
+            "endLine": 224
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 225,
+            "endLine": 225
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 227,
+            "endLine": 227
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 228,
+            "endLine": 228
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 215,
+            "endLine": 227
+          }
+        ]
+      },
+      {
+        "title": "Warm the learning rate, then cosine down",
+        "startLine": 230,
+        "endLine": 242,
+        "pseudocode": "During warmup, grow the rate linearly with the step.\nThe first step is **learning_rate** over warmup_iters + 1.\nAfter the decay horizon, stay at **min_lr**.\nIn between, follow a cosine from 1 down to 0.\nUse the halfway mix: $c = 0.5 \\cdot (1 + \\cos(\\pi r))$.\nReturn **min_lr** plus that fraction of the gap up to **learning_rate**.\n# Why: A small rate at step 0 avoids a wild first update. The cosine then spends more time at the lower rates than a straight line would.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 233,
+            "endLine": 234
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 234,
+            "endLine": 234
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 236,
+            "endLine": 237
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 239,
+            "endLine": 241
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 241,
+            "endLine": 241
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 242,
+            "endLine": 242
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 232,
+            "endLine": 242
+          }
+        ]
+      },
+      {
+        "title": "Open an optional run log",
+        "startLine": 244,
+        "endLine": 247,
+        "pseudocode": "If logging is on and this is the master, import wandb.\nStart a run named from the settings.\n# Context: Other ranks stay quiet. The master is the only process that records the curve.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 245,
+            "endLine": 246
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 247,
+            "endLine": 247
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 245,
+            "endLine": 247
+          }
+        ]
+      },
+      {
+        "title": "Set the rate, score, and save a checkpoint",
+        "startLine": 249,
+        "endLine": 288,
+        "pseudocode": "Fetch one training batch, and start the clock.\nKeep the unwrapped model for checkpoints and the speed estimate.\nSet every parameter group to this step's learning rate.\nOn each score interval, and only on the master:\n    Measure train and validation loss.\n    Print both.\n    Optionally send the losses, the rate, and the utilization times 100 to the log.\n    If validation improved, or saving is forced, remember the new best.\n    After step 0, save the weights, optimizer, args, step, best loss, and config.\n    Write them to ckpt.pt in the output directory.\nIf this is step 0 and eval_only is set, stop.\n# Insight: Step 0 can score a freshly built model, but it does not write a checkpoint yet.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 250,
+            "endLine": 251
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 253,
+            "endLine": 254
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 258,
+            "endLine": 260
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 263,
+            "endLine": 263
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 264,
+            "endLine": 265
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 265,
+            "endLine": 265
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 266,
+            "endLine": 273
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 274,
+            "endLine": 275
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 276,
+            "endLine": 286
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 285,
+            "endLine": 286
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 287,
+            "endLine": 288
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 274,
+            "endLine": 276
+          }
+        ]
+      },
+      {
+        "title": "Accumulate gradients, clip, and step",
+        "startLine": 290,
+        "endLine": 314,
+        "pseudocode": "For each micro-batch:\n    On a distributed run, sync gradients only on the last micro-batch.\n    Score the current batch under autocast.\n    Divide the loss by the number of micro-batches.\n    Fetch the next batch while this one finishes.\n    Scale the loss and run backward.\nIf gradient clipping is on:\n    Unscale, then clip the global norm at **grad_clip**.\nStep AdamW and update the scaler.\nDrop the gradients.\n# Why: Dividing the loss makes the accumulated gradient match one big batch, instead of summing several full-size ones.\n# Insight: The next batch is requested before backward, so the copy can overlap the GPU work.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 292,
+            "endLine": 292
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 293,
+            "endLine": 298
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 299,
+            "endLine": 300
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 301,
+            "endLine": 301
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 303,
+            "endLine": 303
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 305,
+            "endLine": 305
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 307,
+            "endLine": 307
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 308,
+            "endLine": 309
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 311,
+            "endLine": 312
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 314,
+            "endLine": 314
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 301,
+            "endLine": 301
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 302,
+            "endLine": 305
+          }
+        ]
+      },
+      {
+        "title": "Time the step, then stop at the horizon",
+        "startLine": 316,
+        "endLine": 336,
+        "pseudocode": "Measure how long the step took.\nOn log intervals, and only on the master:\n    Undo the loss division, so the printed loss matches a full batch.\n    After 5 steps, estimate utilization for this process's sequences.\n    Smooth it as 0.9 of the old estimate plus 0.1 of the new one.\n    Print the loss, the milliseconds (times 1000), and the percent utilization (times 100).\nAdvance the global step and this process's step.\nStop once the step passes **max_iters**.\nIf this was distributed, leave the process group.\n# Insight: Reading the loss back to the CPU synchronizes the GPU. That is why the clock includes more than the matmul.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 317,
+            "endLine": 319
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 320,
+            "endLine": 320
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 323,
+            "endLine": 323
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 324,
+            "endLine": 325
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 326,
+            "endLine": 326
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 327,
+            "endLine": 327
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 328,
+            "endLine": 329
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 332,
+            "endLine": 333
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 335,
+            "endLine": 336
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 321,
+            "endLine": 323
+          }
+        ]
+      }
+    ],
+    "hash": "413bd97b40bb400a2a0d01230e2946f056c263ebac1b7281c2367d964a123085"
+  }
+}

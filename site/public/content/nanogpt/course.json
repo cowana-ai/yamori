@@ -1,0 +1,51 @@
+{
+  "id": "nanogpt",
+  "title": "Transformers through nanoGPT",
+  "kicker": "Learning path",
+  "summary": "Six files, in the order that makes a GPT legible: the model, the integers it trains on, the training step, sampling, the small Shakespeare config, and the few lines that apply that config.",
+  "intro": [
+    "A transformer language model reads a sequence of token ids and scores what the next id should be. nanoGPT is Andrej Karpathy's short, complete version of that idea: one model file, one training script, and one sampling script.",
+    "You will not install PyTorch or train anything here. Each lesson is the same side-by-side reading Yamori shows in the editor. Pseudocode on one side, the real Python on the other, and a click on a step highlights the lines it stands for.",
+    "The path starts at the math, not at main. model.py is the GPT. The character-level Shakespeare prepare script shows what an id actually is. train.py is one optimization step. sample.py turns ids back into text. The last two files are how the README's small run replaces the GPT-2-sized defaults."
+  ],
+  "learn": [
+    "Causal attention: each position may look at earlier positions, not later ones, through queries, keys, and values.",
+    "How token vectors and position vectors enter a stack of residual blocks, and why the input table and the output head share weights.",
+    "Next-token cross-entropy: the training target at each position is the following id.",
+    "What a step does: a learning rate that warms up and then cosines down, accumulated micro-batches, and a checkpoint.",
+    "Sampling with temperature and top-k, feeding each new id back into the context.",
+    "How a config file actually reaches those globals: configurator.py is executed, not imported."
+  ],
+  "steps": [
+    {
+      "file": "model.py",
+      "title": "The GPT",
+      "lesson": "What the network computes, from a token id to a distribution over the next id."
+    },
+    {
+      "file": "data/shakespeare_char/prepare.py",
+      "title": "Characters become ids",
+      "lesson": "The smallest dataset: one character is one token, saved as binaries plus a codec."
+    },
+    {
+      "file": "train.py",
+      "title": "One training step",
+      "lesson": "How those ids become a loss, and how AdamW changes the weights."
+    },
+    {
+      "file": "sample.py",
+      "title": "Text out the other side",
+      "lesson": "Load the checkpoint, encode a prompt with the same codec, and print samples."
+    },
+    {
+      "file": "config/train_shakespeare_char.py",
+      "title": "The small run",
+      "lesson": "The settings the README uses: a 6-layer model, context 256, Shakespeare characters."
+    },
+    {
+      "file": "configurator.py",
+      "title": "How a config lands",
+      "lesson": "The few lines that execute that file into train.py's globals, or apply a --key=value flag."
+    }
+  ]
+}

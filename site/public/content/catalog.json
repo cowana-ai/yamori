@@ -1,0 +1,12 @@
+{
+  "courses": [
+    {
+      "id": "nanogpt",
+      "title": "Transformers through nanoGPT",
+      "repo": "karpathy/nanoGPT",
+      "upstream": "https://github.com/karpathy/nanoGPT",
+      "blurb": "A GPT, end to end: causal attention, next-token loss, the training step, and sampling. Six files, already read as pseudocode.",
+      "files": 6
+    }
+  ]
+}

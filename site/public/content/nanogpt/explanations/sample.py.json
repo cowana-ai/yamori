@@ -1,0 +1,322 @@
+{
+  "overview": {
+    "title": "Draw text from a trained GPT",
+    "summary": "Load the model training saved, encode a short prompt with the matching alphabet, and print sampled continuations.",
+    "sections": [
+      {
+        "title": "Sampling knobs, then any override",
+        "startLine": 11,
+        "endLine": 32,
+        "pseudocode": "Draw 10 samples of 500 new ids, at temperature 0.8, keeping the top 200.\nSeed from 1337 and run configurator.py so flags can retarget the checkpoint.\n# Insight: Executing the configurator is how --out_dir=out-shakespeare-char reaches this script.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 15,
+            "endLine": 18
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 19,
+            "endLine": 27
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 23,
+            "endLine": 23
+          }
+        ]
+      },
+      {
+        "title": "Restore weights and the matching codec",
+        "startLine": 34,
+        "endLine": 74,
+        "pseudocode": "Resume loads ckpt.pt. A gpt2 name loads that public model with dropout 0.\nA character model uses **stoi** and **itos** from meta.pkl.\nOtherwise use the gpt2 tokenizer.\n# Insight: The codec has to be the one that built the ids. Mixing them produces nonsense.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 37,
+            "endLine": 49
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 66,
+            "endLine": 68
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 72,
+            "endLine": 74
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 65,
+            "endLine": 74
+          }
+        ]
+      },
+      {
+        "title": "Prompt, then print each sample",
+        "startLine": 76,
+        "endLine": 89,
+        "pseudocode": "A FILE: prefix means read the prompt from a path, dropping those 5 characters.\nGenerate without gradients, decode, and print.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 77,
+            "endLine": 79
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 84,
+            "endLine": 89
+          }
+        ]
+      }
+    ],
+    "hash": "1c4bb3716ec55395be2e6ad136693614b0b38de9defda889041efe2057a0c1f1"
+  },
+  "logic": {
+    "title": "Draw text from a trained GPT",
+    "summary": "Load a checkpoint or a published GPT-2, encode a prompt, and print several sampled continuations.",
+    "sections": [
+      {
+        "title": "Choose how to sample, then apply overrides",
+        "startLine": 11,
+        "endLine": 32,
+        "pseudocode": "Resume from a checkpoint, unless a GPT-2 name is given.\nRead that checkpoint from **out**.\nStart the prompt at a newline.\nDraw **num_samples** of 10 continuations.\nEach continuation adds **max_new_tokens** of 500 ids.\nUse temperature 0.8.\nKeep only the **top_k** of 200 most likely ids.\nSeed both CPU and cuda from 1337.\nRun on cuda, in bfloat16 when the GPU supports it, else float16.\nLeave compile off.\nRun configurator.py, which executes a config file and applies flags.\nAllow tf32 matrix multiplies.\nOn cuda, sample under autocast. On cpu, do not.\n# Context: Temperature below 1 makes the next-id distribution sharper. 0.8 is only mildly sharp.\n# Insight: The same configurator train.py uses can point this script at out-shakespeare-char.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 12,
+            "endLine": 12
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 13,
+            "endLine": 13
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 14,
+            "endLine": 14
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 15,
+            "endLine": 15
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 16,
+            "endLine": 16
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 17,
+            "endLine": 17
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 18,
+            "endLine": 18
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 19,
+            "endLine": 27
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 20,
+            "endLine": 21
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 22,
+            "endLine": 22
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 23,
+            "endLine": 23
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 28,
+            "endLine": 29
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 30,
+            "endLine": 32
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 17,
+            "endLine": 17
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 23,
+            "endLine": 23
+          }
+        ]
+      },
+      {
+        "title": "Load a checkpoint, or a published GPT-2",
+        "startLine": 34,
+        "endLine": 54,
+        "pseudocode": "If resuming:\n    Load ckpt.pt onto the device.\n    Rebuild the GPT from the saved model args.\n    Strip a _orig_mod. prefix on weight names, then load them.\nIf the name starts with gpt2:\n    Load that OpenAI model with dropout 0.\nSwitch to eval, and move to the device.\nCompile only if asked.\n# Insight: eval turns dropout off. Sampling with dropout still on would change the distribution every call.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 35,
+            "endLine": 35
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 37,
+            "endLine": 38
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 39,
+            "endLine": 40
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 41,
+            "endLine": 46
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 47,
+            "endLine": 47
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 49,
+            "endLine": 49
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 51,
+            "endLine": 52
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 53,
+            "endLine": 54
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 51,
+            "endLine": 51
+          }
+        ]
+      },
+      {
+        "title": "Turn text into ids the same way training did",
+        "startLine": 56,
+        "endLine": 74,
+        "pseudocode": "If the checkpoint names a dataset and that dataset has meta.pkl:\n    Read **stoi** and **itos**.\n    Encode by mapping each character through **stoi**.\n    Decode by mapping each id through **itos** and joining.\nOtherwise assume GPT-2 encodings.\nEncode with the gpt2 tokenizer, allowing the end-of-text marker.\nDecode ids back to text with that same tokenizer.\n# Insight: A character-level checkpoint must not be decoded as GPT-2 pieces. meta.pkl is what keeps the alphabet matched.\n# Context: stoi maps a character to its integer. itos maps that integer back. prepare.py wrote both.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 58,
+            "endLine": 60
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 66,
+            "endLine": 66
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 67,
+            "endLine": 67
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 68,
+            "endLine": 68
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 69,
+            "endLine": 72
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 73,
+            "endLine": 73
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 74,
+            "endLine": 74
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 58,
+            "endLine": 68
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 66,
+            "endLine": 68
+          }
+        ]
+      },
+      {
+        "title": "Encode the prompt and print samples",
+        "startLine": 76,
+        "endLine": 89,
+        "pseudocode": "If the prompt starts with FILE:, read that file as the prompt.\nDrop the five-character FILE: prefix to get the path.\nEncode the prompt and shape it as one batch on the device.\nWithout tracking gradients, and under autocast:\n    For each sample, generate new ids at this temperature and top-k.\n    Decode the first row and print it.\n    Print a divider.\n# Insight: generate appends ids inside the model. This script only decodes the finished row.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 77,
+            "endLine": 79
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 78,
+            "endLine": 78
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 80,
+            "endLine": 81
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 84,
+            "endLine": 85
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 86,
+            "endLine": 87
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 88,
+            "endLine": 88
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 89,
+            "endLine": 89
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 87,
+            "endLine": 88
+          }
+        ]
+      }
+    ],
+    "hash": "1c4bb3716ec55395be2e6ad136693614b0b38de9defda889041efe2057a0c1f1"
+  }
+}

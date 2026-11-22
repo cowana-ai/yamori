@@ -1,0 +1,369 @@
+{
+  "overview": "nanoGPT is a small, readable GPT you can train and sample. model.py is the transformer; train.py fits it by predicting the next token; sample.py draws text from the result. A config file and configurator.py swap in a specific experiment, such as the character-level Shakespeare run.",
+  "clusters": [
+    {
+      "name": "The model",
+      "summary": "The GPT definition: embeddings, causal blocks, the next-token loss, and sampling.",
+      "files": [
+        "model.py"
+      ]
+    },
+    {
+      "name": "Training",
+      "summary": "The optimization loop, plus a short benchmark of the same step.",
+      "files": [
+        "train.py",
+        "bench.py"
+      ]
+    },
+    {
+      "name": "Sampling",
+      "summary": "Drawing text from a checkpoint or from a published GPT-2.",
+      "files": [
+        "sample.py"
+      ]
+    },
+    {
+      "name": "Settings",
+      "summary": "Globals that name an experiment, and the snippet that applies them.",
+      "files": [
+        "configurator.py",
+        "config/train_shakespeare_char.py",
+        "config/train_gpt2.py",
+        "config/finetune_shakespeare.py",
+        "config/eval_gpt2.py",
+        "config/eval_gpt2_medium.py",
+        "config/eval_gpt2_large.py",
+        "config/eval_gpt2_xl.py"
+      ]
+    },
+    {
+      "name": "Data",
+      "summary": "Scripts and notes that turn text into the binary token streams training reads.",
+      "files": [
+        "data/shakespeare_char/prepare.py",
+        "data/shakespeare_char/readme.md",
+        "data/shakespeare/prepare.py",
+        "data/shakespeare/readme.md",
+        "data/openwebtext/prepare.py",
+        "data/openwebtext/readme.md"
+      ]
+    },
+    {
+      "name": "Notes",
+      "summary": "The project introduction, plus notebooks that estimate size and scaling.",
+      "files": [
+        "README.md",
+        "scaling_laws.ipynb",
+        "transformer_sizing.ipynb"
+      ]
+    }
+  ],
+  "readingPath": [
+    {
+      "file": "model.py",
+      "why": "The transformer itself: attention, the stack, the loss, and how new tokens are drawn."
+    },
+    {
+      "file": "data/shakespeare_char/prepare.py",
+      "why": "See how text becomes the integer ids the small Shakespeare run trains on."
+    },
+    {
+      "file": "train.py",
+      "why": "Follow one optimization step, from a window of ids to an updated model."
+    },
+    {
+      "file": "sample.py",
+      "why": "Turn a trained model back into text, one sampled id at a time."
+    },
+    {
+      "file": "config/train_shakespeare_char.py",
+      "why": "The small Shakespeare settings the README tells you to run."
+    },
+    {
+      "file": "configurator.py",
+      "why": "How that config file and command-line flags replace train.py defaults."
+    }
+  ],
+  "files": {
+    "model.py": {
+      "hash": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c",
+      "purpose": "Defines the GPT: causal attention, the block stack, the next-token loss, and sampling.",
+      "role": "model definition",
+      "terms": [
+        {
+          "term": "block_size",
+          "aliases": [],
+          "meaning": "How many tokens one sequence may hold. The position table, the causal mask, and training windows all use this length.",
+          "line": 110
+        },
+        {
+          "term": "vocab_size",
+          "aliases": [],
+          "meaning": "How many distinct token ids the model can name. The default 50304 pads GPT-2's 50257 up to a multiple of 64.",
+          "line": 111
+        },
+        {
+          "term": "n_layer",
+          "aliases": [],
+          "meaning": "How many identical transformer blocks are stacked.",
+          "line": 112
+        },
+        {
+          "term": "n_head",
+          "aliases": [],
+          "meaning": "How many attention heads run inside each block.",
+          "line": 113
+        },
+        {
+          "term": "n_embd",
+          "aliases": [],
+          "meaning": "The width of each token's vector, shared by the embeddings, the blocks, and the output head.",
+          "line": 114
+        },
+        {
+          "term": "dropout",
+          "aliases": [],
+          "meaning": "The probability of zeroing a value during training. Evaluation turns this off.",
+          "line": 115
+        },
+        {
+          "term": "bias",
+          "aliases": [],
+          "meaning": "Whether linear layers and layer norms learn an additive shift. Off is a bit faster.",
+          "line": 116
+        },
+        {
+          "term": "wte",
+          "aliases": [
+            "tok_emb"
+          ],
+          "meaning": "The token embedding table: one learned vector per vocabulary id.",
+          "line": 127
+        },
+        {
+          "term": "wpe",
+          "aliases": [
+            "pos_emb"
+          ],
+          "meaning": "The position embedding table: one learned vector per position in the context.",
+          "line": 128
+        },
+        {
+          "term": "lm_head",
+          "aliases": [],
+          "meaning": "The linear map from a token vector to one score per vocabulary id. It shares weights with wte.",
+          "line": 133
+        },
+        {
+          "term": "logits",
+          "aliases": [],
+          "meaning": "Raw scores over the vocabulary, before softmax. Cross-entropy compares them with the target ids.",
+          "line": 186
+        }
+      ]
+    },
+    "train.py": {
+      "hash": "413bd97b40bb400a2a0d01230e2946f056c263ebac1b7281c2367d964a123085",
+      "purpose": "Trains a GPT on next-token loss and writes checkpoints.",
+      "role": "training loop",
+      "terms": [
+        {
+          "term": "init_from",
+          "aliases": [],
+          "meaning": "Where the weights come from: scratch, a checkpoint in the output directory, or a GPT-2 name.",
+          "line": 41
+        },
+        {
+          "term": "dataset",
+          "aliases": [],
+          "meaning": "Which prepared folder under data/ supplies train.bin, val.bin, and maybe meta.pkl.",
+          "line": 47
+        },
+        {
+          "term": "gradient_accumulation_steps",
+          "aliases": [],
+          "meaning": "How many micro-batches are summed before AdamW steps, to imitate a larger batch.",
+          "line": 48
+        },
+        {
+          "term": "learning_rate",
+          "aliases": [],
+          "meaning": "The peak step size for AdamW, before warmup and cosine decay.",
+          "line": 58
+        },
+        {
+          "term": "max_iters",
+          "aliases": [],
+          "meaning": "How many optimizer steps to take before the script stops.",
+          "line": 59
+        },
+        {
+          "term": "dtype",
+          "aliases": [],
+          "meaning": "The floating-point type used on the GPU: float32, bfloat16, or float16.",
+          "line": 73
+        }
+      ]
+    },
+    "sample.py": {
+      "hash": "1c4bb3716ec55395be2e6ad136693614b0b38de9defda889041efe2057a0c1f1",
+      "purpose": "Loads a checkpoint or GPT-2 and prints sampled text.",
+      "role": "sampling script",
+      "terms": [
+        {
+          "term": "max_new_tokens",
+          "aliases": [],
+          "meaning": "How many new ids to append to the prompt in each sample.",
+          "line": 16
+        },
+        {
+          "term": "temperature",
+          "aliases": [],
+          "meaning": "Divides the last-position scores before softmax. Below 1 makes the distribution sharper.",
+          "line": 17
+        },
+        {
+          "term": "top_k",
+          "aliases": [],
+          "meaning": "How many of the most likely ids stay eligible. The rest are given probability zero.",
+          "line": 18
+        },
+        {
+          "term": "num_samples",
+          "aliases": [],
+          "meaning": "How many independent continuations to draw and print.",
+          "line": 15
+        }
+      ]
+    },
+    "configurator.py": {
+      "hash": "5cc23aca26b4ab3c0d9e5f82740f4781f9444f42718c15abcee70d93c5aabe8f",
+      "purpose": "Overrides a script's globals from a config file or flags.",
+      "role": "settings override",
+      "terms": []
+    },
+    "bench.py": {
+      "hash": "984f54a60df9d1aa844e7e0aef10000e7090a00109d13e43587ccb077ef340bb",
+      "purpose": "Times a few training steps and estimates GPU utilization.",
+      "role": "benchmark",
+      "terms": [
+        {
+          "term": "real_data",
+          "aliases": [],
+          "meaning": "When true, time real OpenWebText windows. When false, reuse one random batch so disk is out of the clock.",
+          "line": 15
+        }
+      ]
+    },
+    "config/train_shakespeare_char.py": {
+      "hash": "9b41cdfb2c917259d796a8184d835221a349c23cd18a0a63b46da431d95d9c05",
+      "purpose": "Sets the small character-level Shakespeare run.",
+      "role": "experiment config",
+      "terms": []
+    },
+    "config/train_gpt2.py": {
+      "hash": "0add8a916edf704e001e87aaf63647eea9d6df964c10129ff60ad479bdbd55c4",
+      "purpose": "Sets the 124M GPT-2 run on OpenWebText.",
+      "role": "experiment config",
+      "terms": []
+    },
+    "config/finetune_shakespeare.py": {
+      "hash": "e78caf73a286e22df3ad069b39ed6162490b8e033ca1e2ceb8477eee159c7948",
+      "purpose": "Fine-tunes GPT-2 XL on tokenized Shakespeare for a few steps.",
+      "role": "experiment config",
+      "terms": []
+    },
+    "config/eval_gpt2.py": {
+      "hash": "054665ef6b977e5a03fa94f4365206d5258305f8660589c5b534949d946418e8",
+      "purpose": "Scores base GPT-2 and then exits.",
+      "role": "experiment config",
+      "terms": []
+    },
+    "config/eval_gpt2_medium.py": {
+      "hash": "7ced6fb2cbc2c16fbb9c6c256eac403f3e1a88d1317ef0f85a1688f8b7988a2b",
+      "purpose": "Scores GPT-2 medium and then exits.",
+      "role": "experiment config",
+      "terms": []
+    },
+    "config/eval_gpt2_large.py": {
+      "hash": "52f07f35a1c7a45c30f0c59a39ab3804fcefd505bcd69973ff06e19a57e079bc",
+      "purpose": "Scores GPT-2 large and then exits.",
+      "role": "experiment config",
+      "terms": []
+    },
+    "config/eval_gpt2_xl.py": {
+      "hash": "8bb8d85b53f2daf35d11c403b0a0e0dfbe69cd1d052f38ea09b826fa3ed2ae65",
+      "purpose": "Scores GPT-2 XL and then exits.",
+      "role": "experiment config",
+      "terms": []
+    },
+    "data/shakespeare_char/prepare.py": {
+      "hash": "d5fbea0686d146748cf36017d6c34136a2fe9c41f065f1429529ad55a992c692",
+      "purpose": "Downloads Tiny Shakespeare and encodes one character per token.",
+      "role": "data preparation",
+      "terms": [
+        {
+          "term": "stoi",
+          "aliases": [],
+          "meaning": "Map from a character to its integer id, built from the sorted alphabet of this file.",
+          "line": 30
+        },
+        {
+          "term": "itos",
+          "aliases": [],
+          "meaning": "Map from an integer id back to its character. The inverse of stoi.",
+          "line": 31
+        }
+      ]
+    },
+    "data/shakespeare/prepare.py": {
+      "hash": "f8d47267f00963138314bb969e75071211bf1140c248bf31b9e60e7750027f06",
+      "purpose": "Encodes Tiny Shakespeare with the GPT-2 tokenizer.",
+      "role": "data preparation",
+      "terms": []
+    },
+    "data/openwebtext/prepare.py": {
+      "hash": "77f3ef0cc8132d77f90c2bd5f9c3be86d1b3da7428e100559c58aee2bcb6eb12",
+      "purpose": "Tokenizes OpenWebText into train and validation binaries.",
+      "role": "data preparation",
+      "terms": []
+    },
+    "data/shakespeare_char/readme.md": {
+      "hash": "9bd87853316db1ab5af5b26b2b4551e05f1bc9390fc9bcb52635911a08ec82b6",
+      "purpose": "Records the character-level Shakespeare token counts.",
+      "role": "dataset note",
+      "terms": []
+    },
+    "data/shakespeare/readme.md": {
+      "hash": "a4f1406ce0f3b7c61772413ebc651db0e0cf74a8e0e1d3bbdb5ab55238a52760",
+      "purpose": "Records the GPT-2-token Shakespeare counts.",
+      "role": "dataset note",
+      "terms": []
+    },
+    "data/openwebtext/readme.md": {
+      "hash": "e1f86c0641994478162be888a1f120eee2777b758ac2682f9508c8835414d192",
+      "purpose": "Records OpenWebText binary sizes and token counts.",
+      "role": "dataset note",
+      "terms": []
+    },
+    "README.md": {
+      "hash": "8d969370683849a2cc4e46c81bf2449717f2daff657586888151933c3590f85f",
+      "purpose": "Introduces nanoGPT and the Shakespeare quick start.",
+      "role": "project introduction",
+      "terms": []
+    },
+    "scaling_laws.ipynb": {
+      "hash": "b7c48055b03e03fbfb1decf659190e8fb47318820942540d17e77b764b9781d6",
+      "purpose": "Sketches loss versus compute in the style of Chinchilla.",
+      "role": "sizing notes",
+      "terms": []
+    },
+    "transformer_sizing.ipynb": {
+      "hash": "206144edb0c47b3d226f2ba4c1e4e3201912c59edcbc2d7a6e54255ebb2f1f65",
+      "purpose": "Estimates a transformer's parameters, FLOPs, and memory.",
+      "role": "sizing notes",
+      "terms": []
+    }
+  }
+}

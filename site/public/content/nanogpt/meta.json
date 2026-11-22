@@ -1,0 +1,13 @@
+{
+  "id": "nanogpt",
+  "title": "nanoGPT",
+  "commit": "3adf61e154c3fe3fca428ad6bc3818b27a3b8291",
+  "committedAt": "2025-11-12",
+  "upstream": "https://github.com/karpathy/nanoGPT",
+  "commitUrl": "https://github.com/karpathy/nanoGPT/commit/3adf61e154c3fe3fca428ad6bc3818b27a3b8291",
+  "treeUrl": "https://github.com/karpathy/nanoGPT/tree/3adf61e154c3fe3fca428ad6bc3818b27a3b8291",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2022 Andrej Karpathy",
+  "attribution": "The files in source/ are an unmodified copy of karpathy/nanoGPT at this commit, included under the MIT license. Yamori did not generate them.",
+  "prepared": "Pseudocode, file notes, and flow traces were written to Yamori's stored JSON shape from that source. This site does not call a model."
+}

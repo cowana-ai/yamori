@@ -1,0 +1,153 @@
+{
+  "overview": {
+    "title": "Pack OpenWebText into token binaries",
+    "summary": "Download OpenWebText, mark document boundaries, and write the binaries a full GPT-2 run trains on.",
+    "sections": [
+      {
+        "title": "Download, mark documents, and save bins",
+        "startLine": 10,
+        "endLine": 74,
+        "pseudocode": "Download openwebtext with 8 workers and hold out a fraction 0.0005 with seed 2357.\nEncode with the gpt2 tokenizer and append end-of-text id 50256.\nWrite each split as uint16, below 2**16, in 1024 shards.\n# Insight: This is the dataset the default train.py settings expect.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 12,
+            "endLine": 27
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 44,
+            "endLine": 45
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 62,
+            "endLine": 73
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 23,
+            "endLine": 63
+          }
+        ]
+      }
+    ],
+    "hash": "77f3ef0cc8132d77f90c2bd5f9c3be86d1b3da7428e100559c58aee2bcb6eb12"
+  },
+  "logic": {
+    "title": "Pack OpenWebText into token binaries",
+    "summary": "Download OpenWebText, encode it with the GPT-2 tokenizer, and write one memory-mapped binary per split.",
+    "sections": [
+      {
+        "title": "Download the corpus and hold out a tiny validation set",
+        "startLine": 10,
+        "endLine": 27,
+        "pseudocode": "Use 8 worker processes to load and to map.\nLoad the gpt2 tokenizer.\nWhen run as a script, download the openwebtext dataset.\nHold out a test fraction of 0.0005, shuffled with seed 2357.\nRename that holdout to val.\n# Context: The source notes this download is large, on the order of the Hugging Face cache for the whole corpus. Only the main process does it.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 12,
+            "endLine": 17
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 19,
+            "endLine": 19
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 21,
+            "endLine": 23
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 26,
+            "endLine": 26
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 27,
+            "endLine": 27
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 21,
+            "endLine": 23
+          }
+        ]
+      },
+      {
+        "title": "Append an end-of-text id to every document",
+        "startLine": 42,
+        "endLine": 56,
+        "pseudocode": "Encode each document's text, ignoring special tokens.\nAppend the end-of-text id. For gpt2 that id is 50256.\nKeep the ids and their length.\nMap that function over both splits with the same 8 workers.\n# Inferred: The comment wonders whether the end-of-text id should be prepended instead. The code appends it.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 44,
+            "endLine": 44
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 45,
+            "endLine": 45
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 47,
+            "endLine": 48
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 51,
+            "endLine": 56
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 46,
+            "endLine": 46
+          }
+        ]
+      },
+      {
+        "title": "Write each split into a uint16 binary",
+        "startLine": 58,
+        "endLine": 74,
+        "pseudocode": "Sum the document lengths as uint64.\nOpen a memory map named for the split, in write mode.\nStore tokens as uint16, which fits because 50256 is below 2**16.\nWrite the ids in 1024 contiguous shards.\nFlush the map.\n# Insight: train.py memory-maps these same bins. It does not read the original documents.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 60,
+            "endLine": 60
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 61,
+            "endLine": 63
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 62,
+            "endLine": 63
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 64,
+            "endLine": 73
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 74,
+            "endLine": 74
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 63,
+            "endLine": 74
+          }
+        ]
+      }
+    ],
+    "hash": "77f3ef0cc8132d77f90c2bd5f9c3be86d1b3da7428e100559c58aee2bcb6eb12"
+  }
+}

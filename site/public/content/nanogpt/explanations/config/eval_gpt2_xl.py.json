@@ -1,0 +1,92 @@
+{
+  "overview": {
+    "title": "Score GPT-2 XL",
+    "summary": "Load GPT-2 XL (1558M) and exit after one score.",
+    "sections": [
+      {
+        "title": "Score GPT-2 XL",
+        "startLine": 4,
+        "endLine": 8,
+        "pseudocode": "Use a batch of 8.\nScore 500 batches, enough for a steadier estimate.\nStop after that first score.\nLeave the run log off.\nStart from the gpt2-xl weights.\n# Insight: eval_only makes train.py measure loss and exit. It does not take an optimizer step.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 4,
+            "endLine": 4
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 5,
+            "endLine": 5
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 6,
+            "endLine": 6
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 7,
+            "endLine": 7
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 8,
+            "endLine": 8
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 6,
+            "endLine": 8
+          }
+        ]
+      }
+    ],
+    "hash": "8bb8d85b53f2daf35d11c403b0a0e0dfbe69cd1d052f38ea09b826fa3ed2ae65"
+  },
+  "logic": {
+    "title": "Score GPT-2 XL",
+    "summary": "Load GPT-2 XL (1558M) and exit after one score.",
+    "sections": [
+      {
+        "title": "Score GPT-2 XL",
+        "startLine": 4,
+        "endLine": 8,
+        "pseudocode": "Use a batch of 8.\nScore 500 batches, enough for a steadier estimate.\nStop after that first score.\nLeave the run log off.\nStart from the gpt2-xl weights.\n# Insight: eval_only makes train.py measure loss and exit. It does not take an optimizer step.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 4,
+            "endLine": 4
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 5,
+            "endLine": 5
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 6,
+            "endLine": 6
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 7,
+            "endLine": 7
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 8,
+            "endLine": 8
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 6,
+            "endLine": 8
+          }
+        ]
+      }
+    ],
+    "hash": "8bb8d85b53f2daf35d11c403b0a0e0dfbe69cd1d052f38ea09b826fa3ed2ae65"
+  }
+}

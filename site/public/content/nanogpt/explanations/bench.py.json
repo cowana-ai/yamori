@@ -1,0 +1,254 @@
+{
+  "overview": {
+    "title": "Time a short GPT training loop",
+    "summary": "A stripped training loop that reports step time and a rough utilization for a 12-layer GPT.",
+    "sections": [
+      {
+        "title": "Bench a few steps of a GPT-2 sized model",
+        "startLine": 12,
+        "endLine": 117,
+        "pseudocode": "Use batch 12, context 1024, 12 layers, 12 heads, and width 768.\nRun configurator.py, then either memory-map real tokens or draw random ids below 50304.\nStep AdamW at learning rate 1e-4 and weight decay 1e-2, with moments 0.9 and 0.95.\nOptionally profile 5 plus 5 plus 5 steps and write a trace to bench_log.\nSeed from 1337. Otherwise burn in for 10 steps, time 20, and print milliseconds times 1000 and percent times 100.\n# Insight: Nothing is saved. The point is the clock.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 12,
+            "endLine": 53
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 21,
+            "endLine": 47
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 60,
+            "endLine": 60
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 70,
+            "endLine": 75
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 16,
+            "endLine": 117
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 96,
+            "endLine": 117
+          }
+        ]
+      }
+    ],
+    "hash": "984f54a60df9d1aa844e7e0aef10000e7090a00109d13e43587ccb077ef340bb"
+  },
+  "logic": {
+    "title": "Time a short GPT training loop",
+    "summary": "Run a few forward and backward steps on a 12-layer GPT and report milliseconds and estimated utilization.",
+    "sections": [
+      {
+        "title": "Fixed bench settings",
+        "startLine": 12,
+        "endLine": 32,
+        "pseudocode": "Use batch 12 and context 1024.\nLeave bias off, and read real data unless told otherwise.\nSeed from 1337.\nRun on cuda, in bfloat16 when the GPU supports it, else float16.\nCompile the model.\nSkip the profiler unless profile is set.\nRun configurator.py, which executes overrides.\nAllow tf32, and use autocast on cuda.\n# Insight: This file is a shorter train.py. It does not save checkpoints or decay the learning rate.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 12,
+            "endLine": 13
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 14,
+            "endLine": 15
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 16,
+            "endLine": 25
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 17,
+            "endLine": 18
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 19,
+            "endLine": 19
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 20,
+            "endLine": 20
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 21,
+            "endLine": 21
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 26,
+            "endLine": 30
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 12,
+            "endLine": 21
+          }
+        ]
+      },
+      {
+        "title": "Real tokens, or a random stand-in",
+        "startLine": 33,
+        "endLine": 48,
+        "pseudocode": "If real data is on, memory-map OpenWebText train.bin.\nDraw windows of **block_size** and the following ids, and move them to the device.\nOtherwise fill the batch with random ids below 50304.\nReuse that same random batch every step.\n# Why: Random ids remove the disk read, so the timing is closer to pure model math.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 34,
+            "endLine": 36
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 39,
+            "endLine": 42
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 46,
+            "endLine": 47
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 48,
+            "endLine": 48
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 45,
+            "endLine": 48
+          }
+        ]
+      },
+      {
+        "title": "Build a 12-layer GPT and an AdamW",
+        "startLine": 50,
+        "endLine": 64,
+        "pseudocode": "Use 12 layers, 12 heads, and width 768.\nTurn dropout off, which is 0, so the timing does not jitter.\nBuild the GPT and move it to the device.\nUse AdamW with weight decay 1e-2, learning rate 1e-4, and moments 0.9 and 0.95.\nCompile when asked.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 53,
+            "endLine": 53
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 54,
+            "endLine": 54
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 57,
+            "endLine": 58
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 60,
+            "endLine": 60
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 62,
+            "endLine": 64
+          }
+        ]
+      },
+      {
+        "title": "Optional profiler trace",
+        "startLine": 66,
+        "endLine": 94,
+        "pseudocode": "Wait 5 steps, warm up for 5, then record 5.\nProfile CPU and CUDA, and write a trace under bench_log.\nFor each of those steps, score a batch, fetch another, zero gradients, go backward, and step.\nPrint the step and the loss.\nTell the profiler the step finished.\n# Insight: The trace is for the PyTorch profiler UI. The simple loop below is the one that prints utilization.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 70,
+            "endLine": 71
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 72,
+            "endLine": 75
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 83,
+            "endLine": 90
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 92,
+            "endLine": 92
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 94,
+            "endLine": 94
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 70,
+            "endLine": 75
+          }
+        ]
+      },
+      {
+        "title": "Time a burn-in, then a measured loop",
+        "startLine": 96,
+        "endLine": 117,
+        "pseudocode": "Synchronize cuda so the clock starts clean.\nFirst run 10 steps and ignore their time. Then run 20.\nEach step scores, prefetches, zeros gradients, goes backward, and steps.\nPrint the loss.\nSynchronize again and estimate utilization.\nOn the measured stage, print milliseconds, times 1000, and the percent, times 100.\n# Why: The first 10 steps pay for compile and caches. The next 20 are the number the print trusts.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 99,
+            "endLine": 99
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 100,
+            "endLine": 100
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 103,
+            "endLine": 109
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 111,
+            "endLine": 111
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 112,
+            "endLine": 115
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 116,
+            "endLine": 117
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 100,
+            "endLine": 116
+          }
+        ]
+      }
+    ],
+    "hash": "984f54a60df9d1aa844e7e0aef10000e7090a00109d13e43587ccb077ef340bb"
+  }
+}

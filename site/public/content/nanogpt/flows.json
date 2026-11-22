@@ -1,0 +1,348 @@
+{
+  "block_size": {
+    "summary": "block_size is how many tokens a sequence may hold. A config sets it, configurator.py writes it into the training script, and the model uses it for the position table, the causal mask, the forward check, and the crop while sampling.",
+    "caveats": "Other configs set their own block_size. This trace follows the character-level Shakespeare value into the model.",
+    "sections": [
+      {
+        "file": "config/train_shakespeare_char.py",
+        "title": "Choose a short context for characters",
+        "startLine": 19,
+        "endLine": 19,
+        "pseudocode": "Set **block_size** to 256.\n# Context: Each training row is at most 256 characters, because this dataset is one character per token.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 19,
+            "endLine": 19
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 19,
+            "endLine": 19
+          }
+        ]
+      },
+      {
+        "file": "configurator.py",
+        "title": "Run the config into the caller's globals",
+        "startLine": 20,
+        "endLine": 47,
+        "pseudocode": "Treat an argument without an equals sign as a config path.\nPrint that file, then run it in this global scope.\nOr take a --key=value flag, parse the value, and store it if the name and type already exist.\n# Insight: train.py executes this file, so an assignment to block_size here is train.py's block_size.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 21,
+            "endLine": 24
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 25,
+            "endLine": 28
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 31,
+            "endLine": 45
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 28,
+            "endLine": 28
+          }
+        ]
+      },
+      {
+        "file": "train.py",
+        "title": "Cut each batch to that many ids",
+        "startLine": 123,
+        "endLine": 125,
+        "pseudocode": "Draw starts that still leave room for **block_size**.\nTake **block_size** ids as the input.\nTake the next **block_size** ids as the targets.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 123,
+            "endLine": 123
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 124,
+            "endLine": 124
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 125,
+            "endLine": 125
+          }
+        ]
+      },
+      {
+        "file": "train.py",
+        "title": "Pass that length into the model",
+        "startLine": 147,
+        "endLine": 148,
+        "pseudocode": "Pass **block_size** into the GPT config.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 147,
+            "endLine": 148
+          }
+        ]
+      },
+      {
+        "file": "train.py",
+        "title": "Crop a longer checkpoint down",
+        "startLine": 189,
+        "endLine": 192,
+        "pseudocode": "If a loaded model allows a longer context, crop it down to this length.\n# Insight: Resume and GPT-2 checkpoints are built for 1024. The Shakespeare run crops that table to 256.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 190,
+            "endLine": 192
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 189,
+            "endLine": 192
+          }
+        ]
+      },
+      {
+        "file": "model.py",
+        "title": "Remember the default context",
+        "startLine": 110,
+        "endLine": 110,
+        "pseudocode": "Remember **block_size**, defaulting to 1024.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 110,
+            "endLine": 110
+          }
+        ]
+      },
+      {
+        "file": "model.py",
+        "title": "Size the position table",
+        "startLine": 128,
+        "endLine": 128,
+        "pseudocode": "Make the position embedding table one row per position in **block_size**.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 128,
+            "endLine": 128
+          }
+        ]
+      },
+      {
+        "file": "model.py",
+        "title": "Mask scores beyond the context",
+        "startLine": 49,
+        "endLine": 50,
+        "pseudocode": "When Flash Attention is missing, store a lower-triangular mask of shape **block_size** by **block_size**.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 49,
+            "endLine": 50
+          }
+        ]
+      },
+      {
+        "file": "model.py",
+        "title": "Reject a longer forward",
+        "startLine": 173,
+        "endLine": 173,
+        "pseudocode": "Stop if the sequence is longer than **block_size**.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 173,
+            "endLine": 173
+          }
+        ]
+      },
+      {
+        "file": "model.py",
+        "title": "Crop a pretrained context",
+        "startLine": 195,
+        "endLine": 204,
+        "pseudocode": "Remember the shorter length.\nCut the position table, and the causal mask if it exists.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 200,
+            "endLine": 200
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 201,
+            "endLine": 204
+          }
+        ]
+      },
+      {
+        "file": "model.py",
+        "title": "Keep only the latest tokens while sampling",
+        "startLine": 312,
+        "endLine": 314,
+        "pseudocode": "If the growing context exceeds **block_size**, drop everything but the last **block_size** ids.\n# Insight: Sampling does not grow past the trained context. Older ids fall off the left.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 314,
+            "endLine": 314
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 313,
+            "endLine": 314
+          }
+        ]
+      }
+    ]
+  },
+  "logits": {
+    "summary": "logits are the raw scores over the vocabulary. The forward pass either scores every position and turns that into a loss, or scores only the last position for sampling. Training reads the loss. generate turns the last scores into one new id.",
+    "caveats": "sample.py never names logits. It calls generate, which consumes them inside the model.",
+    "sections": [
+      {
+        "file": "model.py",
+        "title": "Score every position, or only the last",
+        "startLine": 184,
+        "endLine": 193,
+        "pseudocode": "If targets were passed, score every position with the output head.\nMeasure cross-entropy of those **logits** against the targets.\nOtherwise score only the last position, and leave the loss empty.\nReturn the scores and the loss.\n# Insight: The training return carries a score at every time step. The sampling return carries one step.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 186,
+            "endLine": 186
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 187,
+            "endLine": 187
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 190,
+            "endLine": 191
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 193,
+            "endLine": 193
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 184,
+            "endLine": 191
+          }
+        ]
+      },
+      {
+        "file": "train.py",
+        "title": "The update uses the loss, not the scores",
+        "startLine": 222,
+        "endLine": 225,
+        "pseudocode": "Unpack **logits** and the loss from the model.\nKeep the loss for the average.\n# Insight: The scores are computed, then ignored here. The number that is logged is the loss.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 224,
+            "endLine": 224
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 225,
+            "endLine": 225
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 224,
+            "endLine": 225
+          }
+        ]
+      },
+      {
+        "file": "train.py",
+        "title": "A training step does the same unpack",
+        "startLine": 299,
+        "endLine": 305,
+        "pseudocode": "Score the micro-batch.\nDivide the loss by the number of micro-batches, then go backward.\n# Insight: logits is bound and never read. The gradient flows from the loss.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 300,
+            "endLine": 300
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 301,
+            "endLine": 305
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 300,
+            "endLine": 301
+          }
+        ]
+      },
+      {
+        "file": "model.py",
+        "title": "Turn the last scores into one id",
+        "startLine": 316,
+        "endLine": 326,
+        "pseudocode": "Take the **logits** at the final position.\nDivide by the temperature.\nOptionally keep only the top-k scores and set the rest to negative infinity.\nSoftmax, then draw one id.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 316,
+            "endLine": 318
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 318,
+            "endLine": 318
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 320,
+            "endLine": 322
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 324,
+            "endLine": 326
+          }
+        ]
+      },
+      {
+        "file": "sample.py",
+        "title": "Sampling never sees the scores",
+        "startLine": 86,
+        "endLine": 88,
+        "pseudocode": "Call generate with the prompt, the temperature, and the top-k.\nDecode the ids it returns.\n# Insight: The scores stay inside generate. This file only prints text.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 87,
+            "endLine": 87
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 88,
+            "endLine": 88
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 87,
+            "endLine": 88
+          }
+        ]
+      }
+    ]
+  }
+}

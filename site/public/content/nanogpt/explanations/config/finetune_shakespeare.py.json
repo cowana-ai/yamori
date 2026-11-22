@@ -1,0 +1,162 @@
+{
+  "overview": {
+    "title": "Fine-tune GPT-2 XL on Shakespeare",
+    "summary": "A short fine-tune of the largest GPT-2 on the tokenized Shakespeare set.",
+    "sections": [
+      {
+        "title": "Fine-tune GPT-2 XL on Shakespeare",
+        "startLine": 3,
+        "endLine": 25,
+        "pseudocode": "Write to out-shakespeare.\nScore every 5 steps, using 40 batches.\nLeave the run log off.\nName that log shakespeare if you enable it.\nStamp the run name with the current time.\nTrain on the shakespeare dataset.\nStart from gpt2-xl weights.\nSave only when validation improves.\nUse batch 1 and accumulate 32 micro-batches.\nStop after 20 steps.\nLearn at a flat 3e-5. Do not decay the rate.\n# Insight: init_from gpt2-xl tells train.py to load the 1558M public model before these few steps.\n# Context: Twenty steps is a sketch of fine-tuning, not a full training run. The rate stays constant because decay_lr is false.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 3,
+            "endLine": 3
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 4,
+            "endLine": 5
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 6,
+            "endLine": 6
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 7,
+            "endLine": 7
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 8,
+            "endLine": 8
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 10,
+            "endLine": 10
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 11,
+            "endLine": 11
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 14,
+            "endLine": 14
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 19,
+            "endLine": 20
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 21,
+            "endLine": 21
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 24,
+            "endLine": 25
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 11,
+            "endLine": 11
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 21,
+            "endLine": 25
+          }
+        ]
+      }
+    ],
+    "hash": "e78caf73a286e22df3ad069b39ed6162490b8e033ca1e2ceb8477eee159c7948"
+  },
+  "logic": {
+    "title": "Fine-tune GPT-2 XL on Shakespeare",
+    "summary": "A short fine-tune of the largest GPT-2 on the tokenized Shakespeare set.",
+    "sections": [
+      {
+        "title": "Fine-tune GPT-2 XL on Shakespeare",
+        "startLine": 3,
+        "endLine": 25,
+        "pseudocode": "Write to out-shakespeare.\nScore every 5 steps, using 40 batches.\nLeave the run log off.\nName that log shakespeare if you enable it.\nStamp the run name with the current time.\nTrain on the shakespeare dataset.\nStart from gpt2-xl weights.\nSave only when validation improves.\nUse batch 1 and accumulate 32 micro-batches.\nStop after 20 steps.\nLearn at a flat 3e-5. Do not decay the rate.\n# Insight: init_from gpt2-xl tells train.py to load the 1558M public model before these few steps.\n# Context: Twenty steps is a sketch of fine-tuning, not a full training run. The rate stays constant because decay_lr is false.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 3,
+            "endLine": 3
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 4,
+            "endLine": 5
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 6,
+            "endLine": 6
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 7,
+            "endLine": 7
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 8,
+            "endLine": 8
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 10,
+            "endLine": 10
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 11,
+            "endLine": 11
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 14,
+            "endLine": 14
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 19,
+            "endLine": 20
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 21,
+            "endLine": 21
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 24,
+            "endLine": 25
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 11,
+            "endLine": 11
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 21,
+            "endLine": 25
+          }
+        ]
+      }
+    ],
+    "hash": "e78caf73a286e22df3ad069b39ed6162490b8e033ca1e2ceb8477eee159c7948"
+  }
+}

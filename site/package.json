@@ -1,0 +1,16 @@
+{
+  "name": "yamori-learn",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "content": "node scripts/author-nanogpt.mjs && node scripts/scan.mjs",
+    "scan": "node scripts/scan.mjs",
+    "validate": "node scripts/validate.mjs",
+    "dev": "vite",
+    "build": "node scripts/validate.mjs && vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "devDependencies": {
+    "vite": "6.4.1"
+  }
+}

@@ -1,0 +1,1030 @@
+{
+  "overview": {
+    "title": "A GPT that predicts the next token",
+    "summary": "A stack of causal blocks turns token ids into next-token scores, and can draw new ids one at a time.",
+    "sections": [
+      {
+        "title": "Size the GPT with seven numbers",
+        "startLine": 109,
+        "endLine": 116,
+        "pseudocode": "Choose the context length, vocabulary, depth, heads, width, dropout, and whether biases are on.\nThe defaults match a small GPT-2: context 1024, vocabulary 50304, twelve layers, twelve heads, width 768.\n# Insight: GPT-2's real vocabulary is 50257 ids, padded to a multiple of 64.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 110,
+            "endLine": 116
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 110,
+            "endLine": 114
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 111,
+            "endLine": 111
+          }
+        ]
+      },
+      {
+        "title": "Each block may look only left, then mixes",
+        "startLine": 18,
+        "endLine": 106,
+        "pseudocode": "Normalize with epsilon 1e-5, let every token attend to earlier tokens, and add that back.\nThe query, key, and value projection is 3 times the width.\nThen widen by 4, apply GELU, project back, and add that back too.\nAttention scores are a scaled dot product, then softmax. Future positions stay hidden.\n# Insight: Nothing in a block may read a later token. That is what makes the model causal.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 27,
+            "endLine": 104
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 35,
+            "endLine": 35
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 82,
+            "endLine": 105
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 67,
+            "endLine": 69
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 48,
+            "endLine": 68
+          }
+        ]
+      },
+      {
+        "title": "Embed ids, run the stack, score the next token",
+        "startLine": 118,
+        "endLine": 193,
+        "pseudocode": "Add a token vector and a position vector, then run every block.\nTie the token table to the output head.\nStart matrices at standard deviation 0.02, and shrink residual projections further.\nReport the parameter count in millions, dividing by 1e6.\nWith targets, score every position and take cross-entropy.\nWithout targets, score only the last position.\n# Insight: The loss trains the model to name the next id. Sampling only needs that last score.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 127,
+            "endLine": 181
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 138,
+            "endLine": 138
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 143,
+            "endLine": 168
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 148,
+            "endLine": 148
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 186,
+            "endLine": 187
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 190,
+            "endLine": 191
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 184,
+            "endLine": 191
+          }
+        ]
+      },
+      {
+        "title": "Draw one id and append it",
+        "startLine": 305,
+        "endLine": 330,
+        "pseudocode": "Crop the context to **block_size**, score it, divide by temperature, optionally keep the top-k, and sample.\nAppend the id and repeat.\n# Insight: The new id goes back into the context. Attention is recomputed; there is no cache.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 314,
+            "endLine": 326
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 328,
+            "endLine": 328
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 314,
+            "endLine": 328
+          }
+        ]
+      },
+      {
+        "title": "GPT-2 weights can be copied in",
+        "startLine": 206,
+        "endLine": 261,
+        "pseudocode": "gpt2 is 12 layers, 12 heads, width 768 (124M). Medium is 24, 16, 1024 (350M).\nLarge is 36, 20, 1280 (774M). XL is 48, 25, 1600 (1558M).\nForce vocabulary 50257 and context 1024.\nTranspose the Conv1D matrices, then copy the rest.\n# Insight: This loads an existing checkpoint. It does not train one.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 217,
+            "endLine": 218
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 219,
+            "endLine": 220
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 223,
+            "endLine": 224
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 250,
+            "endLine": 259
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 212,
+            "endLine": 238
+          }
+        ]
+      },
+      {
+        "title": "Decay matrices, and estimate speed",
+        "startLine": 263,
+        "endLine": 303,
+        "pseudocode": "AdamW decays tensors of 2 or more dimensions, not biases or norm scales.\nA flop estimate, 6 times the parameter count plus an attention term, is compared with 312e12.\n# Context: 312e12 stands for an A100 bfloat16 peak. The fraction is a rough utilization, not a benchmark guarantee.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 270,
+            "endLine": 274
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 296,
+            "endLine": 302
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 301,
+            "endLine": 302
+          }
+        ]
+      }
+    ],
+    "hash": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c"
+  },
+  "logic": {
+    "title": "A GPT that predicts the next token",
+    "summary": "Turn token ids into next-token scores, using stacked blocks that may look only at earlier tokens.",
+    "sections": [
+      {
+        "title": "Choose the model's sizes",
+        "startLine": 109,
+        "endLine": 116,
+        "pseudocode": "Record how the GPT is sized.\nAllow sequences of **block_size** tokens, default 1024.\nUse a vocabulary of **vocab_size** ids, default 50304.\nPad GPT-2's 50257 ids up to a multiple of 64.\nStack **n_layer** blocks, default twelve.\nGive each block **n_head** attention heads, default twelve.\nGive each token a vector of width **n_embd**, default 768.\nDrop out with probability **dropout**. The default is 0.\nKeep a **bias** on linears and layer norms when asked.\n# Context: These seven numbers are the whole architecture. Training and sampling pass the same config in.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 109,
+            "endLine": 109
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 110,
+            "endLine": 110
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 111,
+            "endLine": 111
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 111,
+            "endLine": 111
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 112,
+            "endLine": 112
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 113,
+            "endLine": 113
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 114,
+            "endLine": 114
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 115,
+            "endLine": 115
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 116,
+            "endLine": 116
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 109,
+            "endLine": 116
+          }
+        ]
+      },
+      {
+        "title": "Let each token look only left",
+        "startLine": 29,
+        "endLine": 76,
+        "pseudocode": "Build one causal self-attention layer.\nRequire the width to divide evenly by the head count.\nProject each token into query, key, and value together.\nThat projection is 3 times the embedding width.\nProject the mixed heads back to the embedding width.\nDrop out the attention weights and the residual output.\n\nPrefer Flash Attention when this PyTorch provides it.\nOtherwise warn, and store a lower-triangular mask of ones.\nThe mask is **block_size** by **block_size**.\n\nRead the batch size, the length, and the width.\nSplit the projection into query, key, and value.\nReshape each as batch, heads, time, then head width.\nThat reshape swaps axes -2 and -1, so time stays beside the head width.\n\nIf Flash Attention is available:\n    Score queries against keys with a causal mask.\n    Drop out attention while the module is training.\nOtherwise:\n    Score every query against every earlier and current key.\n    Scale by $1/\\sqrt{d}$, where $d$ is the head width.\n    Hide future positions with negative infinity.\n    Turn the scores into weights with softmax.\n    Drop out those weights.\n    Mix the values by the weights.\n\nLay the head outputs back side by side.\nProject that mix, drop out, and return it.\n# Why: Dividing by the square root of the head width keeps the dots from growing with that width, so softmax does not saturate.\n# Insight: A token never reads a later token. The triangular mask, or is_causal, is what enforces it.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 31,
+            "endLine": 32
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 33,
+            "endLine": 33
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 35,
+            "endLine": 35
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 35,
+            "endLine": 35
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 37,
+            "endLine": 37
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 39,
+            "endLine": 43
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 45,
+            "endLine": 45
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 46,
+            "endLine": 50
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 49,
+            "endLine": 50
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 53,
+            "endLine": 53
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 56,
+            "endLine": 56
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 57,
+            "endLine": 59
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 57,
+            "endLine": 59
+          },
+          {
+            "pseudocodeLine": 17,
+            "startLine": 62,
+            "endLine": 62
+          },
+          {
+            "pseudocodeLine": 18,
+            "startLine": 64,
+            "endLine": 64
+          },
+          {
+            "pseudocodeLine": 19,
+            "startLine": 64,
+            "endLine": 64
+          },
+          {
+            "pseudocodeLine": 20,
+            "startLine": 65,
+            "endLine": 65
+          },
+          {
+            "pseudocodeLine": 21,
+            "startLine": 67,
+            "endLine": 67
+          },
+          {
+            "pseudocodeLine": 22,
+            "startLine": 67,
+            "endLine": 67
+          },
+          {
+            "pseudocodeLine": 23,
+            "startLine": 68,
+            "endLine": 68
+          },
+          {
+            "pseudocodeLine": 24,
+            "startLine": 69,
+            "endLine": 69
+          },
+          {
+            "pseudocodeLine": 25,
+            "startLine": 70,
+            "endLine": 70
+          },
+          {
+            "pseudocodeLine": 26,
+            "startLine": 71,
+            "endLine": 71
+          },
+          {
+            "pseudocodeLine": 28,
+            "startLine": 72,
+            "endLine": 72
+          },
+          {
+            "pseudocodeLine": 29,
+            "startLine": 75,
+            "endLine": 76
+          },
+          {
+            "pseudocodeLine": 30,
+            "startLine": 67,
+            "endLine": 67
+          },
+          {
+            "pseudocodeLine": 31,
+            "startLine": 48,
+            "endLine": 68
+          }
+        ]
+      },
+      {
+        "title": "Widen the vector, then squash it",
+        "startLine": 78,
+        "endLine": 92,
+        "pseudocode": "Build the feed-forward layer inside a block.\nExpand each token to 4 times the embedding width.\nApply GELU.\nProject back to the embedding width.\nDrop out.\n\nOn each token, expand, apply GELU, project back, and drop out.\nReturn that vector.\n# Context: This mix never looks at other positions. Attention already gathered them. GELU is a smooth gate: it passes positive values and shrinks negative ones.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 80,
+            "endLine": 81
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 82,
+            "endLine": 82
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 83,
+            "endLine": 83
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 84,
+            "endLine": 84
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 85,
+            "endLine": 85
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 88,
+            "endLine": 91
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 92,
+            "endLine": 92
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 83,
+            "endLine": 90
+          }
+        ]
+      },
+      {
+        "title": "Normalize, with an optional shift",
+        "startLine": 18,
+        "endLine": 27,
+        "pseudocode": "Learn a scale for every channel.\nLearn a shift too, unless bias is off.\nNormalize the last dimension.\nUse epsilon 1e-5 so the variance cannot be zero.\n# Context: Layer norm makes each token's channels have a steady spread before attention or the feed-forward mix. The optional bias is the shift.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 23,
+            "endLine": 23
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 24,
+            "endLine": 24
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 27,
+            "endLine": 27
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 27,
+            "endLine": 27
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 18,
+            "endLine": 27
+          }
+        ]
+      },
+      {
+        "title": "Add each sublayer back onto the stream",
+        "startLine": 94,
+        "endLine": 106,
+        "pseudocode": "In each block, normalize, then attend, then normalize, then mix.\nAdd the attention output back onto the input.\nAdd the feed-forward output back onto that.\nReturn the sum.\n# Insight: The adds are residual connections. The block changes the stream by a delta instead of replacing it.\n# Context: The first norm feeds attention. The second feeds the widen-and-squash layer. Each sublayer sees a normalized copy, and the original stream stays on the skip path.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 96,
+            "endLine": 101
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 104,
+            "endLine": 104
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 105,
+            "endLine": 105
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 106,
+            "endLine": 106
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 104,
+            "endLine": 105
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 98,
+            "endLine": 105
+          }
+        ]
+      },
+      {
+        "title": "Stack embeddings, blocks, and a tied word head",
+        "startLine": 118,
+        "endLine": 168,
+        "pseudocode": "Require a vocabulary size and a block size.\nKeep the config.\nLook up a vector per token id. Call that table **wte**.\nLook up a vector per position. Call that table **wpe**.\nDrop out the sum of those two.\nStack **n_layer** identical blocks.\nNormalize once more at the end of the stack.\nMap the final vector to one score per vocabulary id.\nCall that map **lm_head**. Give it no bias.\n\nTie **wte** to **lm_head**. They share one matrix.\n# Why: The same vectors that read token ids also score them. One table means fewer free parameters, and the input and output stay in one geometry.\n\nDraw every linear and embedding matrix from a normal.\nUse mean 0 and standard deviation 0.02.\nZero each linear bias.\nShrink residual projections by the square root of 2 times the depth.\n# Context: The source applies the GPT-2 residual scale so a deep stack of adds does not start huge.\n\nSum the parameters.\nWhen asked, subtract the position table.\nKeep the token table, because the output head uses it.\nPrint the count in millions, dividing by 1e6.\n# Insight: Position vectors are not shared, so they are the ones left out of the non-embedding count.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 122,
+            "endLine": 123
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 124,
+            "endLine": 124
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 127,
+            "endLine": 127
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 128,
+            "endLine": 128
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 129,
+            "endLine": 129
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 130,
+            "endLine": 130
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 131,
+            "endLine": 131
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 133,
+            "endLine": 133
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 133,
+            "endLine": 133
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 138,
+            "endLine": 138
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 138,
+            "endLine": 138
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 141,
+            "endLine": 141
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 164,
+            "endLine": 168
+          },
+          {
+            "pseudocodeLine": 16,
+            "startLine": 165,
+            "endLine": 166
+          },
+          {
+            "pseudocodeLine": 17,
+            "startLine": 143,
+            "endLine": 145
+          },
+          {
+            "pseudocodeLine": 18,
+            "startLine": 142,
+            "endLine": 145
+          },
+          {
+            "pseudocodeLine": 20,
+            "startLine": 157,
+            "endLine": 157
+          },
+          {
+            "pseudocodeLine": 21,
+            "startLine": 158,
+            "endLine": 159
+          },
+          {
+            "pseudocodeLine": 22,
+            "startLine": 154,
+            "endLine": 155
+          },
+          {
+            "pseudocodeLine": 23,
+            "startLine": 148,
+            "endLine": 148
+          },
+          {
+            "pseudocodeLine": 24,
+            "startLine": 150,
+            "endLine": 160
+          }
+        ]
+      },
+      {
+        "title": "Turn ids into scores, and a loss if targets arrived",
+        "startLine": 170,
+        "endLine": 193,
+        "pseudocode": "Read the device, the batch, and the length.\nReject a sequence longer than **block_size**.\nNumber the positions from 0 up to the length.\n\nLook up each token id and each position.\nAdd those vectors, then drop out.\nRun every block.\nNormalize the stack output.\n\nIf targets were passed:\n    Score every position over the vocabulary.\n    Measure cross-entropy against the targets.\n    Ignore a target of -1.\nOtherwise:\n    Score only the last position.\n    Leave the loss empty.\nReturn the scores and the loss.\n# Insight: Training needs a score at every position. Sampling only needs the next token, so the head skips the earlier positions.\n# Context: Cross-entropy here is the average negative log probability of the correct next id.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 171,
+            "endLine": 172
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 173,
+            "endLine": 173
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 174,
+            "endLine": 174
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 177,
+            "endLine": 178
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 179,
+            "endLine": 179
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 180,
+            "endLine": 181
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 182,
+            "endLine": 182
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 184,
+            "endLine": 184
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 186,
+            "endLine": 186
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 187,
+            "endLine": 187
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 187,
+            "endLine": 187
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 188,
+            "endLine": 188
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 190,
+            "endLine": 190
+          },
+          {
+            "pseudocodeLine": 16,
+            "startLine": 191,
+            "endLine": 191
+          },
+          {
+            "pseudocodeLine": 17,
+            "startLine": 193,
+            "endLine": 193
+          },
+          {
+            "pseudocodeLine": 18,
+            "startLine": 184,
+            "endLine": 191
+          },
+          {
+            "pseudocodeLine": 19,
+            "startLine": 187,
+            "endLine": 187
+          }
+        ]
+      },
+      {
+        "title": "Shrink a pretrained context",
+        "startLine": 195,
+        "endLine": 204,
+        "pseudocode": "Refuse a context longer than the one already built.\nRemember the shorter **block_size**.\nCut the position table down to it.\nIf a causal mask is stored, cut that too.\n# Context: A GPT-2 checkpoint is built for 1024 positions. A smaller run can crop that table instead of retraining it.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 199,
+            "endLine": 199
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 200,
+            "endLine": 200
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 201,
+            "endLine": 201
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 202,
+            "endLine": 204
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 196,
+            "endLine": 201
+          }
+        ]
+      },
+      {
+        "title": "Copy OpenAI GPT-2 weights in",
+        "startLine": 206,
+        "endLine": 261,
+        "pseudocode": "Accept only gpt2, gpt2-medium, gpt2-large, or gpt2-xl.\nAllow a dropout override, and nothing else.\nLoad the matching Hugging Face GPT-2.\n\ngpt2 uses 12 layers, 12 heads, and width 768. That is the 124M model.\ngpt2-medium uses 24 layers, 16 heads, and width 1024. That is the 350M model.\ngpt2-large uses 36 layers, 20 heads, and width 1280. That is the 774M model.\ngpt2-xl uses 48 layers, 25 heads, and width 1600. That is the 1558M model.\nForce vocabulary 50257, context 1024, and bias on.\nIf dropout was overridden, print it and use that rate.\n\nBuild a fresh GPT in that shape.\nDrop the attention mask buffers. They are not parameters.\nDrop the same buffers on the Hugging Face model.\nRequire the remaining names to match one for one.\n\nFor the attention and feed-forward matrices, transpose.\nCopy every other tensor straight across.\nReturn the filled model.\n# Why: The OpenAI checkpoint stored those matrices as Conv1D, which is transposed relative to a Linear. The copy flips them.\n# Insight: This downloads the public GPT-2 checkpoint, then copies weights. It does not retrain them.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 208,
+            "endLine": 208
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 211,
+            "endLine": 211
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 212,
+            "endLine": 213
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 217,
+            "endLine": 217
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 218,
+            "endLine": 218
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 219,
+            "endLine": 219
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 220,
+            "endLine": 220
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 222,
+            "endLine": 225
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 227,
+            "endLine": 229
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 231,
+            "endLine": 232
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 235,
+            "endLine": 235
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 243,
+            "endLine": 244
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 248,
+            "endLine": 248
+          },
+          {
+            "pseudocodeLine": 17,
+            "startLine": 245,
+            "endLine": 254
+          },
+          {
+            "pseudocodeLine": 18,
+            "startLine": 255,
+            "endLine": 259
+          },
+          {
+            "pseudocodeLine": 19,
+            "startLine": 261,
+            "endLine": 261
+          },
+          {
+            "pseudocodeLine": 20,
+            "startLine": 246,
+            "endLine": 254
+          },
+          {
+            "pseudocodeLine": 21,
+            "startLine": 212,
+            "endLine": 238
+          }
+        ]
+      },
+      {
+        "title": "Decay matrices, not shifts",
+        "startLine": 263,
+        "endLine": 287,
+        "pseudocode": "Keep parameters that still receive gradients.\nDecay every tensor with 2 or more dimensions.\nLeave biases and layer-norm scales undecayed, at decay 0.\nPrint how many tensors and parameters fall in each group.\nUse AdamW.\nFuse the AdamW kernel when it exists and the device is cuda.\nReturn that optimizer.\n# Why: Decay pulls large weight matrices toward zero. Biases and norm scales are few numbers; decaying them tends to fight the normalization.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 265,
+            "endLine": 267
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 270,
+            "endLine": 270
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 271,
+            "endLine": 274
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 276,
+            "endLine": 279
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 284,
+            "endLine": 284
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 281,
+            "endLine": 285
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 287,
+            "endLine": 287
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 268,
+            "endLine": 274
+          }
+        ]
+      },
+      {
+        "title": "Estimate how hard the GPU is working",
+        "startLine": 289,
+        "endLine": 303,
+        "pseudocode": "Count the parameters.\nLet the head width be the embedding divided by the head count.\nEstimate flops per token as 6 times the parameter count.\nAdd 12 times layers, times heads, times head width, times **block_size**.\nScale by **block_size** again for a forward and backward pass.\nScale by how many sequences this step ran.\nDivide by the elapsed seconds.\nCompare with 312e12, which the comment calls 312 TFLOPS, an A100 bfloat16 peak.\nReturn that fraction.\n# Context: The 6N term is the usual matmul cost of a forward and backward pass. The extra term pays for attention scores, which grow with the context length. The source points at the PaLM paper's appendix for this estimate.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 293,
+            "endLine": 293
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 295,
+            "endLine": 295
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 296,
+            "endLine": 296
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 296,
+            "endLine": 296
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 297,
+            "endLine": 297
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 298,
+            "endLine": 298
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 300,
+            "endLine": 300
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 301,
+            "endLine": 302
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 303,
+            "endLine": 303
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 291,
+            "endLine": 296
+          }
+        ]
+      },
+      {
+        "title": "Sample the next id, then feed it back",
+        "startLine": 305,
+        "endLine": 330,
+        "pseudocode": "Repeat for each new token you still owe.\nIf the context is longer than **block_size**, keep only the last **block_size** ids.\nScore that context.\nKeep the last position and divide by the temperature.\nIf a top-k was given:\n    Find the k largest scores.\n    Set every smaller score to negative infinity.\nTurn the scores into probabilities.\nDraw one id.\nAppend it, and repeat.\nReturn the full id sequence.\n# Insight: Each new id is appended, and attention runs again over the whole crop. This function does not keep a key-value cache.\n# Context: Temperature below 1 sharpens the distribution. top-k sets every id outside the k most likely to probability zero before the draw.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 312,
+            "endLine": 312
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 314,
+            "endLine": 314
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 316,
+            "endLine": 316
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 318,
+            "endLine": 318
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 320,
+            "endLine": 320
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 321,
+            "endLine": 321
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 322,
+            "endLine": 322
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 324,
+            "endLine": 324
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 326,
+            "endLine": 326
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 328,
+            "endLine": 328
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 330,
+            "endLine": 330
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 314,
+            "endLine": 328
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 318,
+            "endLine": 326
+          }
+        ]
+      }
+    ],
+    "hash": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c"
+  }
+}

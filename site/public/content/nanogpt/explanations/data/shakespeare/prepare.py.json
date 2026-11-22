@@ -1,0 +1,120 @@
+{
+  "overview": {
+    "title": "Encode Tiny Shakespeare with the GPT-2 tokenizer",
+    "summary": "The same plays as the character dataset, packed as GPT-2 tokens instead of single characters.",
+    "sections": [
+      {
+        "title": "Download, split, encode, and save",
+        "startLine": 6,
+        "endLine": 30,
+        "pseudocode": "Download Tiny Shakespeare and write input.txt when it is missing.\nCut at 0.9, encode both sides with the gpt2 tokenizer, and save uint16 bins.\n# Insight: No codec file is written. Decoding later assumes GPT-2.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 7,
+            "endLine": 11
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 16,
+            "endLine": 30
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 20,
+            "endLine": 30
+          }
+        ]
+      }
+    ],
+    "hash": "f8d47267f00963138314bb969e75071211bf1140c248bf31b9e60e7750027f06"
+  },
+  "logic": {
+    "title": "Encode Tiny Shakespeare with the GPT-2 tokenizer",
+    "summary": "Download the plays, split them, and write GPT-2 token ids for a small fine-tune.",
+    "sections": [
+      {
+        "title": "Download the text if it is missing",
+        "startLine": 6,
+        "endLine": 11,
+        "pseudocode": "Look for input.txt next to this script.\nIf it is missing, download Tiny Shakespeare.\nWrite that text to input.txt.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 7,
+            "endLine": 8
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 9,
+            "endLine": 10
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 10,
+            "endLine": 11
+          }
+        ]
+      },
+      {
+        "title": "Hold out the last tenth, then encode",
+        "startLine": 13,
+        "endLine": 30,
+        "pseudocode": "Read the file.\nCut at 0.9 of the characters.\nKeep the head as train and the tail as validation.\nLoad the gpt2 tokenizer.\nEncode both splits, ignoring special tokens.\nPrint how many tokens each split holds.\nStore the ids as uint16.\nWrite train.bin and val.bin next to this script.\n# Insight: There is no meta.pkl. sample.py will assume GPT-2 encodings, which matches this tokenizer.\n# Context: encode_ordinary skips special tokens such as the end-of-text marker. The character-level prepare script does not use this tokenizer at all.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 13,
+            "endLine": 14
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 15,
+            "endLine": 17
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 16,
+            "endLine": 17
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 20,
+            "endLine": 20
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 21,
+            "endLine": 22
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 23,
+            "endLine": 24
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 27,
+            "endLine": 28
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 29,
+            "endLine": 30
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 20,
+            "endLine": 30
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 21,
+            "endLine": 22
+          }
+        ]
+      }
+    ],
+    "hash": "f8d47267f00963138314bb969e75071211bf1140c248bf31b9e60e7750027f06"
+  }
+}

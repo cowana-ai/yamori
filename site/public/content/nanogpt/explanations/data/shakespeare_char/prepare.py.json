@@ -1,0 +1,206 @@
+{
+  "overview": {
+    "title": "Turn Tiny Shakespeare into character ids",
+    "summary": "Download the plays, treat each character as a token, and write the binaries and the codec training will read.",
+    "sections": [
+      {
+        "title": "Get the text and build a character codec",
+        "startLine": 12,
+        "endLine": 35,
+        "pseudocode": "Download Tiny Shakespeare and write it to input.txt if it is not already there.\nThe sorted set of characters is the vocabulary. **stoi** and **itos** translate both ways.\n# Insight: One character is one token. That is the whole difference from the GPT-2 tokenizer.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 13,
+            "endLine": 17
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 24,
+            "endLine": 35
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 29,
+            "endLine": 33
+          }
+        ]
+      },
+      {
+        "title": "Write train.bin, val.bin, and meta.pkl",
+        "startLine": 37,
+        "endLine": 61,
+        "pseudocode": "Cut the text at 0.9. Encode both sides as uint16.\nSave the binaries and a meta.pkl that holds the vocabulary and both maps.\n# Insight: train.py reads the bins. sample.py reads meta.pkl so letters survive the round trip.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 39,
+            "endLine": 50
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 51,
+            "endLine": 61
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 51,
+            "endLine": 61
+          }
+        ]
+      }
+    ],
+    "hash": "d5fbea0686d146748cf36017d6c34136a2fe9c41f065f1429529ad55a992c692"
+  },
+  "logic": {
+    "title": "Turn Tiny Shakespeare into character ids",
+    "summary": "Download the play text if needed, map each character to an integer, and write train and validation binaries.",
+    "sections": [
+      {
+        "title": "Download the text if it is not here yet",
+        "startLine": 12,
+        "endLine": 17,
+        "pseudocode": "Look for input.txt next to this script.\nIf it is missing, download the Tiny Shakespeare file.\nWrite that download to input.txt.\n# Context: The file is the same tiny corpus char-rnn used. One download is enough; later runs reuse input.txt.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 13,
+            "endLine": 14
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 15,
+            "endLine": 16
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 16,
+            "endLine": 17
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 15,
+            "endLine": 17
+          }
+        ]
+      },
+      {
+        "title": "Let the characters themselves be the vocabulary",
+        "startLine": 19,
+        "endLine": 35,
+        "pseudocode": "Read the whole file as one string.\nPrint how many characters that is.\nSort the distinct characters. That list is the vocabulary.\nPrint them, and print **vocab_size**.\nMap each character to its index. Call that **stoi**.\nMap each index back to its character. Call that **itos**.\nEncoding walks the string and replaces each character.\nDecoding joins the characters for those ids.\n# Insight: There is no byte-pair merge here. A token is one character, so the model's vocabulary is the alphabet, about 65 symbols in this text.\n# Context: stoi and itos are inverses. sample.py reads both from meta.pkl so it can prompt and print in letters, not ids.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 19,
+            "endLine": 20
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 21,
+            "endLine": 21
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 24,
+            "endLine": 25
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 26,
+            "endLine": 27
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 30,
+            "endLine": 30
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 31,
+            "endLine": 31
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 32,
+            "endLine": 33
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 34,
+            "endLine": 35
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 23,
+            "endLine": 33
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 30,
+            "endLine": 35
+          }
+        ]
+      },
+      {
+        "title": "Save a 90/10 split as uint16 binaries",
+        "startLine": 37,
+        "endLine": 61,
+        "pseudocode": "Put the first 90% of the characters in train.\nPut the last 10% in validation.\nThe cut is at 0.9 of the length.\nEncode both strings to id lists.\nPrint both lengths.\nStore the ids as uint16.\nWrite train.bin and val.bin next to this script.\nSave **vocab_size**, **itos**, and **stoi** in meta.pkl.\n# Why: uint16 is enough for a 65-character alphabet and matches the dtype train.py memory-maps.\n# Insight: The split is a single cut in document order, not a shuffle. The validation tail is later text from the same file.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 38,
+            "endLine": 39
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 40,
+            "endLine": 40
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 39,
+            "endLine": 40
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 43,
+            "endLine": 44
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 45,
+            "endLine": 46
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 49,
+            "endLine": 50
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 51,
+            "endLine": 52
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 55,
+            "endLine": 61
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 49,
+            "endLine": 52
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 38,
+            "endLine": 40
+          }
+        ]
+      }
+    ],
+    "hash": "d5fbea0686d146748cf36017d6c34136a2fe9c41f065f1429529ad55a992c692"
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "overview": {
+    "title": "Replace a script's settings from the command line",
+    "summary": "Executed by train.py and sample.py so a config file or flags overwrite their global settings.",
+    "sections": [
+      {
+        "title": "A path is executed; a flag overwrites one name",
+        "startLine": 20,
+        "endLine": 47,
+        "pseudocode": "An argument without = is a config file. Print it, then run it in the caller's globals.\nA --key=value flag parses the value and stores it, but only if the key and its type already exist.\n# Insight: This is why config/train_shakespeare_char.py can replace train.py's defaults without being imported.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 21,
+            "endLine": 28
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 31,
+            "endLine": 45
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 28,
+            "endLine": 28
+          }
+        ]
+      }
+    ],
+    "hash": "5cc23aca26b4ab3c0d9e5f82740f4781f9444f42718c15abcee70d93c5aabe8f"
+  },
+  "logic": {
+    "title": "Replace a script's settings from the command line",
+    "summary": "Run inside train.py or sample.py and override their globals from a config file or --key=value flags.",
+    "sections": [
+      {
+        "title": "Run a config file, or override one global",
+        "startLine": 20,
+        "endLine": 47,
+        "pseudocode": "Look at each argument after the script name.\nIf the argument has no equals sign:\n    Refuse a flag that forgot its value.\n    Print the config file.\n    Run that file in this same global scope.\nOtherwise:\n    Require a --key=value flag.\n    Split off the key, and drop the two dashes.\n    If that key is not already a global, fail.\n    Parse the value as a literal when it is a bool, number, or other Python literal.\n    If parsing fails, keep the raw string.\n    Require the new type to match the old one.\n    Print the override and store it on globals.\n# Why: Running the file here, instead of importing it, lets its assignments hit train.py's own variables.\n# Insight: --block_size=256 works only because block_size already exists. A typo is an error, not a new setting.\n# Context: literal_eval reads Python values such as True, 64, or 1e-3. It does not execute arbitrary code. The config file does.",
+        "lineMap": [
+          {
+            "pseudocodeLine": 1,
+            "startLine": 20,
+            "endLine": 20
+          },
+          {
+            "pseudocodeLine": 2,
+            "startLine": 21,
+            "endLine": 21
+          },
+          {
+            "pseudocodeLine": 3,
+            "startLine": 23,
+            "endLine": 23
+          },
+          {
+            "pseudocodeLine": 4,
+            "startLine": 25,
+            "endLine": 27
+          },
+          {
+            "pseudocodeLine": 5,
+            "startLine": 28,
+            "endLine": 28
+          },
+          {
+            "pseudocodeLine": 6,
+            "startLine": 29,
+            "endLine": 29
+          },
+          {
+            "pseudocodeLine": 7,
+            "startLine": 31,
+            "endLine": 31
+          },
+          {
+            "pseudocodeLine": 8,
+            "startLine": 32,
+            "endLine": 33
+          },
+          {
+            "pseudocodeLine": 9,
+            "startLine": 34,
+            "endLine": 47
+          },
+          {
+            "pseudocodeLine": 10,
+            "startLine": 36,
+            "endLine": 37
+          },
+          {
+            "pseudocodeLine": 11,
+            "startLine": 38,
+            "endLine": 40
+          },
+          {
+            "pseudocodeLine": 12,
+            "startLine": 42,
+            "endLine": 42
+          },
+          {
+            "pseudocodeLine": 13,
+            "startLine": 44,
+            "endLine": 45
+          },
+          {
+            "pseudocodeLine": 14,
+            "startLine": 28,
+            "endLine": 28
+          },
+          {
+            "pseudocodeLine": 15,
+            "startLine": 34,
+            "endLine": 47
+          },
+          {
+            "pseudocodeLine": 16,
+            "startLine": 20,
+            "endLine": 37
+          }
+        ]
+      }
+    ],
+    "hash": "5cc23aca26b4ab3c0d9e5f82740f4781f9444f42718c15abcee70d93c5aabe8f"
+  }
+}
