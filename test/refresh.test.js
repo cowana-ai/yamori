@@ -105,3 +105,27 @@ test('matching a fragment of text in a different function never makes its explan
   const result = await reconcileRefresh(after, { title:'File',summary:'',sections:[section] }, new Map([[0,{source:before,section}]]), indexer);
   assert.ok(!result || result.staleBlocks.includes(0), 'text equality cannot establish semantic ownership');
 });
+
+
+test('mixed historical baselines never invalidate already updated blocks on retry', async () => {
+  const indexer = new Indexer(), before = snapshot('LIMIT = 2\ndef helper():\n    return LIMIT\ndef caller():\n    return helper()\n'), current = snapshot('LIMIT = 3\ndef helper():\n    return LIMIT\ndef caller():\n    return helper()\n');
+  const value = explanation((await indexer.extract('sample.py', current.text)).defs.filter(d => d.kind === 'function'));
+  // One block already passed review against current code. The other is still old.
+  const origins = new Map([[0, { source: before, section: value.sections[0] }], [1, { source: current, section: value.sections[1] }]]);
+  const result = await reconcileRefresh(current, value, origins, indexer);
+  const caller = result.value.sections.findIndex(section => section.title === 'caller');
+  assert.ok(!result.staleBlocks.includes(caller), 'a historical global change cannot invalidate the already-current caller');
+  assert.deepEqual(result.value.sections[caller], value.sections[1]);
+  assert.ok(result.staleBlocks.some(index => result.value.sections[index].title === 'helper'));
+});
+
+test('current fresh sub-blocks retain their boundaries and dependent context is still checked', async () => {
+  const indexer = new Indexer(), source = snapshot('def compute():\n    first = 1\n    second = first + 2\n    return second\n');
+  const value = { title: 'Compute', summary: '', sections: [{ title: 'First', startLine: 1, endLine: 2, pseudocode: 'Set the first value.', lineMap: [] }, { title: 'Second', startLine: 3, endLine: 4, pseudocode: 'Add two and return.', lineMap: [] }] };
+  const result = await reconcileRefresh(source, value, new Map(value.sections.map((section,i) => [i,{ source, section }])), indexer);
+  assert.deepEqual(result.staleBlocks, []);
+  assert.deepEqual(result.value.sections, value.sections, 'conceptual blocks are not expanded to the entire function');
+  const old = { ...source, callContext: { definitions: [{ uri: 'file:///fixture/external.py', symbol: 'first', fullHash: 'old' }] } }, next = { ...source, callContext: { definitions: [{ uri: 'file:///fixture/external.py', symbol: 'first', fullHash: 'new' }] } };
+  const changed = await reconcileRefresh(next, value, new Map(value.sections.map((section,i) => [i,{ source: old, section }])), indexer);
+  assert.ok(changed.staleBlocks.length > 0, 'a changed helper cannot be bypassed by matching main source');
+});

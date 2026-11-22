@@ -2127,7 +2127,7 @@ async function readerHarness(settings = {}, options = {}) {
     commands: { registerCommand(id, fn) { harness.commands.set(id, fn); return noop(); } },
     workspace: { isTrusted: options.trusted !== false, onDidGrantWorkspaceTrust: fn => { harness.grantTrust = fn; return noop(); }, workspaceFolders: [{ uri: new Uri(root) }], textDocuments: [], getWorkspaceFolder: uri => uri.fsPath.startsWith(root) ? { uri: new Uri(root) } : undefined, asRelativePath: uri => path.relative(root, uri.fsPath), openTextDocument: docFor,
       findFiles: async pattern => (await walk(root)).filter(file => /package\.json/.test(pattern.pattern) ? false : /\.(py|md|mdx|txt|rst|json|yaml|yml|toml|ini|cfg)$/.test(file)).map(file => new Uri(file)),
-      createFileSystemWatcher: () => ({ onDidCreate: noop, onDidDelete: noop, onDidChange: noop, dispose() {} }), getConfiguration: () => ({ get: (key, fallback) => key in settings ? settings[key] : fallback, inspect: () => ({}) }), onDidChangeTextDocument: noop },
+      createFileSystemWatcher: () => ({ onDidCreate: noop, onDidDelete: noop, onDidChange: noop, dispose() {} }), getConfiguration: () => ({ get: (key, fallback) => key in settings ? settings[key] : fallback, inspect: () => ({}) }), onDidChangeTextDocument: fn => { harness.changeDocument = fn; return noop(); } },
     window: { createStatusBarItem: statusItem, activeTextEditor: undefined, visibleTextEditors: [], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showErrorMessage(message) { throw new Error(message); }, showInformationMessage: async () => undefined,
       showWarningMessage: async message => { harness.warnings.push(message); return harness.answer; },
       showTextDocument: async (doc, options) => { harness.shown.push([path.relative(root, doc.uri.fsPath), options?.selection?.start.line]); return { document: doc, setDecorations() {}, revealRange() {} }; },
@@ -4412,5 +4412,71 @@ test('plan previews accept formatted prose but retain name validation and prior 
     assert.match(h.guideState().plan.error, /Unverified source names: ghost_helper/);
     assert.equal(h.guideState().plan.plan.steps[0].after, after, 'a genuinely unverified call keeps the previous preview');
     assert.equal(calls.length, 3, 'invalid names do not trigger paid retries');
+  } finally { await h.close(); }
+});
+
+
+test('Stop and source edits end background review without restarting or applying late results', async () => {
+  const path = require('node:path'), fs = require('node:fs/promises'), gates = [];
+  const h = await readerHarness({ prefetchNext: false, autoNotes: false, reviewModel: 'review-test' }, { engine: () => ({
+    generate: async opts => ({ title: 'Draft', summary: 'Saved.', sections: [{ title: 'Block', startLine: 1, endLine: opts.source.text.split('\n').length, pseudocode: 'Original text', lineMap: [] }], requestedModel: opts.model, requestedEffort: opts.effort, effort: opts.effort, ...(opts.level === 'logic' ? { refinement: { version: 1, status: 'pending', stepsRequested: 1, stepsCompleted: 0, selectedBlocks: [] } } : {}) }),
+    reviewDraft: args => new Promise(resolve => gates.push({ args, resolve }))
+  }) });
+  const reviewed = gate => ({ ...gate.args.initial, sections: gate.args.initial.sections.map(s => ({ ...s, pseudocode: 'Obsolete review text' })), refinement: { status: 'reviewed', selectedBlocks: [], stepsCompleted: 1 } });
+  try {
+    await h.commands.get('yamori.openAt')(new h.Uri(path.join(h.root, 'main.py')).toString(), 1);
+    const reader = h.readers().at(-1);
+    await h.until(() => gates.length === 1 && h.last(reader).review?.state === 'running', 'background review starts');
+    await reader.receive({ type: 'stop' });
+    assert.equal(gates[0].args.signal.aborted, true);
+    assert.equal(h.last(reader).review.state, 'stopped');
+    assert.equal(h.last(reader).result.refinement.status, 'incomplete');
+    assert.equal(h.last(reader).run.steps.find(s => s.id === 'review').state, 'stopped');
+    await reader.receive({ type: 'level', level: 'overview' });
+    await reader.receive({ type: 'level', level: 'logic' });
+    assert.equal(gates.length, 1, 'level switches do not restart a cancelled review');
+    gates[0].resolve(reviewed(gates[0]));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.last(reader).result.sections[0].pseudocode, 'Original text');
+    const file = path.join(h.root, 'pipeline/plan.py');
+    await h.commands.get('yamori.openAt')(new h.Uri(file).toString(), 1);
+    const changedReader = h.readers().at(-1);
+    await h.until(() => gates.length === 2 && h.last(changedReader).review?.state === 'running', 'another file starts review');
+    const text = (await fs.readFile(file, 'utf8')) + '\ndef extra():\n    return 1\n', doc = { uri: new h.Uri(file), isDirty: true, getText: () => text };
+    h.vscode.workspace.textDocuments.push(doc); h.changeDocument({ document: doc });
+    assert.equal(gates[1].args.signal.aborted, true, 'source edits immediately cancel obsolete review');
+    assert.equal(h.last(changedReader).stale, true);
+    assert.equal(h.last(changedReader).run.steps.find(s => s.id === 'review').state, 'stopped');
+    gates[1].resolve(reviewed(gates[1]));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.last(changedReader).result.sections[0].pseudocode, 'Original text');
+    assert.notEqual(h.last(changedReader).review?.state, 'running');
+  } finally { gates.forEach(g => g.resolve(g.args.initial)); await h.close(); }
+});
+
+test('refresh retry after a shared constant change never rewrites successful later batches', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), calls = []; let fail = true;
+  const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 0 }, { engine: () => ({ generate: async options => {
+    if (!options.sourceRefresh) return { title: 'Shared setting', summary: '', sections: [{ title: 'Setting', startLine: 1, endLine: 1, pseudocode: 'Use limit one.', lineMap: [] }, ...Array.from({ length: 6 }, (_,i) => ({ title: 'part' + i, startLine: i * 3 + 2, endLine: i * 3 + 3, pseudocode: 'Return the limit.', lineMap: [] }))] };
+    const refresh = options.sourceRefresh; calls.push([...refresh.staleBlocks]);
+    if (fail && refresh.staleBlocks.includes(0)) throw new Error('Fixture review failed');
+    return { ...refresh.previous, views: undefined, sections: refresh.previous.sections.map((section,i) => refresh.staleBlocks.includes(i) ? { ...section, pseudocode: 'Use the new limit.' } : section) };
+  } }) });
+  try {
+    const file = path.join(h.root, 'shared.py'), original = 'LIMIT = 1\n' + Array.from({ length: 6 }, (_,i) => 'def part' + i + '():\n    return LIMIT\n').join('\n');
+    await fs.writeFile(file, original); await h.commands.get('yamori.openAt')(h.Uri.file(file).toString(), 1);
+    const reader = h.readers().at(-1); await h.until(() => h.last(reader).result?.sections.length === 7, 'initial cache');
+    await fs.writeFile(file, original.replace('LIMIT = 1', 'LIMIT = 2'));
+    await reader.receive({ type: 'refresh' });
+    assert.deepEqual(calls, [[0,1,2,3],[4,5,6]]);
+    assert.deepEqual(h.last(reader).staleBlocks, [0,1,2,3]);
+    const successful = h.last(reader).result.sections.slice(4);
+    const progress = reader.messages.filter(m => m.type === 'state').map(m => m.state).filter(s => s.run?.batch);
+    assert.ok(progress.some(s => s.run.title.includes('Update batch 2 of 2')));
+    assert.ok(progress.every(s => s.run.operationStartedAt), 'elapsed time belongs to the whole update');
+    fail = false; calls.length = 0; await reader.receive({ type: 'refresh' });
+    assert.deepEqual(calls, [[0,1,2,3]], 'the changed global cannot requeue completed blocks');
+    assert.deepEqual(h.last(reader).result.sections.slice(4), successful);
+    assert.equal(h.last(reader).stale, false);
   } finally { await h.close(); }
 });

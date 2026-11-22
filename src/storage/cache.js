@@ -176,12 +176,22 @@ async function reconcileRefresh(source, value, origins, indexer) {
   const body = (snapshot, def) => linesOf(snapshot.text).slice((def.start || def.line) - snapshot.startLine, (def.end || def.line) - snapshot.startLine + 1).join('\n').trim();
   const key = def => def.kind + ':' + def.name;
   const occupied = new Set(), rows = [], changedNames = new Set(), changedGlobalLines = new Set(); let recovered = 0, removed = 0;
+  const dependencies = snapshot => JSON.stringify((snapshot.callContext?.definitions || []).map(def => [def.uri, def.symbol, def.watchSignature || def.fullHash]).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+  const currentDependencies = dependencies(source);
   for (let index = 0; index < value.sections.length; index++) {
     const section = value.sections[index], origin = origins.get(index);
     if (!origin) {
       // Scaffolds carry no user explanation and are reconstructed from syntax.
       if (/^# New source block\. Update this block to explain its behavior\.$/.test(section.pseudocode)) { removed++; continue; }
       rows.push({ section, dirty: true }); continue;
+    }
+    // A successful batch is already grounded in this exact source and helper
+    // context. Older unfinished blocks must not invalidate it again on retry.
+    // Preserve its conceptual boundaries, including sub-blocks of one function.
+    if (origin.source.fullHash === source.fullHash && origin.source.text === source.text && origin.source.startLine === source.startLine && dependencies(origin.source) === currentDependencies) {
+      const owners = current.filter(def => (def.start || def.line) <= section.endLine && def.end >= section.startLine);
+      owners.forEach(def => occupied.add(key(def)));
+      rows.push({ section, origin, dirty: false, currentBaseline: true, names: owners.map(def => def.name) }); recovered++; continue;
     }
     if (!parsed.has(origin.source.fullHash)) parsed.set(origin.source.fullHash, await indexer.extract(origin.source.name || source.name || new URL(source.uri).pathname, origin.source.text));
     const oldDefs = top(parsed.get(origin.source.fullHash).defs || []).filter(def => def.line >= origin.section.startLine && def.line <= origin.section.endLine);
@@ -249,7 +259,7 @@ async function reconcileRefresh(source, value, origins, indexer) {
   for (let pass = 0; pass <= rows.length; pass++) {
     let added = false;
     for (const row of rows) {
-      if (row.dirty) continue;
+      if (row.dirty || row.currentBaseline) continue;
       const code = linesOf(source.text).slice(row.section.startLine - source.startLine, row.section.endLine - source.startLine + 1).map((line,i) => {
         // A declaration's own name is not a use of a changed global. Keep
         // parameter defaults and recursive calls, which are real references.

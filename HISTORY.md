@@ -1,5 +1,12 @@
 # Release history
 
+### 0.26.16 · 2026-11-22
+- **Refresh retries:** keep successful blocks fresh when reconciling mixed historical snapshots against identical current source and dependency context; preserve sub-block boundaries instead of widening them. Older unfinished blocks cannot invalidate completed batches again.
+- **Visible batch progress:** show batch number, saved blocks and remaining work, with elapsed time for the whole refresh instead of restarting the timer per batch.
+
+### 0.26.15 · 2026-11-22
+- **Review lifecycle:** source changes and Stop cancel background review, retain cached text and mark review as stopped. Discarded results and setup failures always leave a terminal status; late completion cannot replace newer review state. Cancelled drafts no longer restart review just from switching levels.
+
 ### 0.26.14 · 2026-11-22
 - **Preview validation:** inline formatting alone no longer turns ordinary prose into an unverified source name. Identifier-shaped names and explicit calls/member references still receive source checks; failed checks keep the saved preview without automatic retries.
 

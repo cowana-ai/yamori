@@ -2050,6 +2050,7 @@ function createReader(context, navigation) {
   }
   function unavailable(reason) {
     if (!sourceMissing) missingStale = [...staleBlocks];
+    stopReviews('Source unavailable; the old review was stopped.');
     if (busy) cancel();
     sourceMissing = true; stale = true; changedAt = Date.now(); changeReason = reason;
     staleBlocks = new Set(result?.sections.map((_, index) => index) || []); clearHighlight(); queuePersist(); post();
@@ -2061,6 +2062,7 @@ function createReader(context, navigation) {
     const different = source.fullHash !== next.fullHash;
     if (sourceMissing) staleBlocks = new Set(missingStale);
     const metadataChanged = source.stamp?.modifiedAt !== next.stamp?.modifiedAt || source.stamp?.dirty !== next.stamp?.dirty || sourceMissing;
+    if (different) stopReviews('Source changed; the old review was stopped. Update from code when ready.');
     if (different && busy) { cancel(); activity.push('Source changed; previous explanation kept'); }
     if (different && result) {
       const analysis = analyzeSource(source, next, result, [...staleBlocks]);
@@ -2085,6 +2087,7 @@ function createReader(context, navigation) {
     if (!definitions.length) return;
     const affected = new Set(definitions.flatMap(def => dependencyBlocks(source, result, def.symbol)));
     if (!affected.size) return;
+    stopReviews('A used function changed; the old review was stopped.');
     if (busy) cancel();
     for (const def of definitions) dependencyBlocks(source, result, def.symbol).forEach(index => { staleBlocks.add(index); if (sourceMissing && !missingStale.includes(index)) missingStale.push(index); });
     result = { ...result, views: undefined, sections: result.sections.map((section, index) => staleBlocks.has(index) ? { ...section, lineMap: [] } : section) };
@@ -2267,7 +2270,7 @@ function createReader(context, navigation) {
           case 'effort': await chooseEffort(); break;
           case 'refinement': await chooseRefinement(); break;
           case 'palette': await chooseReadingColors(); break;
-          case 'stop': cancel(); activity.push('Stopped'); error = ''; post(); break;
+          case 'stop': stopReviews('Review stopped. Use Retry review to try again.'); cancel(); activity.push('Stopped'); error = ''; post(); break;
           case 'refresh': await refresh(); break;
           case 'refreshBlock': if (message.documentKey === view().documentKey) await refresh(message.index); break;
           case 'saveDraft': await saveDraft(message); break;
@@ -2485,6 +2488,19 @@ function createReader(context, navigation) {
       if (pendingReview && id === serial) startBackgroundReview(...pendingReview);
     }
   }
+  function stopReviews(reason) {
+    for (const [key, task] of backgroundReviews) {
+      task.abort(); backgroundReviews.delete(key);
+      if (reviewState?.task === task) reviewState = { key, state: 'stopped', text: reason };
+      const step = task.reviewOwner?.steps.find(step => step.id === 'review');
+      if (step?.state === 'active') Object.assign(step, { state: 'stopped', endedAt: Date.now(), detail: reason });
+    }
+    if (result?.refinement?.status === 'pending') {
+      result = { ...result, refinement: { ...result.refinement, status: 'incomplete', warning: reason } };
+      if (source) remember(source, options(), result);
+      queuePersist();
+    }
+  }
   // A cached draft whose review never finished (Yamori closed meanwhile) is
   // reviewed again once it is shown.
   function resumeReview(snapshot, opts, value) {
@@ -2494,15 +2510,17 @@ function createReader(context, navigation) {
   // unless the reader edited the explanation or the code changed meanwhile.
   async function startBackgroundReview(snapshot, opts, draft) {
     let key = keyFor(snapshot, opts);
-    if (backgroundReviews.has(key) || disposed) return;
+    if (disposed || !await stillCurrent(snapshot)) return;
+    if (backgroundReviews.has(key) || disposed || source?.fullHash !== snapshot.fullHash) return;
     const task = new AbortController(), owner = run && run.state !== 'running' && result === draft ? run : undefined;
-    backgroundReviews.set(key, task);
+    task.reviewOwner = owner; backgroundReviews.set(key, task);
+    reviewState = { key, task, state: 'running', text: 'Preparing the background review. You can read now.' };
     const reviewStep = () => owner?.steps.find(step => step.id === 'review');
     try {
       const [fast, review] = await Promise.all([quickModel(opts.provider, opts.cliPath), reviewerFor(opts)]);
       if (task.signal.aborted || disposed) return;
       const by = review?.model ? ' with ' + review.model : '';
-      reviewState = { key, state: 'running', text: 'Reviewing difficult blocks in the background' + by + '. You can read now; improved blocks swap in when it finishes.' };
+      reviewState = { key, task, state: 'running', text: 'Reviewing difficult blocks in the background' + by + '. You can read now; improved blocks swap in when it finishes.' };
       const step = reviewStep();
       if (step) Object.assign(step, { state: 'active', startedAt: Date.now(), endedAt: undefined, detail: 'In the background' + by });
       post();
@@ -2530,7 +2548,26 @@ function createReader(context, navigation) {
       if (done) Object.assign(done, { state: info.status === 'incomplete' ? 'stopped' : 'done', endedAt: Date.now(), detail: text });
       if (showing) result = reviewed;
       post();
-    } finally { for (const [name, value] of backgroundReviews) if (value === task) backgroundReviews.delete(name); }
+    } catch (errorValue) {
+      if (!task.signal.aborted && !disposed) {
+        const message = 'Review could not finish. The cached explanation is kept; use Retry review. ' + errorValue.message;
+        reviewState = { key, task, state: 'failed', text: message };
+        const step = reviewStep();
+        if (step?.state === 'active') Object.assign(step, { state: 'stopped', endedAt: Date.now(), detail: message });
+        if (result === draft) { result = { ...draft, refinement: { ...draft.refinement, status: 'incomplete', warning: message } }; remember(snapshot, opts, result); queuePersist(); }
+      }
+    } finally {
+      for (const [name, value] of backgroundReviews) if (value === task) backgroundReviews.delete(name);
+      // Every discarded or cancelled result must leave a terminal UI state.
+      // An older task must never clear the status of a newer review.
+      if (reviewState?.task === task && reviewState.state === 'running') {
+        const message = 'Review stopped because its draft or source changed. Cached text is kept.';
+        reviewState = { key, state: 'stopped', text: message };
+        const step = reviewStep();
+        if (step?.state === 'active') Object.assign(step, { state: 'stopped', endedAt: Date.now(), detail: message });
+      }
+      if (!disposed) post();
+    }
   }
   async function updateBlock(message) {
     if (busy || sourceMissing || staleBlocks.has(message.index) || !source || !result || !Number.isInteger(message.index)) return;
@@ -2644,10 +2681,10 @@ function createReader(context, navigation) {
       const fast = groups.length ? await quickModel(opts.provider, opts.cliPath) : undefined;
       const review = groups.length && opts.refinementSteps ? await reviewerFor(opts) : undefined;
       const syntax = await partIndexer.extract(contextSource.name || vscode.Uri.parse(contextSource.uri).fsPath, contextSource.text);
-      for (const indices of groups) {
+      for (const [batch, indices] of groups.entries()) {
         if (!await alive()) return;
-        progress = 'Updating ' + indices.length + ' affected blocks · ' + savedCount + ' saved';
-        startRun(contextSource, opts, undefined, progress); post();
+        progress = 'Update batch ' + (batch + 1) + ' of ' + groups.length + ' · ' + indices.length + ' blocks · ' + savedCount + ' saved · ' + remaining.size + ' remaining';
+        startRun(contextSource, opts, undefined, progress); run.batch = { index: batch + 1, total: groups.length }; run.operationStartedAt = startedAt; post();
         try {
           const sharedContext = refreshSupport(contextSource, indices.map(index => current.sections[index]), syntax.defs || []);
           const updated = await generate({ source: contextSource, ...opts, fast, review, sourceRefresh: { patch: true, previous: current, staleBlocks: indices, changedRanges, sharedContext }, signal: task.signal, onProgress: progressFor(id, task) });

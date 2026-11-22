@@ -859,9 +859,12 @@ function renderRun(s) {
     const box = node('section', undefined, 'run live'); box.setAttribute('role', 'status'); box.setAttribute('aria-live', 'polite');
     const head = node('div', undefined, 'run-head'), mascot = node('img'); mascot.src = ${JSON.stringify(logo)}; mascot.alt = '';
     const title = run.steps.find(step => step.state === 'active');
-    const total = node('span', clock(Date.now() - run.startedAt), 'run-time'); total.setAttribute('data-since', String(run.startedAt));
+    const operationStart = run.operationStartedAt || run.startedAt;
+    const total = node('span', clock(Date.now() - operationStart), 'run-time'); total.setAttribute('data-since', String(operationStart));
     head.append(mascot, node('span', title ? title.label : run.title, 'run-title'), total);
-    box.append(head, node('div', meta, 'run-meta'), steps);
+    box.append(head, node('div', meta, 'run-meta'));
+    if (run.batch) box.append(node('p', run.title, 'hint'));
+    box.append(steps);
     if (s.partial && s.result?.draftComplete) box.append(node('p', 'The draft below is ready to read. It may still improve while the review finishes.', 'hint'));
     content.append(box);
   } else {
