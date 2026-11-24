@@ -2794,7 +2794,7 @@ function createReader(context, navigation) {
         startRun(contextSource, { ...opts, refinementSteps: 0 }, undefined, progress); run.batch = { index: batch + 1, total: groups.length }; run.operationStartedAt = startedAt; post();
         try {
           const sharedContext = refreshSupport(contextSource, indices.map(index => current.sections[index]), syntax.defs || []);
-          const updated = await generate({ source: contextSource, ...opts, refinementSteps: 0, fast, sourceRefresh: { patch: true, previous: current, staleBlocks: indices, cardBlocks: indices.filter(index => upgrade && legacy.has(index)), changedRanges, sharedContext }, signal: task.signal, onProgress: progressFor(id, task) });
+          const updated = await generate({ source: contextSource, ...opts, refinementSteps: 0, fast, sourceRefresh: { patch: true, previous: current, staleBlocks: indices, cardBlocks: indices.filter(index => upgrade && (legacy.has(index) || parseCard(current.sections[index].pseudocode))), changedRanges, sharedContext }, signal: task.signal, onProgress: progressFor(id, task) });
           if (!await alive()) return;
           const unconverted = new Set(indices.filter(index => upgrade &&
             (legacy.has(index) || parseCard(current.sections[index].pseudocode)) && !parseCard(updated.sections[index].pseudocode)));

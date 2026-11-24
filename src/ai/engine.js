@@ -23,7 +23,7 @@ function schemaFor(level) {
 function requestSchema(level, single, refresh) {
   if (single) return { ...SCHEMA, properties: { ...SCHEMA.properties, sections: { ...SCHEMA.properties.sections, minItems: 1, maxItems: 1 } } };
   if (!refresh?.patch) return schemaFor(level);
-  return { ...SCHEMA, properties: { ...SCHEMA.properties, sections: wirePatchSections(refresh.staleBlocks) } };
+  return { ...SCHEMA, properties: { ...SCHEMA.properties, sections: wirePatchSections(refresh.staleBlocks, true, refresh.cardBlocks) } };
 }
 function lowerView(value, from, to) {
   if (ORDER.indexOf(to) >= ORDER.indexOf(from)) return undefined;
@@ -1378,6 +1378,9 @@ async function generate({ source, level, provider, cliPath, model = '', effort =
       const indices = data.sections.map(section => section.index), expected = sourceRefresh.staleBlocks;
       if (indices.length !== expected.length || new Set(indices).size !== indices.length || indices.some(index => !expected.includes(index))) throw new Error('The provider returned an incomplete or unexpected block patch. The cached explanation was kept.');
       if (indices.some((index, position) => result.sections[position].startLine !== sourceRefresh.previous.sections[index].startLine || result.sections[position].endLine !== sourceRefresh.previous.sections[index].endLine)) throw new Error('The block patch changed source boundaries. Cached blocks were kept.');
+      if (indices.some((index, position) => sourceRefresh.cardBlocks?.includes(index) && !parseCard(result.sections[position].pseudocode))) {
+        throw new Error('A required function card was returned as legacy prose.');
+      }
       const updates = new Map(indices.map((index, position) => [index, result.sections[position]]));
       result = parseResult(JSON.stringify({ ...sourceRefresh.previous, title: result.title, summary: result.summary, views: undefined, sections: sourceRefresh.previous.sections.map((section, index) => updates.get(index) || section) }), source);
     }
@@ -1399,20 +1402,31 @@ async function generate({ source, level, provider, cliPath, model = '', effort =
   const writer = level === 'overview' && fresh && fast ? { ...connection, ...fast } : connection;
   const companion = parallelOverview && requestStructured({ ...connection, ...fast, prompt: promptFor(source, 'overview'), schema: schemaFor('overview'), signal, showPreview: false })
     .then(response => { const view = parseResult(response.raw, source, { dropInvalidLinks: true, validateCards: true }); return { ...view, model: response.actualModel || fast.model || view.model }; }).catch(() => undefined);
-  const write = async () => {
-    if (!tools) return requestStructured({ ...writer, prompt: task, schema, onProgress, showPreview: true });
-    try { return await requestStructured({ ...writer, prompt: task + TOOLS_SECTION, schema, onProgress, showPreview: true, tools }); }
+  const write = async (prompt = task) => {
+    if (!tools) return requestStructured({ ...writer, prompt, schema, onProgress, showPreview: true });
+    try { return await requestStructured({ ...writer, prompt: prompt + TOOLS_SECTION, schema, onProgress, showPreview: true, tools }); }
     catch (error) {
       // A CLI that cannot start Yamori's tools still gets the inline project context.
       if (signal?.aborted || /took too long|Cancelled/.test(error.message)) throw error;
       onProgress?.({ phase: 'Yamori lookups unavailable; writing without them', stage: 'think' });
-      return requestStructured({ ...writer, prompt: task, schema, onProgress, showPreview: true });
+      return requestStructured({ ...writer, prompt, schema, onProgress, showPreview: true });
     }
   };
   // Fresh Logic explanations of bigger files are written as parallel parts.
   const useParts = fresh && level !== 'overview' && Array.isArray(parts) && parts.length >= 2 && parallel >= 2;
   const draft = async () => {
-    if (!useParts) return parse(await write());
+    if (!useParts) {
+      const response = await write();
+      try { return parse(response); }
+      catch (error) {
+        if (!patch || signal?.aborted) throw error;
+        onProgress?.({ phase: 'Repairing the refresh response', stage: 'write',
+          detail: 'The first response failed validation. Retrying the same batch once.' });
+        const repaired = await write(task + '\nRESPONSE REPAIR: ' + error.message +
+          ' Return the same requested indices exactly once. Use their current source bounds and the requested card format. Recheck every source range before responding.');
+        return parse(repaired);
+      }
+    }
     try {
       const response = await writeParts({ base: promptFor(source, level, SCHEMA), parts, writer, source, tools, signal, onProgress, parallel });
       const value = parse(response);

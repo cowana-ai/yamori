@@ -24,11 +24,13 @@ const wireCard = object({ p: text, i: text, r: text, x: text,
   s: list(text), c: list(text) });
 const cardSection = object({ title: text, startLine: integer, endLine: integer, card: wireCard });
 const WIRE_SCHEMA = { ...SCHEMA, properties: { ...SCHEMA.properties, sections: list({ anyOf: [legacySection, cardSection] }) } };
-function wirePatchSections(indices, includeBounds = true) {
-  const branches = WIRE_SCHEMA.properties.sections.items.anyOf.map(section => {
+function wirePatchSections(indices, includeBounds = true, cardBlocks = []) {
+  const forced = new Set(cardBlocks);
+  const branches = WIRE_SCHEMA.properties.sections.items.anyOf.flatMap(section => {
     const properties = { ...section.properties };
     if (!includeBounds) { delete properties.startLine; delete properties.endLine; }
-    return object({ index: { type: 'integer', enum: indices }, ...properties });
+    const allowed = properties.card ? indices : indices.filter(index => !forced.has(index));
+    return allowed.length ? [object({ index: { type: 'integer', enum: allowed }, ...properties })] : [];
   });
   return { type: 'array', minItems: indices.length, maxItems: indices.length, items: { anyOf: branches } };
 }

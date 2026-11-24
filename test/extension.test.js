@@ -4671,3 +4671,38 @@ test('legacy card upgrade saves each draft before starting a scoped background r
     await h.until(() => h.last(reader).result?.refinement?.status === 'skipped', 'background feedback applies');
   } finally { releaseSecond(); releaseReview(); await h.close(); }
 });
+
+test('refresh retries invalid provider cards with the requested indices and preserves cached neighbors', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-card-repair-'));
+  try {
+    const input = { name: 'sample.py', language: 'python', startLine: 1, text: 'def f():\n    return 1\n\nvalue = f()' };
+    const binary = path.join(dir, 'claude.js'), log = path.join(dir, 'calls.jsonl');
+    const main = { title: 'Sample', summary: 'Call f.', sections: [
+      { title: 'f', startLine: 1, endLine: 2, pseudocode: 'Return one.', lineMap: [] },
+      { title: 'Call', startLine: 4, endLine: 4, pseudocode: 'Call f.', lineMap: [] }
+    ] };
+    await fs.writeFile(binary, `const fs=require('fs');const args=process.argv.slice(2);
+if(args.includes('--help')){console.log('--safe-mode');process.exit(0)}
+let prompt='';process.stdin.on('data',data=>prompt+=data).on('end',()=>{
+const schema=JSON.parse(args[args.indexOf('--json-schema')+1]);
+const repaired=prompt.includes('RESPONSE REPAIR:');
+fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({repaired,schema})+'\\n');
+const section={index:0,title:'f',startLine:1,endLine:2,card:{p:'Return one.',i:'None',r:'One',x:'',s:[repaired?'2 Return one.':'3 Return one.'],c:[]}};
+console.log(JSON.stringify({type:'result',structured_output:{title:'Sample',summary:'Call f.',sections:[section]}}));
+});`);
+    const seen = [];
+    const result = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary,
+      refinementSteps: 0, sourceRefresh: { patch: true, previous: main, staleBlocks: [0], cardBlocks: [0] },
+      onProgress: update => seen.push(update.phase) });
+    const calls = (await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.deepEqual(calls.map(call => call.repaired), [false, true]);
+    const forms = calls[0].schema.properties.sections.items.anyOf;
+    assert.equal(forms.length, 1);
+    assert.ok(forms[0].properties.card);
+    assert.deepEqual(forms[0].properties.index.enum, [0]);
+    assert.ok(seen.includes('Repairing the refresh response'));
+    assert.equal(result.sections[0].lineMap[0].startLine, 2);
+    assert.deepEqual(result.sections[1], main.sections[1]);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
