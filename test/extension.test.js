@@ -4659,6 +4659,9 @@ test('legacy card upgrade saves each draft before starting a scoped background r
     const refresh = reader.receive({ type: 'upgradeCards' });
     await h.until(() => calls.length === 2, 'the second draft starts before review');
     assert.equal(reviews.length, 0);
+    const reviewStage = h.last(reader).run.steps.find(step => step.id === 'review');
+    assert.equal(reviewStage.state, 'queued');
+    assert.match(reviewStage.detail, /runs in the background/);
     assert.equal(h.last(reader).result.refinement.status, 'pending');
     assert.equal(h.last(reader).result.sections.filter(s => s.pseudocode.startsWith('PURPOSE:')).length, 5);
     assert.ok(calls.every(call => call.steps === 0 && call.indices.join() === call.cardBlocks.join()));

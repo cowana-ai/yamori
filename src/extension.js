@@ -2227,13 +2227,14 @@ function createReader(context, navigation) {
   function cancel() { serial++; controller?.abort(); controller = undefined; busy = false; preview = undefined; progress = undefined; startedAt = undefined; if (run?.state === 'running') finishRun('stopped'); clearHighlight(); }
   // What the reader sees while a request runs: who is writing, and each stage.
   const STAGES = [['context', 'Read the code and its context'], ['think', 'Think it through'], ['write', 'Write the explanation'], ['review', 'Review difficult blocks']];
-  function startRun(snapshot, opts, tools, title) {
+  function startRun(snapshot, opts, tools, title, { deferReview = false } = {}) {
     const definitions = snapshot.callContext?.definitions?.length || 0, terms = snapshot.projectContext?.glossary?.length;
     run = { title, state: 'running', provider: PROVIDERS[opts.provider], model: opts.model || '', effort: opts.effort || null, startedAt: Date.now(), lookups: 0,
-      steps: STAGES.map(([id, label]) => ({ id, label, state: id === 'review' && !opts.refinementSteps ? 'skipped' : 'waiting' })) };
+      steps: STAGES.map(([id, label]) => ({ id, label, state: id !== 'review' ? 'waiting' : !opts.refinementSteps ? 'skipped' : deferReview ? 'queued' : 'waiting' })) };
     run.steps[0] = { ...run.steps[0], state: 'done', startedAt: run.startedAt, endedAt: run.startedAt,
       detail: [definitions + ' called definition' + (definitions === 1 ? '' : 's'), snapshot.projectContext ? 'project guide' + (terms ? ' · ' + terms + ' term' + (terms === 1 ? '' : 's') : '') : 'no project guide yet', tools ? 'lookups on' : ''].filter(Boolean).join(' · ') };
     if (!opts.refinementSteps) run.steps[3].detail = 'Off (AI ▾ → Refine)';
+    else if (deferReview) run.steps[3].detail = 'Queued · runs in the background after drafts are saved';
   }
   function stage(id, detail, done) {
     if (!run || run.state !== 'running') return;
@@ -2241,7 +2242,7 @@ function createReader(context, navigation) {
     if (index < 0) return;
     run.steps.forEach((step, i) => { if (i < index && (step.state === 'active' || step.state === 'waiting')) Object.assign(step, { state: 'done', endedAt: now, startedAt: step.startedAt || now }); });
     const step = run.steps[index];
-    if (step.state === 'waiting' || step.state === 'skipped') Object.assign(step, { state: 'active', startedAt: now });
+    if (['waiting', 'skipped', 'queued'].includes(step.state)) Object.assign(step, { state: 'active', startedAt: now });
     if (detail) step.detail = detail;
     if (done) Object.assign(step, { state: 'done', endedAt: now });
   }
@@ -2791,7 +2792,7 @@ function createReader(context, navigation) {
       for (const [batch, indices] of groups.entries()) {
         if (!await alive()) return;
         progress = 'Update batch ' + (batch + 1) + ' of ' + groups.length + ' · ' + indices.length + ' blocks · ' + savedCount + ' saved · ' + remaining.size + ' remaining';
-        startRun(contextSource, { ...opts, refinementSteps: 0 }, undefined, progress); run.batch = { index: batch + 1, total: groups.length }; run.operationStartedAt = startedAt; post();
+        startRun(contextSource, opts, undefined, progress, { deferReview: true }); run.batch = { index: batch + 1, total: groups.length }; run.operationStartedAt = startedAt; post();
         try {
           const sharedContext = refreshSupport(contextSource, indices.map(index => current.sections[index]), syntax.defs || []);
           const updated = await generate({ source: contextSource, ...opts, refinementSteps: 0, fast, sourceRefresh: { patch: true, previous: current, staleBlocks: indices, cardBlocks: indices.filter(index => upgrade && (legacy.has(index) || parseCard(current.sections[index].pseudocode))), changedRanges, sharedContext }, signal: task.signal, onProgress: progressFor(id, task) });
@@ -2852,7 +2853,7 @@ function createReader(context, navigation) {
     let pendingReview;
     try {
       const tools = await agentTools(contextSource);
-      startRun(requestSource, { ...opts, refinementSteps: 0 }, tools, one ? 'Updating one block from the code' : 'Updating the explanation from the code'); post();
+      startRun(requestSource, opts, tools, one ? 'Updating one block from the code' : 'Updating the explanation from the code', { deferReview: true }); post();
       const updated = await generate({ source: requestSource, ...opts, refinementSteps: 0, tools, fast: await quickModel(opts.provider, opts.cliPath), initialDraft: !one && !stale && result === base && base.refinement?.status === 'incomplete' ? base : undefined, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: progressFor(id, task) });
       if (id !== serial || task.signal.aborted || source.fullHash !== previousSource.fullHash) return;
       if (!await stillCurrent(contextSource)) { await inspect(undefined, 'change'); return; }
