@@ -2187,12 +2187,43 @@ function createReader(context, navigation) {
     if (key !== runsKey) { runsKey = key; for (const controller of runControllers.values()) controller.abort(); runControllers.clear(); runs = {}; }
     return runs;
   }
-  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, checks: currentChecks(), writtenBy: result?.author?.kind === 'agent' ? result.author.name || 'an agent' : undefined, review: reviewState && source && reviewState.key === keyFor(source, options()) ? { state: reviewState.state, text: reviewState.text } : undefined, modelNotice, setupHint: !!error && isSetupProblem(error), level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, notebook: !!source?.notebook, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined, run, tour, focusLine, runs: currentRuns(),
+  let cardSyntax;
+  function legacyCardBlocks(value, snapshot, definitions) {
+    const lines = definitions.filter(def => ['function', 'method'].includes(def.kind))
+      .map(def => snapshot.startLine + def.line - 1);
+    return value.sections.flatMap((section, index) => !parseCard(section.pseudocode) &&
+      lines.some(line => section.startLine <= line && line <= section.endLine) ? [index] : []);
+  }
+  function syntaxForCards(snapshot) {
+    const file = snapshot.name || vscode.Uri.parse(snapshot.uri).fsPath;
+    if (cardSyntax?.hash === snapshot.fullHash && cardSyntax.file === file && cardSyntax.text === snapshot.text) return cardSyntax;
+    partIndexer ||= new project.Indexer();
+    const entry = { hash: snapshot.fullHash, file, text: snapshot.text };
+    cardSyntax = entry;
+    entry.promise = partIndexer.extract(snapshot.notebook ? file.replace(/\.ipynb$/i, '.py') : file, snapshot.text)
+      .catch(() => ({ defs: [] })).then(syntax => { entry.defs = syntax.defs || []; return syntax; });
+    return entry;
+  }
+  function visibleLegacyBlocks() {
+    if (!source || !result || !result.sections.some(section => !parseCard(section.pseudocode))) return [];
+    const syntax = syntaxForCards(source);
+    return syntax.defs ? legacyCardBlocks(result, source, syntax.defs) : [];
+  }
+  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, checks: currentChecks(), legacyCardBlocks: visibleLegacyBlocks(), writtenBy: result?.author?.kind === 'agent' ? result.author.name || 'an agent' : undefined, review: reviewState && source && reviewState.key === keyFor(source, options()) ? { state: reviewState.state, text: reviewState.text } : undefined, modelNotice, setupHint: !!error && isSetupProblem(error), level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, notebook: !!source?.notebook, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined, run, tour, focusLine, runs: currentRuns(),
     canRunTests: vscode.workspace.isTrusted !== false && !stale,
     blockTests: stale ? {} : Object.fromEntries(Object.entries(blockTests).map(([index, tests]) => [index, tests.map(({ id, name, function: fn, file, language }) => ({ id, name, function: fn, file, language }))])),
     symbols: symbols.map(({ name, file, line, kind, block, purpose, explained }) => ({ name, file, line, kind, block, purpose, explained })),
     glossary: (source?.projectContext?.glossary || []).map(term => ({ term: term.term, aliases: term.aliases || [], meaning: term.meaning || '', kind: term.kind || '', defined: term.defined || '' })) });
-  function post() { panel?.webview.postMessage({ type: 'state', state: view() }); }
+  function post() {
+    if (!panel) return;
+    const state = view();
+    panel.webview.postMessage({ type: 'state', state });
+    const syntax = cardSyntax;
+    if (syntax && !syntax.defs && !syntax.watching) {
+      syntax.watching = true;
+      void syntax.promise.then(() => { if (!disposed && cardSyntax === syntax) post(); });
+    }
+  }
   function cancel() { serial++; controller?.abort(); controller = undefined; busy = false; preview = undefined; progress = undefined; startedAt = undefined; if (run?.state === 'running') finishRun('stopped'); clearHighlight(); }
   // What the reader sees while a request runs: who is writing, and each stage.
   const STAGES = [['context', 'Read the code and its context'], ['think', 'Think it through'], ['write', 'Write the explanation'], ['review', 'Review difficult blocks']];
@@ -2289,6 +2320,12 @@ function createReader(context, navigation) {
           case 'palette': await chooseReadingColors(); break;
           case 'stop': stopReviews('Review stopped. Use Retry review to try again.'); cancel(); activity.push('Stopped'); error = ''; post(); break;
           case 'refresh': await refresh(); break;
+          case 'upgradeCards': await refresh(undefined, true); break;
+          case 'retryReview':
+            if (!busy && !sourceMissing && source && result?.refinement?.status === 'incomplete') {
+              await startBackgroundReview(source, options(), result);
+            }
+            break;
           case 'refreshBlock': if (message.documentKey === view().documentKey) await refresh(message.index); break;
           case 'saveDraft': await saveDraft(message); break;
           case 'copyDraft': { const draft = draftScopes.get(message.scope)?.get(message.key); if (draft) await vscode.env.clipboard.writeText(draft.draft); break; }
@@ -2567,6 +2604,8 @@ function createReader(context, navigation) {
     if (disposed || !await stillCurrent(snapshot)) return;
     if (backgroundReviews.has(key) || disposed || source?.fullHash !== snapshot.fullHash) return;
     const task = new AbortController(), owner = run && run.state !== 'running' && result === draft ? run : undefined;
+    const refreshBlocks = draft.refinement?.refreshBlocks;
+    const reviewScope = refreshBlocks?.length ? { patch: true, previous: draft, staleBlocks: refreshBlocks } : undefined;
     task.reviewOwner = owner; backgroundReviews.set(key, task);
     reviewState = { key, task, state: 'running', text: 'Preparing the background review. You can read now.' };
     const reviewStep = () => owner?.steps.find(step => step.id === 'review');
@@ -2580,12 +2619,15 @@ function createReader(context, navigation) {
       post();
       let reviewed;
       try {
-        reviewed = await reviewDraft({ initial: draft, source: snapshot, level: opts.level, provider: opts.provider, cliPath: opts.cliPath, model: opts.model, effort: opts.effort, fast, review, steps: opts.refinementSteps, signal: task.signal,
+        reviewed = await reviewDraft({ initial: draft, source: snapshot, level: opts.level, provider: opts.provider, cliPath: opts.cliPath, model: opts.model, effort: opts.effort, fast, review, sourceRefresh: reviewScope, steps: opts.refinementSteps, signal: task.signal,
           onProgress: update => { const active = reviewStep(); if (active && update.detail && !task.signal.aborted) { active.detail = update.detail + (by ? ' ·' + by : ''); post(); } } });
       } catch (error) {
         if (task.signal.aborted) return;
         reviewed = { ...draft, refinement: { version: REFINEMENT_VERSION, status: 'incomplete', stepsRequested: opts.refinementSteps, stepsCompleted: 0, selectedBlocks: [],
           warning: (error.code === 'YAMORI_FIDELITY' ? 'The reviewers flagged possible inaccuracies they could not fix. Read this explanation with care, or press Retry review. ' : 'Review could not finish. The draft is kept; press Retry review to try again. ') + error.message.slice(0, 200) } };
+      }
+      if (reviewScope && reviewed.refinement?.status === 'incomplete') {
+        reviewed = { ...reviewed, refinement: { ...reviewed.refinement, refreshBlocks } };
       }
       if (task.signal.aborted || disposed || !await stillCurrent(snapshot)) return;
       // An edit or a new explanation under this key since the draft wins.
@@ -2696,11 +2738,16 @@ function createReader(context, navigation) {
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(source.uri));
     if (!disposed) await vscode.window.showTextDocument(doc, { viewColumn: sourceColumn, preserveFocus: true });
   }
-  async function refreshAffected(base, contextSource, previousSource) {
+  async function refreshAffected(base, contextSource, previousSource, upgradeOnly) {
     cancel(); const id = serial, opts = options(contextSource), task = new AbortController(); controller = task;
     busy = true; error = ''; startedAt = Date.now(); activity = []; progress = 'Matching cached blocks to current source'; post();
-    const explicitRewrite = !stale;
-    let current = base, remaining = new Set(staleBlocks), savedCount = 0, failure;
+    const explicitRewrite = !stale && !upgradeOnly;
+    let current = base, remaining = new Set(staleBlocks), savedCount = 0, failure, reviewDraftAfterRefresh;
+    const drafted = new Set(base.refinement?.status === 'pending' ? base.refinement.refreshBlocks || [] : []);
+    const pendingRefinement = value => opts.refinementSteps && drafted.size ? {
+      ...value, refinement: { version: REFINEMENT_VERSION, status: 'pending',
+        stepsRequested: opts.refinementSteps, stepsCompleted: 0, selectedBlocks: [], refreshBlocks: [...drafted] }
+    } : value;
     const alive = async () => id === serial && !task.signal.aborted && source.fullHash === previousSource.fullHash && await stillCurrent(contextSource);
     const commit = async value => {
       const freshStatus = { ...status(), staleBlocks: [...remaining], removedBlocks: [], changedRanges: remaining.size ? changedRanges : [], sharedChange: false, sourceMissing: false, checkedAt: Date.now() };
@@ -2722,8 +2769,15 @@ function createReader(context, navigation) {
       }
       if (!current.sections.length) throw new Error('Cached blocks cannot be matched safely. Use a fresh explanation for the new source structure.');
       if (explicitRewrite || !remaining.size && sharedChange && !layout) remaining = new Set(current.sections.map((_,i) => i));
-      // Save local ownership repairs before inference. Existing text remains
-      // marked stale until its own patch passes fidelity review.
+      const syntax = await syntaxForCards(contextSource).promise;
+      if (!await alive()) return;
+      const legacy = new Set(legacyCardBlocks(current, contextSource, syntax.defs || []));
+      const upgrade = upgradeOnly || current.sections.some(section => parseCard(section.pseudocode));
+      // Layout reconciliation can change indices, so only carry the pending scope for a stable layout.
+      if (layout) drafted.clear();
+      for (const index of remaining) drafted.delete(index);
+      if (upgrade) for (const index of legacy) remaining.add(index);
+      // Save ownership repairs before inference. A validated draft clears its stale flag; refinement is separate.
       await commit(current);
       const groups = []; let group = [], size = 0;
       for (const index of remaining) {
@@ -2734,33 +2788,49 @@ function createReader(context, navigation) {
       }
       if (group.length) groups.push(group);
       const fast = groups.length ? await quickModel(opts.provider, opts.cliPath) : undefined;
-      const review = groups.length && opts.refinementSteps ? await reviewerFor(opts) : undefined;
-      const syntax = await partIndexer.extract(contextSource.name || vscode.Uri.parse(contextSource.uri).fsPath, contextSource.text);
       for (const [batch, indices] of groups.entries()) {
         if (!await alive()) return;
         progress = 'Update batch ' + (batch + 1) + ' of ' + groups.length + ' · ' + indices.length + ' blocks · ' + savedCount + ' saved · ' + remaining.size + ' remaining';
-        startRun(contextSource, opts, undefined, progress); run.batch = { index: batch + 1, total: groups.length }; run.operationStartedAt = startedAt; post();
+        startRun(contextSource, { ...opts, refinementSteps: 0 }, undefined, progress); run.batch = { index: batch + 1, total: groups.length }; run.operationStartedAt = startedAt; post();
         try {
           const sharedContext = refreshSupport(contextSource, indices.map(index => current.sections[index]), syntax.defs || []);
-          const updated = await generate({ source: contextSource, ...opts, fast, review, sourceRefresh: { patch: true, previous: current, staleBlocks: indices, changedRanges, sharedContext }, signal: task.signal, onProgress: progressFor(id, task) });
+          const updated = await generate({ source: contextSource, ...opts, refinementSteps: 0, fast, sourceRefresh: { patch: true, previous: current, staleBlocks: indices, cardBlocks: indices.filter(index => upgrade && legacy.has(index)), changedRanges, sharedContext }, signal: task.signal, onProgress: progressFor(id, task) });
           if (!await alive()) return;
-          const prior = new Set(remaining); indices.forEach(index => remaining.delete(index));
-          try { await commit(updated); } catch (error) { remaining = prior; throw error; }
-          savedCount += indices.length; activity.push('Saved ' + indices.length + ' updated blocks; ' + remaining.size + ' remaining');
+          const unconverted = new Set(indices.filter(index => upgrade &&
+            (legacy.has(index) || parseCard(current.sections[index].pseudocode)) && !parseCard(updated.sections[index].pseudocode)));
+          const accepted = indices.filter(index => !unconverted.has(index));
+          const prior = new Set(remaining);
+          accepted.forEach(index => { remaining.delete(index); drafted.add(index); });
+          const merged = unconverted.size ? { ...updated, sections: updated.sections.map((section, index) => unconverted.has(index) ? current.sections[index] : section) } : updated;
+          try {
+            if (accepted.length) { await commit(pendingRefinement(merged)); reviewDraftAfterRefresh = drafted.size && opts.refinementSteps ? current : undefined; }
+          } catch (error) { remaining = prior; accepted.forEach(index => drafted.delete(index)); throw error; }
+          savedCount += accepted.length;
+          activity.push('Saved ' + accepted.length + ' draft blocks; ' + remaining.size + ' remaining');
+          if (unconverted.size) {
+            failure = new Error(unconverted.size + ' blocks were returned in the legacy format. Their cached text was kept.');
+            finishRun('failed');
+          }
         } catch (error) {
           if (task.signal.aborted || id !== serial) return;
           failure = error; activity.push('Kept cached text for ' + indices.length + ' blocks: ' + error.message); finishRun('failed');
         }
       }
-      if (failure) { error = savedCount + ' blocks updated and cached; ' + remaining.size + ' still need review. ' + failure.message; finishRun('failed'); }
+      if (failure) { error = savedCount + ' blocks updated and cached; ' + remaining.size + ' still need updating. ' + failure.message; finishRun('failed'); }
       else activity.push(savedCount ? 'Affected blocks updated and cached; unchanged explanations reused' : 'Source alignment updated locally; no generation needed');
     } catch (errorValue) {
       if (id === serial && !task.signal.aborted) { error = errorValue.message; finishRun('failed'); }
     } finally {
-      if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); }
+      if (id === serial) {
+        if (run?.state === 'running') finishRun('done');
+        busy = false; controller = undefined; preview = undefined; progress = undefined; post();
+        if (reviewDraftAfterRefresh && result === reviewDraftAfterRefresh && !task.signal.aborted) {
+          void startBackgroundReview(contextSource, options(contextSource), reviewDraftAfterRefresh);
+        }
+      }
     }
   }
-  async function refresh(index) {
+  async function refresh(index, upgradeOnly = false) {
     if (!source) return navigation.open();
     if (busy) return;
     await inspect(undefined, 'refresh');
@@ -2776,29 +2846,38 @@ function createReader(context, navigation) {
     const requestSource = one ? await collectCallContext(scope) : scope;
     if (source.fullHash !== previousSource.fullHash || !await stillCurrent(contextSource)) { await inspect(undefined, 'change'); return; }
     if (Buffer.byteLength(requestSource.text) > MAX_BYTES) throw new Error('Select a smaller code range before refreshing.');
-    if (!one) { await refreshAffected(base, contextSource, previousSource); return; }
+    if (!one) { await refreshAffected(base, contextSource, previousSource, upgradeOnly); return; }
     cancel(); const id = serial, opts = options(contextSource), task = new AbortController(); controller = task;
     busy = true; error = ''; startedAt = Date.now(); activity = []; progress = one ? 'Updating cached block' : 'Updating cached explanation'; post();
+    let pendingReview;
     try {
       const tools = await agentTools(contextSource);
-      startRun(requestSource, opts, tools, one ? 'Updating one block from the code' : 'Updating the explanation from the code'); post();
-      const updated = await generate({ source: requestSource, ...opts, tools, fast: await quickModel(opts.provider, opts.cliPath), review: opts.refinementSteps ? await reviewerFor(opts) : undefined, initialDraft: !one && !stale && result === base && base.refinement?.status === 'incomplete' ? base : undefined, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: progressFor(id, task) });
+      startRun(requestSource, { ...opts, refinementSteps: 0 }, tools, one ? 'Updating one block from the code' : 'Updating the explanation from the code'); post();
+      const updated = await generate({ source: requestSource, ...opts, refinementSteps: 0, tools, fast: await quickModel(opts.provider, opts.cliPath), initialDraft: !one && !stale && result === base && base.refinement?.status === 'incomplete' ? base : undefined, sourceRefresh: { index: one ? index : undefined, patch: !one && !sharedChange && pending.length > 0 && pending.length < base.sections.length, previous: base, staleBlocks: pending, changedRanges, sharedContext: one ? contextSource.text.split('\n').slice(0, 40).map((line, i) => (contextSource.startLine + i) + ': ' + line).join('\n').slice(0, 6000) : '' }, signal: task.signal, onProgress: progressFor(id, task) });
       if (id !== serial || task.signal.aborted || source.fullHash !== previousSource.fullHash) return;
       if (!await stillCurrent(contextSource)) { await inspect(undefined, 'change'); return; }
       if (id !== serial || task.signal.aborted || source.fullHash !== previousSource.fullHash) return;
       let value;
       if (one) {
         const replacement = updated.sections[0];
+        const syntax = await syntaxForCards(contextSource).promise;
+        if (id !== serial || task.signal.aborted || !await stillCurrent(contextSource)) return;
+        const formatRequired = parseCard(original.pseudocode) || base.sections.some(section => parseCard(section.pseudocode)) &&
+          legacyCardBlocks(base, contextSource, syntax.defs || []).includes(index);
+        if (formatRequired && !parseCard(replacement.pseudocode)) throw new Error('The refreshed block is still in the legacy format. The cached explanation was kept.');
         value = { ...base, refinement: updated.refinement && { ...updated.refinement, selectedBlocks: updated.refinement.selectedBlocks.map(() => index) }, title: updated.title || base.title, summary: updated.summary || base.summary, views: undefined, model: updated.model || base.model, requestedModel: opts.model, requestedEffort: opts.effort, sections: base.sections.map((section, i) => i === index ? { ...replacement, title: replacement.title || section.title, startLine: section.startLine, endLine: section.endLine } : section) };
       } else value = updated;
+      if (opts.refinementSteps) value = { ...value, refinement: { version: REFINEMENT_VERSION, status: 'pending',
+        stepsRequested: opts.refinementSteps, stepsCompleted: 0, selectedBlocks: [], refreshBlocks: [index] } };
       const freshStatus = { ...status(), staleBlocks: one ? pending.filter(item => item !== index) : [], removedBlocks: one ? [...removedBlocks].filter(item => item !== index) : [], changedRanges: one ? changedRanges : [], sharedChange: one && sharedChange, sourceMissing: false, checkedAt: Date.now() };
       const revision = await persistRevision(contextSource, opts, value, freshStatus);
       const saved = await save(contextSource, { ...opts, revision }, value, freshStatus);
       if (id !== serial || task.signal.aborted) return;
       source = contextSource; trackSources(); result = value; refreshBase = undefined; restoreStatus({ ...freshStatus, savedAt: saved ? cacheSavedAt : undefined });
+      if (value.refinement?.status === 'pending') pendingReview = [contextSource, { ...opts, revision }, value];
       selectedModel = value.model; activity.push(!cacheEnabled() ? (one ? 'Block refreshed' : 'Explanation refreshed') : saved ? one ? 'Block refreshed and cached' : 'Explanation refreshed and cached' : 'Updated; local cache needs attention');
     } catch (e) { if (id === serial && !task.signal.aborted) { error = e.message; if (isSetupProblem(error)) clearProviderStatus(); finishRun('failed'); } }
-    finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); } }
+    finally { if (id === serial) { if (run?.state === 'running') finishRun('done'); busy = false; controller = undefined; preview = undefined; progress = undefined; post(); if (pendingReview) void startBackgroundReview(...pendingReview); } }
   }
   async function chooseProvider() {
     const picked = await vscode.window.showQuickPick([

@@ -675,8 +675,20 @@ function render(s) {
   if (s.tour) renderTour(s);
   if (s.result?.refinement?.warning) {
     const notice = node('div', undefined, 'notice'); notice.setAttribute('role', 'status'); notice.append(node('p', s.result.refinement.warning));
-    if (s.result.refinement.status === 'incomplete') { const retry = node('button', 'Retry review'); retry.disabled = !!s.busy || !!s.sourceMissing; retry.addEventListener('click', () => { flushDrafts(); send('refresh'); }); notice.append(retry); }
+    if (s.result.refinement.status === 'incomplete') { const retry = node('button', 'Retry review'); retry.disabled = !!s.busy || !!s.sourceMissing; retry.addEventListener('click', () => { flushDrafts(); send('retryReview'); }); notice.append(retry); }
     content.append(notice);
+  }
+  if (s.result?.refinement?.status === 'pending' && s.busy) {
+    content.append(node('p', 'Updated drafts are saved. Review is pending while the remaining batches are written.', 'notice'));
+  }
+  if (s.legacyCardBlocks?.length) {
+    const count = s.legacyCardBlocks.length;
+    const notice = node('div', undefined, 'notice');
+    notice.append(node('p', count + ' function block' + (count === 1 ? ' still uses' : 's still use') + ' the legacy format.'));
+    const upgrade = node('button', 'Upgrade legacy cards');
+    upgrade.disabled = !!s.busy || !!s.sourceMissing;
+    upgrade.addEventListener('click', () => { flushDrafts(); send('upgradeCards'); });
+    notice.append(upgrade); content.append(notice);
   }
   if (s.result?.sections?.some(section => section.omittedSourceLinks > 0)) { const notice = node('p', 'Some AI source links were invalid and have been disabled. The explanation is still readable.', 'notice source-links'); notice.setAttribute('role', 'status'); content.append(notice); }
   if (s.modelNotice) content.append(node('p', s.modelNotice, 'notice'));
@@ -753,7 +765,7 @@ function render(s) {
         if (card) appendCardSummary(label, card);
         button.append(node('span', String(index + 1).padStart(2, '0'), 'map-number'), label);
         const draft = drafts.get(draftKey(s, index));
-        const detail = blockIsStale(s, index) ? (s.removedBlocks?.includes(index) ? 'Removed' : 'Changed') : draft && (draft.draft !== draft.baseText || draft.instruction) ? 'Draft' : section.startLine ? 'L' + section.startLine + '–' + section.endLine : 'Writing…';
+        const detail = blockIsStale(s, index) ? (s.removedBlocks?.includes(index) ? 'Removed' : 'Changed') : draft && (draft.draft !== draft.baseText || draft.instruction) ? 'Draft' : s.legacyCardBlocks?.includes(index) ? 'Legacy format' : section.startLine ? 'L' + section.startLine + '–' + section.endLine : 'Writing…';
         button.append(node('span', detail, 'map-range'), node('span', '→', 'map-arrow'));
         button.addEventListener('click', () => openBlock(index)); item.append(button); list.append(item);
       });

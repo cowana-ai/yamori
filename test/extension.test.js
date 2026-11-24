@@ -436,7 +436,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
   all.length=0;visit(elements.content);assert.equal(all.filter(el=>el.tag==='li').length,1,'blank activity entries are omitted');assert.ok(!all.some(el=>el.textContent==='Big ideas. Less guesswork.'),'a failure never shows the first-use welcome screen');
   all.find(el=>el.textContent==='Try again').events.click();assert.equal(sent.at(-1).type,'refresh');
   receive({data:{type:'state',state:{...renderedState,result:{...renderedState.result,refinement:{status:'incomplete',warning:'Review incomplete. Draft cached.'}}}}});
-  all.length=0;visit(elements.content);assert.ok(all.some(el=>el.textContent==='Draft · review incomplete'));all.find(el=>el.textContent==='Retry review').events.click();assert.equal(sent.at(-1).type,'refresh');
+  all.length=0;visit(elements.content);assert.ok(all.some(el=>el.textContent==='Draft · review incomplete'));all.find(el=>el.textContent==='Retry review').events.click();assert.equal(sent.at(-1).type,'retryReview');
   const mapState = { ...renderedState, result: { ...valid, sections: [renderedState.result.sections[0], { ...valid.sections[0], title: 'Count the matches', pseudocode: 'Return the number of matches.' }] } };
   receive({ data: { type: 'state', state: mapState } });
   all.length = 0; visit(elements.content);
@@ -4369,7 +4369,7 @@ test('whole-file refresh isolates failed affected batches, caches successes and 
     await fs.writeFile(file, original.replace(/return 1/g, (value,offset) => offset < original.indexOf('def part6') ? 'return 2' : value));
     await reader.receive({ type: 'refresh' });
     assert.equal(calls.length, 2); assert.ok(calls.every(batch => batch.length <= 4));
-    assert.match(h.last(reader).error, /2 blocks updated and cached; 4 still need review/);
+    assert.match(h.last(reader).error, /2 blocks updated and cached; 4 still need updating/);
     assert.deepEqual(h.last(reader).staleBlocks, [0,1,2,3]);
     assert.equal(h.last(reader).result.sections[4].pseudocode, 'Return 2.');
     assert.equal(h.last(reader).result.sections[0].pseudocode, 'Return 1.', 'failed work keeps the previous readable text');
@@ -4622,4 +4622,52 @@ test('compact cards expand into canonical cached sections with only actionable l
   assert.match(promptFor(source, 'logic'), /Only steps and checks carry source links/);
   section.card.s[0] = '2-16 If email is empty';
   assert.throws(() => parseResult(JSON.stringify(value), source, { dropInvalidLinks: true }), /invalid compact function card/);
+});
+
+test('legacy card upgrade saves each draft before starting a scoped background review', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const calls = [], reviews = [];
+  let releaseSecond, releaseReview;
+  const second = new Promise(resolve => { releaseSecond = resolve; });
+  const reviewDone = new Promise(resolve => { releaseReview = resolve; });
+  const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 1 }, { engine: () => ({
+    generate: async opts => {
+      if (!opts.sourceRefresh) return { title: 'Functions', summary: '', sections: Array.from({ length: 6 }, (_, i) => ({
+        title: 'part' + i, startLine: i * 3 + 1, endLine: i * 3 + 2,
+        pseudocode: i === 5 ? 'PURPOSE: Return a value.\nINPUTS: None\nRETURNS: One\nSTEPS:\n- Return 1.' : 'Return 1.',
+        lineMap: i === 5 ? [{ pseudocodeLine: 5, startLine: 17, endLine: 17 }] : []
+      })) };
+      const refresh = opts.sourceRefresh;
+      calls.push({ indices: [...refresh.staleBlocks], cardBlocks: [...refresh.cardBlocks], steps: opts.refinementSteps });
+      if (calls.length === 2) await second;
+      return { ...refresh.previous, sections: refresh.previous.sections.map((section, index) =>
+        refresh.staleBlocks.includes(index) ? { ...section, pseudocode: 'PURPOSE: Return a value.\nINPUTS: None\nRETURNS: One\nSTEPS:\n- Return 1.',
+          lineMap: [{ pseudocodeLine: 5, startLine: section.endLine, endLine: section.endLine }] } : section) };
+    },
+    reviewDraft: async opts => {
+      reviews.push([...opts.sourceRefresh.staleBlocks]);
+      await reviewDone;
+      return { ...opts.initial, refinement: { version: 1, status: 'skipped', stepsRequested: 1, stepsCompleted: 0, selectedBlocks: [] } };
+    }
+  }) });
+  try {
+    const file = path.join(h.root, 'sample.py');
+    await fs.writeFile(file, Array.from({ length: 6 }, (_, i) => 'def part' + i + '():\n    return 1\n').join('\n'));
+    await h.commands.get('yamori.openAt')(h.Uri.file(file).toString(), 1);
+    const reader = h.readers().at(-1);
+    await h.until(() => h.last(reader).legacyCardBlocks?.length === 5, 'legacy functions are named in reader state');
+    const refresh = reader.receive({ type: 'upgradeCards' });
+    await h.until(() => calls.length === 2, 'the second draft starts before review');
+    assert.equal(reviews.length, 0);
+    assert.equal(h.last(reader).result.refinement.status, 'pending');
+    assert.equal(h.last(reader).result.sections.filter(s => s.pseudocode.startsWith('PURPOSE:')).length, 5);
+    assert.ok(calls.every(call => call.steps === 0 && call.indices.join() === call.cardBlocks.join()));
+    releaseSecond(); await refresh;
+    await h.until(() => reviews.length === 1, 'review starts after the drafts are visible');
+    assert.deepEqual(JSON.parse(JSON.stringify(reviews)), [[0, 1, 2, 3, 4]]);
+    assert.equal(h.last(reader).busy, false);
+    assert.equal(h.last(reader).legacyCardBlocks.length, 0);
+    releaseReview();
+    await h.until(() => h.last(reader).result?.refinement?.status === 'skipped', 'background feedback applies');
+  } finally { releaseSecond(); releaseReview(); await h.close(); }
 });
