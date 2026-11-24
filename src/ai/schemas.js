@@ -15,6 +15,23 @@ const SCHEMA = {
     } }
   }, required: ['title', 'summary', 'sections']
 };
+// The provider sends compact card records. Only canonical sections reach the cache.
+const text = { type: 'string' }, integer = { type: 'integer' };
+const object = properties => ({ type: 'object', additionalProperties: false, properties, required: Object.keys(properties) });
+const list = items => ({ type: 'array', items });
+const legacySection = SCHEMA.properties.sections.items;
+const wireCard = object({ p: text, i: text, r: text, x: text,
+  s: list(text), c: list(text) });
+const cardSection = object({ title: text, startLine: integer, endLine: integer, card: wireCard });
+const WIRE_SCHEMA = { ...SCHEMA, properties: { ...SCHEMA.properties, sections: list({ anyOf: [legacySection, cardSection] }) } };
+function wirePatchSections(indices, includeBounds = true) {
+  const branches = WIRE_SCHEMA.properties.sections.items.anyOf.map(section => {
+    const properties = { ...section.properties };
+    if (!includeBounds) { delete properties.startLine; delete properties.endLine; }
+    return object({ index: { type: 'integer', enum: indices }, ...properties });
+  });
+  return { type: 'array', minItems: indices.length, maxItems: indices.length, items: { anyOf: branches } };
+}
 const REVIEW_SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
@@ -113,7 +130,7 @@ const EXPLANATION_DATA = {
     views: { type: 'object' }
   }
 };
-module.exports = { SCHEMA, REVIEW_SCHEMA, SELECTION_SCHEMA, EXPLANATION_DATA, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, SIMULATION_SCHEMA, FLOW_SCHEMA, PLAN_SCHEMA, PLAN_PATCH_SCHEMA, PLAN_SESSION_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA };
+module.exports = { SCHEMA, WIRE_SCHEMA, wirePatchSections, REVIEW_SCHEMA, SELECTION_SCHEMA, EXPLANATION_DATA, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, SIMULATION_SCHEMA, FLOW_SCHEMA, PLAN_SCHEMA, PLAN_PATCH_SCHEMA, PLAN_SESSION_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA };
 
 // Build-only dependencies: production loads the generated standalone validators.
 if (require.main === module) {

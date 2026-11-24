@@ -1123,7 +1123,7 @@ test('a batched source refresh returns only changed blocks and merges untouched 
   try {
     const reply = {title:previous.title,summary:previous.summary,sections:[{...previous.sections[0],index:0,pseudocode:'Set x to 2.'}]};
     await fs.writeFile(binary, 'const fs=require("node:fs"),a=process.argv.slice(2),schema=JSON.parse(fs.readFileSync(a[a.indexOf("--output-schema")+1],"utf8"));'+
-      'if(schema.properties.views||schema.properties.sections.maxItems!==1||schema.properties.sections.items.properties.index.enum[0]!==0)process.exit(3);'+
+      'if(schema.properties.views||schema.properties.sections.maxItems!==1||!schema.properties.sections.items.anyOf.every(item=>item.properties.index.enum[0]===0))process.exit(3);'+
       'let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{if(!prompt.includes("CACHED DOCUMENT DATA")||!prompt.includes("Keep this useful cached note"))process.exit(4);const reply='+JSON.stringify(reply)+';if(a.includes("bad"))reply.sections[0].index=1;if(a.includes("bounds")){reply.sections[0].startLine=11;reply.sections[0].endLine=11;}fs.writeFileSync(a[a.indexOf("--output-last-message")+1],JSON.stringify(reply))});');
     const options={source:{...source,text:'x = 2\nprint(x)'},level:'logic',provider:'codex',cliPath:binary,sourceRefresh:{previous,patch:true,staleBlocks:[0]}};
     const value=await generate(options);
@@ -2358,7 +2358,7 @@ test('quick jobs use a fast model: the Overview is written in parallel, Logic an
     await fs.writeFile(binary, `const a=process.argv.slice(2),fs=require('fs');if(a.includes('--help')){console.log('--safe-mode');process.exit(0)}
 let prompt='';process.stdin.on('data',d=>prompt+=d).on('end',()=>{const schema=JSON.parse(a[a.indexOf('--json-schema')+1]),model=a.includes('--model')?a[a.indexOf('--model')+1]:'';
 const kind=schema.properties.blocks?'select':schema.properties.score?'review':/Detail: overview\\./.test(prompt)?'overview':'logic';
-fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({kind,model,effort:a.includes('--effort')?a[a.indexOf('--effort')+1]:null,views:!!schema.properties.views,link:schema.properties.sections?.items?.properties?.lineMap?.items,companions:/LOWER DETAIL VIEWS/.test(prompt),triple:/\\[pseudocodeLine, startLine, endLine\\] triple/.test(prompt)})+'\\n');
+fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({kind,model,effort:a.includes('--effort')?a[a.indexOf('--effort')+1]:null,views:!!schema.properties.views,link:schema.properties.sections?.items?.anyOf?.[0]?.properties?.lineMap?.items,card:!!schema.properties.sections?.items?.anyOf?.[1]?.properties?.card,companions:/LOWER DETAIL VIEWS/.test(prompt),triple:/\\[pseudocodeLine, startLine, endLine\\] triple/.test(prompt)})+'\\n');
 const out=kind==='select'?{blocks:[]}:kind==='review'?{score:1,faithful:true,issues:[]}:kind==='overview'?{...${JSON.stringify(overview)},views:{}}:${JSON.stringify(logic)};
 setTimeout(()=>process.stdout.write(JSON.stringify({type:'result',structured_output:out,modelUsage:{[model||'claude-opus-test']:{}}})),kind==='logic'?300:50);});`);
     const read = async () => (await fs.readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
@@ -2368,7 +2368,7 @@ setTimeout(()=>process.stdout.write(JSON.stringify({type:'result',structured_out
     const main = calls.find(call => call.kind === 'logic'), side = calls.find(call => call.kind === 'overview');
     assert.deepEqual([main.model, main.effort, main.views, main.companions], ['opus', 'medium', false, false], 'the Logic answer carries no companion view');
     assert.deepEqual([side.model, side.effort], ['haiku', 'low'], 'the Overview is written by the fast model');
-    assert.deepEqual(main.link, { type: 'array', items: { type: 'integer' }, minItems: 3, maxItems: 3 }); assert.ok(main.triple, 'the prompt asks for compact triples');
+    assert.deepEqual(main.link, { type: 'array', items: { type: 'integer' }, minItems: 3, maxItems: 3 }); assert.ok(main.triple, 'legacy prose still uses compact triples'); assert.ok(main.card, 'function cards have their own structured response schema');
     assert.deepEqual(calls.find(call => call.kind === 'select').model, 'haiku', 'picking blocks is a quick job');
     assert.equal(result.views.overview.title, 'Overview'); assert.equal(result.views.overview.model, 'haiku');
     assert.deepEqual(result.views.overview.sections[0].lineMap, [{ pseudocodeLine: 1, startLine: 11, endLine: 11 }], 'a fast model\'s one bad link is dropped, not the whole Overview');
@@ -4598,4 +4598,28 @@ test('reader shows collapsed function summaries and links nested steps and edge 
   assert.equal(find('card-symbol').textContent, 'attention()');
   assert.equal(all(elements.content).filter(el => el.className?.split(' ').includes('card-annotation')).length, 3);
   assert.equal(find('card-test-action'), undefined);
+});
+
+test('compact cards expand into canonical cached sections with only actionable links', () => {
+  const { parseResult, partialView, promptFor } = require('../src/ai/engine');
+  const { parseCard } = require('../src/ai/cards');
+  const section = { title: 'lookup', startLine: 1, endLine: 14, card: {
+    p: 'Find a user.', i: 'email', r: 'User or null', x: 'Database read',
+    s: ['2-3 If email is empty\nWHY: likely avoids an unnecessary query', '3     Return null', '13 Query the user index'],
+    c: ['+2-3 Empty email -> check the query is skipped', '!13 Database unavailable -> check error propagation']
+  } };
+  const value = { title: 'Users', summary: 'Find a user.', sections: [section] };
+  const source = { name: 'users.py', language: 'python', startLine: 1, text: 'code\n'.repeat(15) };
+  const parsed = parseResult(JSON.stringify({ ...value, views: { overview: value } }), source, { validateCards: true });
+  const stored = parsed.sections[0];
+  assert.equal(stored.card, undefined);
+  assert.deepEqual(parsed.views.overview.sections[0], stored);
+  assert.deepEqual(stored.lineMap.map(link => link.pseudocodeLine), [5, 7, 8, 11, 12]);
+  assert.deepEqual(parseCard(stored.pseudocode).rows.filter(row => row.number).map(row => row.number), ['1', '1.1', '2', '✓', '⚠']);
+  assert.deepEqual(parseResult(JSON.stringify(parsed), source), parsed);
+  const preview = partialView(JSON.stringify({ ...value, views: { overview: { title: 'Hidden', sections: [section] } } }));
+  assert.deepEqual(preview.sections, [{ title: 'lookup', pseudocode: stored.pseudocode }]);
+  assert.match(promptFor(source, 'logic'), /Only steps and checks carry source links/);
+  section.card.s[0] = '2-16 If email is empty';
+  assert.throws(() => parseResult(JSON.stringify(value), source, { dropInvalidLinks: true }), /invalid compact function card/);
 });
