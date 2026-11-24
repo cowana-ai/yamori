@@ -17,7 +17,7 @@ const CARD_FORMAT = `FUNCTION AND METHOD CARDS (overrides conflicting grouping a
   ⚠ scenario -> behaviour worth checking
   ✓ scenario -> explicitly handled behaviour worth checking
 - Start every step with "- " after its indentation. Nest branch consequences by four spaces. The reader numbers steps. Map each step and each edge case to its smallest relevant inclusive source range using lineMap. Map other lines as required by the surrounding request.
-- Include at most ${EDGE_CASE_LIMIT} distinct, concrete edge cases, only when the function spans at least ${EDGE_CASE_MIN_LINES} source lines and there is something worth checking. Omit the entire EDGE CASES heading otherwise. Treat edge cases as test ideas, not guarantees. When handling is not visible, qualify the expected behaviour and mark it ⚠.
+- Include at most ${EDGE_CASE_LIMIT} distinct, concrete edge cases or caveats, only when the function spans at least ${EDGE_CASE_MIN_LINES} source lines and there is something worth checking. Omit the entire EDGE CASES heading otherwise. Include material assumptions, ordering, numeric, state, and resource caveats when grounded in the source. Phrase each item as a scenario or condition -> behaviour worth checking, not a guarantee. When handling is not visible, qualify the expected behaviour and mark it ⚠.
 - Keep important source comments beside their steps as # notes. Reserve new WHY:, SHAPES:, and FORMULA: annotations for the refinement pass. Preserve useful existing annotations when editing or refreshing a card.`;
 
 const CARD_REFINEMENT = `For existing function cards, preserve the card format, step links and edge-case links. Decide independently for each step whether to add any of these optional indented lines immediately below it:

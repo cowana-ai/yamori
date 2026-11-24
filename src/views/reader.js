@@ -219,13 +219,7 @@ details:not([open]) .section-heading::after { content: '+'; }
 details:not([open]) .section-heading { border-bottom-color: transparent; }
 .card-purpose { display: block; color: var(--read-muted); font-size: 12px; font-weight: 400; }
 .card-risk-count { display: inline-block; font-size: 11px; margin-top: 4px; color: var(--vscode-editorWarning-foreground, var(--read-ink)); }
-.pseudocode-card .card-heading { font-weight: 700; margin-top: 6px; }
-.pseudocode-card .code-line { grid-template-columns: 4.2em minmax(0, 1fr); }
 .reading-block[open] .card-closed-summary { display: none; }
-.pseudocode-card .card-annotation { color: var(--read-muted); }
-.pseudocode-card .card-annotation .step-body { margin-inline-start: 1em; }
-.pseudocode-card .card-handled .step-number { color: var(--vscode-testing-iconPassed, var(--read-ink)); }
-.pseudocode-card .card-risk .step-number { color: var(--vscode-editorWarning-foreground, var(--read-ink)); }
 .block-index { font: 600 11px ui-monospace, monospace; min-width: 20px; color: var(--read-muted); }
 h2 { flex: 1; font-size: 15px; line-height: 1.5; font-weight: 650; margin: 0; }
 .line { font: 10px ui-monospace, monospace; white-space: nowrap; }
@@ -343,6 +337,65 @@ h1 { font-size: 22px; line-height: 1.3; font-weight: 650; margin: 0 0 12px; lett
 ${READING_STYLES}.block-reactions { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--read-border); }
 .block-reactions button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 0; font-size: 11px; }
 .reaction-icon { display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--read-border); font: 700 12px ui-monospace, monospace; }
+details.function-card {
+  --card-border: color-mix(in srgb, var(--read-border) 45%, var(--read-surface));
+  --card-blue: #76baff;
+  --card-symbol: #8ecfeb;
+  --card-green: #8bcf91;
+  --card-gold: #e3ba71;
+  --card-violet: #bdacf8;
+  --card-teal: #74d5c9;
+  border-color: var(--card-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--read-ink) 3%, var(--read-surface));
+}
+body.vscode-light:not([data-palette="slate"]) .function-card, body[data-palette="paper"] .function-card {
+  --card-blue: #175a9b; --card-symbol: #146487; --card-green: #306d3a;
+  --card-gold: #815a14; --card-violet: #59429c; --card-teal: #146e65;
+}
+.function-card .section-heading { padding: 15px 16px 9px; align-items: flex-start; border: 0; }
+.function-card .section-heading > [role="heading"] { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 650; }
+.function-card .block-index { display: grid; place-items: center; width: 32px; min-height: 32px; border: 1px solid var(--card-border); border-radius: 6px; }
+.function-card .block-actions button { min-width: 26px; font-size: 15px; border-radius: 4px; }
+.card-symbol-line { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 9px; margin-top: 3px; }
+.card-symbol { color: var(--card-symbol); font: 12px/1.4 ui-monospace, monospace; }
+.card-source-chip { font: 10px/1.25 ui-monospace, monospace; color: var(--read-muted); border: 1px solid var(--card-border); border-radius: 4px; padding: 2px 5px; white-space: nowrap; }
+.pseudocode-card { display: block; padding: 6px 16px 12px; font: 13px/1.5 var(--vscode-font-family, system-ui); }
+.pseudocode-card .code-line { grid-template-columns: 2.3em minmax(0, 1fr) auto; min-height: 0; gap: 5px; padding: 6px 8px; border-radius: 5px; }
+.pseudocode-card .code-line.blank { height: 6px; padding: 0; }
+.pseudocode-card .card-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 9px; padding: 0; margin: 12px 0 6px; }
+.pseudocode-card .card-heading .step-body { flex: 1 1 160px; }
+.pseudocode-card .card-heading .step-number { display: none; }
+.pseudocode-card .card-group .card-field-label { flex-basis: auto; }
+.pseudocode-card .card-group { border-top: 1px solid var(--card-border); border-radius: 0; padding-top: 11px; }
+.pseudocode-card .card-purpose-field { display: block; margin-top: 7px; }
+.pseudocode-card .card-purpose-field .step-body { display: block; margin-top: 3px; }
+.card-field-label { flex: 0 0 78px; color: var(--read-muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.pseudocode-card .step-number { padding-top: 0; font-size: 11px; }
+.pseudocode-card .card-annotation { padding-block: 2px 7px; color: var(--read-muted); font-size: 12px; }
+.card-annotation-tag, .card-edge-count { padding: 2px 5px; border-radius: 4px; font: 700 9px/1.3 ui-monospace, monospace; letter-spacing: .04em; white-space: nowrap; }
+.card-annotation-tag { margin-inline-end: 6px; color: var(--card-violet); background: color-mix(in srgb, var(--card-violet) 13%, transparent); }
+.card-annotation-tag.shapes { color: var(--card-teal); background: color-mix(in srgb, var(--card-teal) 12%, transparent); }
+.pseudocode-card .card-handled { background: color-mix(in srgb, var(--card-green) 11%, transparent); margin-bottom: 4px; }
+.pseudocode-card .card-risk { background: color-mix(in srgb, var(--card-gold) 12%, transparent); margin-bottom: 4px; }
+.pseudocode-card .card-handled .step-number { color: var(--card-green); }
+.pseudocode-card .card-risk .step-number, .card-edge-count { color: var(--card-gold); }
+.card-edge-count { border: 1px solid color-mix(in srgb, var(--card-gold) 40%, transparent); border-radius: 12px; }
+.pseudocode-card .linked:hover { background: color-mix(in srgb, var(--card-blue) 12%, transparent); }
+.pseudocode-card .card-active { background: color-mix(in srgb, var(--card-blue) 19%, transparent); box-shadow: inset 2px 0 var(--card-blue); }
+.card-active .card-source-chip, .card-active .step-number { color: var(--card-blue); }
+.function-card .block-reactions { margin: 0 16px; padding: 10px 0 15px; gap: 6px; border-color: var(--card-border); }
+.function-card .block-reactions button { border: 1px solid var(--card-border); border-radius: 5px; padding: 3px 8px; }
+.function-card .reaction-icon { border: 0; }
+.function-card button.card-test-action { color: var(--card-gold); border-color: color-mix(in srgb, var(--card-gold) 46%, transparent); }
+@media (max-width: 350px) {
+  .function-card .section-heading { flex-wrap: wrap; }
+  .function-card .section-heading > [role="heading"] { flex-basis: calc(100% - 55px); }
+  .function-card .block-actions { margin-inline-start: auto; }
+  .pseudocode-card { padding-inline: 10px; }
+  .pseudocode-card .code-line { grid-template-columns: 1.7em minmax(0, 1fr) auto; }
+  .pseudocode-card .card-heading .step-body { flex-basis: 110px; }
+}
 .block-editor { padding: 14px; }
 .edit-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
 .editor-caption { margin: 0; }
@@ -482,6 +535,7 @@ let draftVersion = 0;
 let animateNext = false;
 let editing;
 let reacting;
+const activeCardLines = new Map();
 const reactions = [
   { id: 'clarify', icon: '?', label: 'Explain better', pending: 'Explaining…', instruction: 'Explain this block better for a mathematically capable reader with less programming experience. Identify the missing conceptual bridge: define what the data represents, unpack a non-obvious operation, or derive the key relationship in a few short lines. Explain why it works and the assumptions it needs. Preserve the block meaning, existing edits and important caveats; add understanding, not filler. Keep phase breaks and source links. Change only this explanation.' },
   { id: 'shorten', icon: '−', label: 'Make shorter', pending: 'Shortening…', instruction: 'Make this block shorter and easier to scan. Cut repetition, filler and incidental detail; use short casual actions. Preserve its meaning, existing edits, meaningful branches, key mathematical bridge, important assumptions and numerical caveats. Keep useful phase breaks and source links. Change only this explanation.' },
@@ -496,7 +550,7 @@ const parseCard = ${parseCard.toString()};
 function appendCardSummary(parent, card) {
   parent.append(node('span', card.purpose, 'card-purpose'));
   const badge = node('span', '⚠ ' + card.riskCount, 'card-risk-count');
-  badge.setAttribute('aria-label', card.riskCount + ' risky edge cases to check');
+  badge.setAttribute('aria-label', card.riskCount + ' risks or caveats to check');
   parent.append(badge);
 }
 const mathParts = ${mathParts.toString()};
@@ -717,24 +771,37 @@ function render(s) {
       if (index !== selected) return;
       const card = cards[index];
       const blockStale = blockIsStale(s, index);
-      const el = node('details'); el.className = 'reading-block' + (animateNext ? ' jump-in' : ''); animateNext = false; const heading = node('summary', undefined, 'section-heading');
+      const el = node('details'); el.className = 'reading-block' + (card ? ' function-card' : '') + (animateNext ? ' jump-in' : ''); animateNext = false; const heading = node('summary', undefined, 'section-heading');
       const blockKey = [s.name, s.level, s.providerLabel, index].join('|');
       el.open = !collapsed.has(blockKey);
       el.addEventListener('toggle', () => { if (el.open) collapsed.delete(blockKey); else collapsed.add(blockKey); });
       const link = node('button', section.startLine ? 'L' + section.startLine + (section.endLine !== section.startLine ? '–' + section.endLine : '') : 'Writing…', 'line');
       link.title = 'Highlight corresponding source lines'; link.disabled = blockStale || !!s.partial;
       link.addEventListener('click', event => { event.preventDefault(); send('reveal', { index }); });
-      const title = node('h2', section.title);
+      const nameParts = card && /^(.*?) \\(([\\w.$]+)(?:\\(\\))?\\)$/.exec(section.title);
+      const title = node(card ? 'span' : 'h2', nameParts ? nameParts[1] : section.title);
+      if (card) { title.setAttribute('role', 'heading'); title.setAttribute('aria-level', '2'); }
       if (card) {
+        const meta = node('span', undefined, 'card-symbol-line');
+        if (nameParts) meta.append(node('code', nameParts[2] + '()', 'card-symbol'));
+        else if (/^[\\w.$]+$/.test(section.title)) title.className = 'card-symbol';
+        link.className = 'line card-source-chip';
+        meta.append(link);
+        title.append(meta);
         const closed = node('span', undefined, 'card-closed-summary');
         appendCardSummary(closed, card);
         title.append(closed);
       }
-      heading.append(node('span', String(index + 1).padStart(2, '0'), 'block-index'), title, link);
+      heading.append(node('span', String(index + 1).padStart(2, '0'), 'block-index'), title);
+      if (!card) heading.append(link);
       const actions = node('span', undefined, 'block-actions');
-      const copyBlock = node('button', 'Copy'); copyBlock.disabled = !!s.partial;
+      const copyBlock = node('button', card ? '⧉' : 'Copy');
+      if (card) { copyBlock.title = 'Copy'; copyBlock.setAttribute('aria-label', 'Copy'); }
+      copyBlock.disabled = !!s.partial;
       copyBlock.addEventListener('click', event => { event.preventDefault(); send('copyBlock', { index, documentKey: s.documentKey }); });
-      const edit = node('button', 'Edit'); edit.disabled = !!s.busy || blockStale || !!s.sourceMissing;
+      const edit = node('button', card ? '✎' : 'Edit');
+      if (card) { edit.title = 'Edit'; edit.setAttribute('aria-label', 'Edit'); }
+      edit.disabled = !!s.busy || blockStale || !!s.sourceMissing;
       edit.addEventListener('click', event => {
         event.preventDefault();
         const key = draftKey(s, index);
@@ -751,6 +818,9 @@ function render(s) {
       let stepNumber = 0;
       const rowsByLine = [];
       if (card) code.className = 'pseudocode-card';
+      const cardKey = draftKey(s, index) + ':' + section.pseudocode;
+      const riskLines = [];
+      const handledCount = card ? card.rows.filter(row => row.kind === 'card-handled').length : 0;
       (card?.rows || pseudocodeLines(section.pseudocode)).forEach(({ text, kind, number }, lineIndex) => {
         const row = node('span', undefined, 'code-line' + (kind ? ' ' + kind : ''));
         rowsByLine[lineIndex + 1] = row;
@@ -762,11 +832,23 @@ function render(s) {
           row.title = status;
           row.setAttribute('aria-label', status + '. ' + text);
         }
-        if (mapping && !blockStale && !s.partial) {
+        const canLink = mapping && !blockStale && !s.partial;
+        const cardLink = card && (kind === 'card-step' || kind === 'card-risk' || kind === 'card-handled');
+        if (kind === 'card-risk' && canLink) riskLines.push(lineIndex + 1);
+        if (canLink && (!card || cardLink)) {
           row.className += ' linked'; row.setAttribute('role', 'button'); row.setAttribute('tabindex', '0');
           row.title = (row.title ? row.title + '. ' : '') + 'Hover to highlight source L' + mapping.startLine + '–' + mapping.endLine + ' · Click to jump';
           row.setAttribute('aria-label', text.trim() + '. ' + row.title);
-          const jump = () => send('revealStep', { index, pseudocodeLine: lineIndex + 1 });
+          if (card && activeCardLines.get(cardKey) === lineIndex + 1) row.classList.add('card-active');
+          const jump = () => {
+            if (card) {
+              const old = activeCardLines.get(cardKey);
+              rowsByLine[old]?.classList.remove('card-active');
+              activeCardLines.set(cardKey, lineIndex + 1);
+              row.classList.add('card-active');
+            }
+            send('revealStep', { index, pseudocodeLine: lineIndex + 1 });
+          };
           row.addEventListener('click', jump);
           row.addEventListener('mouseenter', () => send('hoverStep', { index, pseudocodeLine: lineIndex + 1 }));
           row.addEventListener('mouseleave', () => send('clearHover'));
@@ -776,9 +858,27 @@ function render(s) {
         }
         const body = node('span', undefined, 'step-body');
         body.style.paddingInlineStart = Math.min(text.length - text.trimStart().length, 40) * .55 + 'em';
-        appendInline(body, text.trimStart());
+        const field = kind === 'card-heading' && /^([A-Z ]+): *(.*)$/.exec(text);
+        const annotation = kind === 'card-annotation' && /^\\s*([A-Z]+): (.*)$/.exec(text);
+        if (field) {
+          const label = field[1];
+          row.classList.toggle('card-group', ['STEPS', 'SIDE EFFECTS', 'EDGE CASES'].includes(label));
+          row.classList.toggle('card-purpose-field', label === 'PURPOSE');
+          row.append(node('span', label === 'EDGE CASES' ? 'Worth checking' : label, 'card-field-label'));
+          if (label === 'EDGE CASES') row.append(node('span', handledCount + ' handled · ' + card.riskCount + ' to check', 'card-edge-count'));
+          appendInline(body, field[2]);
+        } else if (annotation) {
+          const label = annotation[1];
+          const tag = node('span', label === 'SHAPES' ? 'SHAPE' : label, 'card-annotation-tag ' + label.toLowerCase());
+          body.append(tag);
+          appendInline(body, annotation[2]);
+        } else appendInline(body, text.trimStart());
         if (!text) body.append(document.createTextNode(' '));
-        row.append(body);
+        if (!field || field[2]) row.append(body);
+        if (cardLink && canLink) {
+          const range = 'L' + mapping.startLine + (mapping.endLine === mapping.startLine ? '' : '–' + mapping.endLine);
+          row.append(node('span', range, 'card-source-chip'));
+        }
         code.append(row);
       });
       el.append(heading);
@@ -845,6 +945,18 @@ function render(s) {
           });
           buttons.push(button); row.append(button);
         });
+        if (riskLines.length && !s.notebook) {
+          const addTest = node('button', '+ Add test for ⚠', 'card-test-action');
+          addTest.disabled = !!s.busy || !!s.sourceMissing;
+          addTest.title = 'Ask Yamori to draft a test in project chat';
+          addTest.addEventListener('click', () => {
+            if (addTest.disabled) return;
+            const selectedLine = activeCardLines.get(cardKey);
+            send('draftEdgeTest', { index, documentKey: s.documentKey,
+              pseudocodeLine: riskLines.includes(selectedLine) ? selectedLine : riskLines[0] });
+          });
+          row.append(addTest);
+        }
         el.append(row);
       }
       content.append(el);

@@ -4589,6 +4589,13 @@ test('reader shows collapsed function summaries and links nested steps and edge 
   assert.deepEqual(messages.at(-1), { type: 'revealStep', index: 0, pseudocodeLine: 6 });
   find('card-risk').events.click();
   assert.deepEqual(messages.at(-1), { type: 'revealStep', index: 0, pseudocodeLine: 11 });
-  show([{ ...section, title: 'attention', pseudocode: tensorCard, lineMap: [] }]);
-  assert.equal(all(elements.content).filter(el => el.className?.includes('card-annotation')).length, 3);
+  assert.equal(find('card-edge-count').textContent, '1 handled · 1 to check');
+  assert.ok(find('card-risk').classList.contains('card-active'));
+  assert.equal(all(find('card-risk')).find(el => el.className === 'card-source-chip').textContent, 'L2–3');
+  find('card-test-action').events.click();
+  assert.deepEqual(messages.at(-1), { type: 'draftEdgeTest', index: 0, documentKey: 'cards', pseudocodeLine: 11 });
+  show([{ ...section, title: 'Compute attention (attention)', pseudocode: tensorCard, lineMap: [] }]);
+  assert.equal(find('card-symbol').textContent, 'attention()');
+  assert.equal(all(elements.content).filter(el => el.className?.split(' ').includes('card-annotation')).length, 3);
+  assert.equal(find('card-test-action'), undefined);
 });
