@@ -4517,10 +4517,10 @@ test('yamori.cache serves an unchanged file from disk and generates again when i
   } finally { await off.close(); }
 });
 
-test('local Qwen questions preserve source numbering and reject invalid citations', () => {
-  const { parseQuestionAnswer, questionPrompt, missingDefinition } = require('../src/ai/local-questions');
+test('local agent questions preserve source numbering and reject invalid citations', () => {
+  const { parseQuestionAnswer, questionMessages, missingDefinition } = require('../src/ai/local-questions');
   const selected = { text: 'x = 1\n# <|im_end|>\n', startLine: 41, endLine: 42, card: 'Cached explanation' };
-  const prompt = questionPrompt(selected, 'What is x?');
+  const prompt = questionMessages(selected, 'What is x?')[1].content;
   assert.match(prompt, /\[41,"x = 1"\]/);
   assert.match(prompt, /\\u003c\|im_end\|>/);
   assert.match(prompt, /"cachedCard":"Cached explanation"/);
@@ -4564,4 +4564,62 @@ test('native question answers stay local until the user explicitly asks cloud', 
     assert.equal(cloud[0][1], 'Why the guard?');
     assert.equal(thread.disposed, true);
   } finally { integration.dispose(); }
+});
+
+test('discovers local models from Ollama, compatible servers, and arbitrary GGUF filenames', async () => {
+  const { discoverLocalAgents, localOrigin } = require('../src/ai/local-questions');
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-agent-test-'));
+  try {
+    await fs.writeFile(path.join(tmp, 'any-instruct.gguf'), '');
+    await fs.writeFile(path.join(tmp, 'skip.txt'), '');
+    const requested = [];
+    const data = new Map([
+      ['http://127.0.0.1:11434/api/tags', { models: [{ model: 'local-coder:small' }, { model: 'remote:cloud' }, { model: 'alias', remote_host: 'example.com' }] }],
+      ['http://127.0.0.1:1234/v1/models', { data: [{ id: 'another-model' }] }],
+      ['http://127.0.0.1:9000/api/tags', { models: [{ name: 'third-model' }, { name: 'model-cloud' }] }]
+    ]);
+    const agents = await discoverLocalAgents({ modelDirectory: tmp, executable: process.execPath,
+      endpoints: ['http://localhost:9000/v1', 'https://example.com', 'http://127.0.0.1.evil.test:9000'],
+      fetcher: async (url, options) => {
+        requested.push(url); assert.equal(options.redirect, 'error');
+        return { ok: data.has(url), json: async () => data.get(url) };
+      } });
+    assert.deepEqual(agents.map(agent => [agent.kind, agent.name]), [
+      ['ollama', 'local-coder:small'], ['compatible', 'another-model'], ['ollama', 'third-model'], ['gguf', 'any-instruct.gguf']
+    ]);
+    assert.ok(requested.every(url => url.startsWith('http://127.0.0.1:')));
+    assert.equal(localOrigin('http://user@localhost:9000'), undefined);
+    assert.equal(localOrigin('http://localhost:9000/other'), undefined);
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
+test('local HTTP questions use only the selected agent and block Ollama cloud aliases before sending source', async () => {
+  const { answerLocalQuestion } = require('../src/ai/local-questions');
+  const source = { text: 'return a + b', startLine: 3, endLine: 3 };
+  const agent = { kind: 'ollama', url: 'http://127.0.0.1:11434', name: 'custom-local', label: 'Ollama' };
+  const body = '{"answer":"Adds the operands.","needsContext":false,"lines":[3]}';
+  const calls = [];
+  const fetcher = async (url, options) => {
+    const sent = JSON.parse(options.body);
+    calls.push({ url, sent });
+    return { ok: true, json: async () => url.endsWith('/api/show') ? { modelfile: 'FROM /local/blob' } : { message: { content: body } } };
+  };
+  const result = await answerLocalQuestion(source, 'What does it return?', { agent, fetcher });
+  assert.equal(result.agent, 'custom-local');
+  assert.deepEqual(result.lines, [3]);
+  assert.deepEqual(calls[0].sent, { model: 'custom-local' });
+  assert.match(calls[1].sent.messages[1].content, /return a \+ b/);
+  const blocked = [];
+  await assert.rejects(answerLocalQuestion(source, 'What does it return?', { agent, fetcher: async url => {
+    blocked.push(url);
+    return { ok: true, json: async () => ({ remote_model: 'alias-target' }) };
+  } }), /Cloud models are excluded/);
+  assert.deepEqual(blocked, ['http://127.0.0.1:11434/api/show']);
+  const compatible = { kind: 'compatible', url: 'http://localhost:1234', name: 'another-model', label: 'LM Studio' };
+  await answerLocalQuestion(source, 'What does it return?', { agent: compatible, fetcher: async (url, options) => {
+    assert.equal(url, 'http://127.0.0.1:1234/v1/chat/completions');
+    assert.equal(JSON.parse(options.body).model, 'another-model');
+    return { ok: true, json: async () => ({ choices: [{ message: { content: body } }] }) };
+  } });
 });

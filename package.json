@@ -119,6 +119,10 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "yamori.chooseLocalAgent",
+        "title": "Yamori: Choose Local Question Agent"
+      },
+      {
         "command": "yamori.cloudSelectionQuestion",
         "title": "Ask cloud",
         "icon": "$(cloud)"
@@ -380,12 +384,25 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Absolute path to Qwen2.5-Coder 3B Instruct GGUF weights for local questions. Defaults to the Yamori models folder in your home directory."
+          "description": "Optional absolute path to one additional GGUF model for the local-agent picker."
+        },
+        "yamori.localQuestionModelDirectory": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Folder to scan for GGUF models. Defaults to ~/.yamori/models."
+        },
+        "yamori.localQuestionEndpoints": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "scope": "machine",
+          "description": "Additional loopback HTTP endpoints exposing /v1/models and /v1/chat/completions with structured output. Use only servers you trust to run inference locally."
         },
         "yamori.selectionQuestions": {
           "type": "boolean",
           "default": true,
-          "description": "Show a native inline question field after highlighting code. Answers the question locally with Qwen 3B. Ask cloud explicitly to send the question and selected snippet to your configured provider. Disable to use the selection context-menu action or keyboard shortcut instead."
+          "description": "Show a native inline question field after highlighting code. Answers the question with your selected local agent. Ask cloud explicitly to send the question and selected snippet to your configured provider. Disable to use the selection context-menu action or keyboard shortcut instead."
         }
       }
     },

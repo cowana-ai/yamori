@@ -8,7 +8,7 @@ const planner = require('./project/plan');
 const journal = require('./project/conversation');
 const nativeSessions = require('./project/sessions');
 const { CHAT_SCHEMA, implementPlan, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, flowPrompt, parseFlow, FLOW_SCHEMA, FLOW_FORMAT_VERSION, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, PROMPT_FORMAT_VERSION, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./ai/engine');
-const { answerLocalQuestion } = require('./ai/local-questions');
+const { answerLocalQuestion, discoverLocalAgents } = require('./ai/local-questions');
 const { panelHTML } = require('./views/reader');
 const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks, dependencyFingerprint, reconcileRefresh, refreshSupport, verifyBlockHashes, acceptsCache, CACHE_SCHEMA_VERSION } = require('./storage/cache');
 const { mapHTML } = require('./views/guide');
@@ -171,7 +171,7 @@ function createSelectionQuestions(context, api, sendQuestion, answerQuestion) {
   let current, timer, closed = false;
   const disposeDraft = () => { clearTimeout(timer); if (current?.sending) return; current?.thread?.dispose(); current = undefined; };
   if (controller) {
-    controller.options = { prompt: answerQuestion ? 'Answer locally with Qwen 3B. Ask cloud to send this selection for review.' : 'Send your question and selected code to Yamori chat.', placeHolder: 'Ask about this code…' };
+    controller.options = { prompt: answerQuestion ? 'Use your selected local agent. Ask cloud to send this selection for review.' : 'Send your question and selected code to Yamori chat.', placeHolder: 'Ask about this code…' };
     controller.commentingRangeProvider = { provideCommentingRanges: () => [] };
     subscriptions.push(controller);
   }
@@ -219,13 +219,13 @@ function createSelectionQuestions(context, api, sendQuestion, answerQuestion) {
         const controller = new AbortController();
         draft.abort = controller;
         thread.comments = [{ body: question, author: { name: 'You' }, mode: api.CommentMode?.Preview ?? 0 },
-          { body: 'Qwen is answering locally…', author: { name: 'Qwen 3B' }, mode: api.CommentMode?.Preview ?? 0 }];
+          { body: 'Preparing a local answer…', author: { name: 'Yamori' }, mode: api.CommentMode?.Preview ?? 0 }];
         const result = await answerQuestion(draft.selected, question, controller.signal);
         if (closed || current !== draft) return;
         const references = result.lines.length ? '\n\nSource: ' + result.lines.map(line => 'L' + line).join(', ') : '';
         const limit = result.needsContext ? '\n\nThis answer may need more context. Use Ask cloud for a broader review.' : '';
         thread.comments = [thread.comments[0], { body: result.answer + references + limit,
-          author: { name: 'Qwen 3B · local' }, mode: api.CommentMode?.Preview ?? 0 }];
+          author: { name: result.agent ? result.agent + ' · local' : 'Yamori · local' }, mode: api.CommentMode?.Preview ?? 0 }];
         thread.contextValue = 'yamori-selection-answered';
         return;
       }
@@ -1908,11 +1908,37 @@ async function activate(context) {
   const command = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, async (...args) => {
     try { return await fn(...args); } catch (e) { vscode.window.showErrorMessage(e.message); }
   }));
+  const localAgents = () => discoverLocalAgents({
+    executable: setting(vscode, 'localQuestionExecutable'), model: setting(vscode, 'localQuestionModel'),
+    modelDirectory: setting(vscode, 'localQuestionModelDirectory'), endpoints: setting(vscode, 'localQuestionEndpoints', [])
+  });
+  const questionAgentKey = 'localQuestionAgent';
+  async function chooseLocalAgent(agents) {
+    agents ||= await localAgents();
+    if (!agents.length) {
+      vscode.window.showInformationMessage?.('No local agents found. Start Ollama or a local chat server, or add a GGUF model in ~/.yamori/models.');
+      return;
+    }
+    const choices = agents.map(agent => ({ label: agent.name, description: agent.label, agent }));
+    const current = context.globalState.get(questionAgentKey);
+    const picked = await vscode.window.showQuickPick(choices, {
+      title: 'Yamori · Local question agent',
+      placeHolder: choices.find(item => item.agent.id === current)?.label || 'Pick a model for answering code questions'
+    });
+    if (picked) await context.globalState.update(questionAgentKey, picked.agent.id);
+    return picked?.agent;
+  }
+  command('yamori.chooseLocalAgent', () => chooseLocalAgent());
   const selectionQuestions = createSelectionQuestions(context, vscode,
     (selected, question) => projectMap.askSelection(selected, question),
-    (selected, question, signal) => answerLocalQuestion(selected, question, {
-      executable: setting(vscode, 'localQuestionExecutable'), model: setting(vscode, 'localQuestionModel'), signal
-    }));
+    async (selected, question, signal) => {
+      const agents = await localAgents();
+      const saved = context.globalState.get(questionAgentKey);
+      const agent = agents.find(item => item.id === saved) ||
+        (!saved && agents.length === 1 ? agents[0] : await chooseLocalAgent(agents));
+      if (!agent) throw new Error('No local agent selected. Choose one or use Ask cloud.');
+      return answerLocalQuestion(selected, question, { agent, signal });
+    });
   command('yamori.read', open); command('yamori.browse', browse); command('yamori.project', prepareFolder); command('yamori.switchFile', switchFile);
   command('yamori.setup', () => setup.show());
   command('yamori.connectAgents', () => connectAgents(context));
@@ -2315,6 +2341,7 @@ function createReader(context, navigation) {
             break;
           }
           case 'setup': await navigation.setup(); break;
+          case 'chooseLocalAgent': await vscode.commands.executeCommand('yamori.chooseLocalAgent'); break;
           case 'provider': await chooseProvider(); break;
           case 'model': await chooseModel(); break;
           case 'effort': await chooseEffort(); break;
