@@ -3,12 +3,12 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { answerLocalQuestion, discoverLocalAgents } = require('./ai/local-questions');
 const { verifyPseudocode, unknownNames, sourceNames, hiddenEffects } = require('./ai/verify');
 const planner = require('./project/plan');
 const journal = require('./project/conversation');
 const nativeSessions = require('./project/sessions');
 const { CHAT_SCHEMA, implementPlan, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, flowPrompt, parseFlow, FLOW_SCHEMA, FLOW_FORMAT_VERSION, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, PROMPT_FORMAT_VERSION, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./ai/engine');
-const { answerLocalQuestion, discoverLocalAgents } = require('./ai/local-questions');
 const { panelHTML } = require('./views/reader');
 const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks, dependencyFingerprint, reconcileRefresh, refreshSupport, verifyBlockHashes, acceptsCache, CACHE_SCHEMA_VERSION } = require('./storage/cache');
 const { mapHTML } = require('./views/guide');
@@ -1797,10 +1797,10 @@ async function activate(context) {
       const reader = createReader(local, {
         uri: key, column: () => readingColumn || vscode.ViewColumn.Beside,
         open, browse, switchFile, setup: () => setup.show(),
+        askCard: selected => selectionQuestions.openSelection(selected),
         projectContext: snapshot => projectMap.contextFor(snapshot),
         openMap: uri => projectMap.show(undefined, uri, 'map'),
         openPlan: uri => projectMap.show(undefined, uri, 'plan'),
-        askCard: selected => selectionQuestions.openSelection(selected),
         revealDefinition: (uri, defined, column) => projectMap.revealDefinition(uri, defined, column),
         agentTools: snapshot => projectMap.toolsFor(snapshot),
         tourFor: (uri, folder) => tourWithStatus(uri, folder),
@@ -2246,8 +2246,9 @@ function createReader(context, navigation) {
     if (key !== runsKey) { runsKey = key; for (const controller of runControllers.values()) controller.abort(); runControllers.clear(); runs = {}; }
     return runs;
   }
-  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, checks: currentChecks(), writtenBy: result?.author?.kind === 'agent' ? result.author.name || 'an agent' : undefined, review: reviewState && source && reviewState.key === keyFor(source, options()) ? { state: reviewState.state, text: reviewState.text } : undefined, modelNotice, setupHint: !!error && isSetupProblem(error), level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, notebook: !!source?.notebook, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined, run, tour, focusLine, runs: currentRuns(),
+  const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, checks: currentChecks(), writtenBy: result?.author?.kind === 'agent' ? result.author.name || 'an agent' : undefined, review: reviewState && source && reviewState.key === keyFor(source, options()) ? { state: reviewState.state, text: reviewState.text } : undefined, modelNotice, setupHint: !!error && isSetupProblem(error), level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined, run, tour, focusLine, runs: currentRuns(),
     canRunTests: vscode.workspace.isTrusted !== false && !stale,
+    notebook: !!source?.notebook,
     blockTests: stale ? {} : Object.fromEntries(Object.entries(blockTests).map(([index, tests]) => [index, tests.map(({ id, name, function: fn, file, language }) => ({ id, name, function: fn, file, language }))])),
     symbols: symbols.map(({ name, file, line, kind, block, purpose, explained }) => ({ name, file, line, kind, block, purpose, explained })),
     glossary: (source?.projectContext?.glossary || []).map(term => ({ term: term.term, aliases: term.aliases || [], meaning: term.meaning || '', kind: term.kind || '', defined: term.defined || '' })) });
@@ -2369,6 +2370,11 @@ function createReader(context, navigation) {
             break;
           case 'reveal': await reveal(message.index); break;
           case 'revealStep': await reveal(message.index, message.pseudocodeLine); break;
+          case 'hoverStep': hoverStep(message.index, message.pseudocodeLine); break;
+          case 'clearHover': clearHighlight(); break;
+          case 'copyBlock':
+            if (result?.sections[message.index] && message.documentKey === view().documentKey) await vscode.env.clipboard.writeText(result.sections[message.index].pseudocode);
+            break;
           case 'askCard': {
             const index = message.index;
             if (!source || source.notebook || sourceMissing || !Number.isInteger(index) ||
@@ -2386,11 +2392,6 @@ function createReader(context, navigation) {
               language: doc.languageId, version: doc.version, unsaved: doc.isDirty, card: section.pseudocode });
             break;
           }
-          case 'hoverStep': hoverStep(message.index, message.pseudocodeLine); break;
-          case 'clearHover': clearHighlight(); break;
-          case 'copyBlock':
-            if (result?.sections[message.index] && message.documentKey === view().documentKey) await vscode.env.clipboard.writeText(result.sections[message.index].pseudocode);
-            break;
           case 'updateBlock': await updateBlock(message); break;
           case 'copy':
             if (result) {

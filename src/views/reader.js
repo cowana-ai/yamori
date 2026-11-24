@@ -810,13 +810,13 @@ function render(s) {
           });
           buttons.push(button); row.append(button);
         });
+        el.append(row);
         if (!s.notebook && !s.sourceMissing && !s.partial && !blockStale) {
           const ask = node('button', 'Ask about this block');
           ask.title = 'Ask your selected local agent about this source block';
           ask.addEventListener('click', () => send('askCard', { index, documentKey: s.documentKey }));
           row.append(ask);
         }
-        el.append(row);
       }
       content.append(el);
     });
