@@ -384,7 +384,8 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     all.length = 0; visit(elements.content);
     const reactions = all.find(el => el.className === 'block-reactions');
     assert.equal(reactions.attributes.role, 'group');
-    assert.equal(reactions.children.length, 3);
+    assert.equal(reactions.children.length, 4);
+    assert.equal(reactions.children[3].textContent, 'Ask about this block');
     const button = reactions.children[index];
     assert.equal(button.disabled, false);
     button.events.click();
@@ -397,7 +398,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     assert.ok(request.instruction.includes(expected));
     button.events.click();
     assert.equal(sent.length, count, 'a repeated click cannot submit twice');
-    assert.ok(reactions.children.every(b => b.disabled));
+    assert.ok(reactions.children.slice(0, 3).every(b => b.disabled));
     receive({ data: { type: 'state', state: { ...renderedState, busy: true } } });
     all.length = 0; visit(elements.content);
     assert.ok(all.some(el => el.attributes?.['aria-busy'] === 'true' && el.tag === 'button'), 'the active reaction explains what is running');
@@ -4514,4 +4515,53 @@ test('yamori.cache serves an unchanged file from disk and generates again when i
     await openMain(off);
     assert.equal(off.generated.filter(file => file === 'main.py').length, 2, 'cache off generates again for the same file');
   } finally { await off.close(); }
+});
+
+test('local Qwen questions preserve source numbering and reject invalid citations', () => {
+  const { parseQuestionAnswer, questionPrompt, missingDefinition } = require('../src/ai/local-questions');
+  const selected = { text: 'x = 1\n# <|im_end|>\n', startLine: 41, endLine: 42, card: 'Cached explanation' };
+  const prompt = questionPrompt(selected, 'What is x?');
+  assert.match(prompt, /\[41,"x = 1"\]/);
+  assert.match(prompt, /\\u003c\|im_end\|>/);
+  assert.match(prompt, /"cachedCard":"Cached explanation"/);
+  assert.deepEqual(parseQuestionAnswer('{"answer":"It is one.","needsContext":false,"lines":[42,41,42,43]} [end of text]', selected),
+    { answer: 'It is one.', needsContext: false, lines: [41, 42] });
+  assert.equal(parseQuestionAnswer('{"answer":"Unknown","needsContext":false,"lines":[40]}', selected).needsContext, true);
+  assert.equal(missingDefinition('x = self.teacher_step(states)', 'What dtype does teacher_step guarantee?'), 'self.teacher_step');
+  assert.equal(missingDefinition('x = self.teacher_step(states)', 'Where is teacher_step called?'), undefined);
+  assert.equal(missingDefinition('def teacher_step(states):\n    return states', 'What does teacher_step guarantee?'), undefined);
+  assert.throws(() => parseQuestionAnswer('{"answer":"incomplete"}', selected), /Invalid local answer/);
+});
+
+test('native question answers stay local until the user explicitly asks cloud', async () => {
+  const { createSelectionQuestions } = (() => {
+    const stub = { exports: {} };
+    vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'extension.js'), 'utf8'),
+      { module: stub, require: id => id === 'vscode' ? {} : srcRequire(id), AbortController, setTimeout, clearTimeout });
+    return stub.exports;
+  })();
+  const commands = new Map(), cloud = [], local = [];
+  const thread = { dispose() { this.disposed = true; } };
+  const api = {
+    window: {},
+    comments: { createCommentController: () => ({ createCommentThread: () => thread }) },
+    commands: { registerCommand: (id, fn) => commands.set(id, fn) }
+  };
+  const integration = createSelectionQuestions({ subscriptions: [] }, api,
+    async (...args) => { cloud.push(args); },
+    async (...args) => { local.push(args); return { answer: 'The guard rejects zero.', lines: [5], needsContext: false }; });
+  const selected = { uri: { toString: () => 'file:///repo/code.py', fsPath: '/repo/code.py' },
+    range: {}, startLine: 5, endLine: 5, text: 'if not n: raise ValueError()' };
+  try {
+    await integration.openSelection(selected);
+    await commands.get('yamori.sendSelectionQuestion')({ thread, text: 'Why the guard?' });
+    assert.equal(local.length, 1);
+    assert.equal(cloud.length, 0);
+    assert.equal(thread.contextValue, 'yamori-selection-answered');
+    assert.equal(thread.comments[1].body, 'The guard rejects zero.\n\nSource: L5');
+    await commands.get('yamori.cloudSelectionQuestion')(thread);
+    assert.equal(cloud.length, 1);
+    assert.equal(cloud[0][1], 'Why the guard?');
+    assert.equal(thread.disposed, true);
+  } finally { integration.dispose(); }
 });

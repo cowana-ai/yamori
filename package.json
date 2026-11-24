@@ -119,6 +119,11 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "yamori.cloudSelectionQuestion",
+        "title": "Ask cloud",
+        "icon": "$(cloud)"
+      },
+      {
         "command": "yamori.sendSelectionQuestion",
         "title": "Ask Yamori",
         "enablement": "!commentIsEmpty",
@@ -184,6 +189,10 @@
       ],
       "commandPalette": [
         {
+          "command": "yamori.cloudSelectionQuestion",
+          "when": "false"
+        },
+        {
           "command": "yamori.openAt",
           "when": "false"
         },
@@ -221,6 +230,11 @@
         }
       ],
       "comments/commentThread/title": [
+        {
+          "command": "yamori.cloudSelectionQuestion",
+          "group": "navigation@2",
+          "when": "commentController == yamori-selection && (commentThread == yamori-selection-answered || commentThread == yamori-selection-retry)"
+        },
         {
           "command": "yamori.cancelSelectionQuestion",
           "group": "navigation@2",
@@ -356,10 +370,22 @@
           "default": false,
           "description": "Keep plain-text copies of explained files' pseudocode in <project>/.yamori/pseudocode/, with an index of the project, for agents that read files directly. Off by default: Yamori's agent tools do not need it. Turning it on keeps .yamori/ out of git through .git/info/exclude. Off in Restricted Mode."
         },
+        "yamori.localQuestionExecutable": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Absolute path to llama-completion for local Yamori questions. Defaults to the Homebrew path on macOS."
+        },
+        "yamori.localQuestionModel": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Absolute path to Qwen2.5-Coder 3B Instruct GGUF weights for local questions. Defaults to the Yamori models folder in your home directory."
+        },
         "yamori.selectionQuestions": {
           "type": "boolean",
           "default": true,
-          "description": "Show a native inline question field after highlighting code. Sends the question and exact selected snapshot to read-only Yamori chat only when you press Ask Yamori. Disable to use the selection context-menu action or keyboard shortcut instead."
+          "description": "Show a native inline question field after highlighting code. Answers the question locally with Qwen 3B. Ask cloud explicitly to send the question and selected snippet to your configured provider. Disable to use the selection context-menu action or keyboard shortcut instead."
         }
       }
     },
