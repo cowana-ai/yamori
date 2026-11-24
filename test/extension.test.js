@@ -1366,7 +1366,7 @@ test('packaged validators work with no Ajv installation, schema compilation or d
   const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-validator-runtime-'));
   try{
-    await Promise.all(['engine.js','schemas.js','validation.min.js'].map(file=>fs.copyFile(path.join(__dirname,'..','src','ai',file),path.join(root,file))));
+    await Promise.all(['engine.js','cards.js','schemas.js','validation.min.js'].map(file=>fs.copyFile(path.join(__dirname,'..','src','ai',file),path.join(root,file))));
     const script=`const Module=require('node:module'),load=Module._load;Module._load=function(id,...args){if(id==='ajv'||id.startsWith('ajv/')||id==='esbuild')throw new Error('Build-only dependency loaded at runtime');return load.call(this,id,...args);};global.Function=function(){throw new Error('Runtime schema compilation is forbidden');};const {parseResult}=require('./engine');const source=${JSON.stringify(source)},value=${JSON.stringify(valid)};if(parseResult(JSON.stringify(value),source).title!==value.title)process.exit(2);process.stdout.write('Standalone validation works');`;
     const output=await runProcess(process.execPath,['-e',script],'',{cwd:root});assert.equal(output,'Standalone validation works');
   }finally{await fs.rm(root,{recursive:true,force:true});}
@@ -4514,4 +4514,81 @@ test('yamori.cache serves an unchanged file from disk and generates again when i
     await openMain(off);
     assert.equal(off.generated.filter(file => file === 'main.py').length, 2, 'cache off generates again for the same file');
   } finally { await off.close(); }
+});
+
+const plainCard = [
+  'PURPOSE: Look up a user by email.',
+  'INPUTS: email, an email string',
+  'RETURNS: user or null',
+  'STEPS:',
+  '- If email is empty',
+  '    - Return null',
+  '- Query the user index',
+  'SIDE EFFECTS: database read',
+  'EDGE CASES:',
+  '✓ Empty email -> check that the query is skipped',
+  '⚠ Database unavailable -> check whether the error reaches the caller'
+].join('\n');
+
+const tensorCard = [
+  'PURPOSE: Compute scaled dot-product attention.',
+  'INPUTS: Q, K, V with compatible head dimensions',
+  'RETURNS: weighted value tensor',
+  'STEPS:',
+  '- Scale the query/key scores',
+  '    WHY: likely to keep score magnitude stable as head width grows',
+  '    SHAPES: Q, K: [B,T,D] -> scores: [B,T,T]',
+  '    FORMULA: $QK^T/\\sqrt{D}$',
+  '- Apply softmax and multiply by V'
+].join('\n');
+
+test('function cards retain physical source-link indices and parse selective annotations', () => {
+  const { parseCard } = require('../src/ai/cards');
+  const { parseResult } = require('../src/ai/engine');
+  const card = parseCard(plainCard.replace(/\n/g, '\r\n'));
+  assert.equal(card.riskCount, 1);
+  assert.deepEqual(card.rows.filter(row => row.number).map(row => row.number), ['1', '1.1', '2', '✓', '⚠']);
+  assert.equal(card.rows[9].kind, 'card-handled');
+  assert.equal(card.rows[10].kind, 'card-risk');
+  assert.equal(parseCard(tensorCard).rows.filter(row => row.kind === 'card-annotation').length, 3);
+  assert.equal(parseCard('Old cached explanation'), undefined);
+  const source = { startLine: 1, text: 'code\n'.repeat(15) };
+  const section = { title: 'lookup', pseudocode: plainCard, startLine: 1, endLine: 14, lineMap: [[5, 2, 2], [6, 3, 3], [7, 13, 13], [10, 2, 3], [11, 13, 13]] };
+  const raw = () => JSON.stringify({ title: 'Lookup', summary: 'Find a user.', sections: [section] });
+  const parsed = parseResult(raw(), source, { validateCards: true });
+  assert.deepEqual(parseResult(JSON.stringify(parsed), source), parsed);
+  section.endLine = 11;
+  assert.throws(() => parseResult(raw(), source, { validateCards: true }), /exceeded the edge-case budget/);
+  section.endLine = 14;
+  section.lineMap.pop();
+  assert.throws(() => parseResult(raw(), source, { validateCards: true }), /missing or invalid/);
+});
+
+test('reader shows collapsed function summaries and links nested steps and edge cases', () => {
+  const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'setup-ai']);
+  const messages = [];
+  let receive;
+  vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], {
+    document, acquireVsCodeApi: () => ({ postMessage: msg => messages.push(JSON.parse(JSON.stringify(msg))) }),
+    window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }
+  });
+  const section = { title: 'lookup', startLine: 1, endLine: 14, pseudocode: plainCard,
+    lineMap: [5, 6, 7, 10, 11].map(pseudocodeLine => ({ pseudocodeLine, startLine: 2, endLine: 3 })) };
+  const show = sections => receive({ data: { type: 'state', state: { name: 'users.js', documentKey: 'cards', providerLabel: 'Codex', level: 'logic', result: { title: 'Users', summary: 'User lookup.', sections } } } });
+  const find = name => all(elements.content).find(element => element.className?.split(' ').includes(name));
+  show([section]);
+  assert.equal(find('card-purpose').textContent, 'Look up a user by email.');
+  assert.equal(find('card-risk-count').textContent, '⚠ 1');
+  assert.equal(find('pseudocode-card'), undefined);
+  find('map-item').events.click();
+  assert.ok(find('card-handled'));
+  assert.ok(find('card-risk'));
+  assert.equal(all(elements.content).find(el => el.textContent === '1.1').tag, 'span');
+  const nested = all(elements.content).filter(el => el.className?.includes('card-step'))[1];
+  nested.events.keydown({ key: 'Enter', preventDefault() {} });
+  assert.deepEqual(messages.at(-1), { type: 'revealStep', index: 0, pseudocodeLine: 6 });
+  find('card-risk').events.click();
+  assert.deepEqual(messages.at(-1), { type: 'revealStep', index: 0, pseudocodeLine: 11 });
+  show([{ ...section, title: 'attention', pseudocode: tensorCard, lineMap: [] }]);
+  assert.equal(all(elements.content).filter(el => el.className?.includes('card-annotation')).length, 3);
 });

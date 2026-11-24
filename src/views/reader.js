@@ -1,4 +1,5 @@
 'use strict';
+const { parseCard } = require('../ai/cards');
 const { randomBytes } = require('node:crypto');
 
 function mathParts(text) {
@@ -216,6 +217,15 @@ const READING_STYLES = `details.reading-block { margin: 0 0 26px; border: 1px so
 .section-heading::after { content: '−'; font-family: ui-monospace, monospace; }
 details:not([open]) .section-heading::after { content: '+'; }
 details:not([open]) .section-heading { border-bottom-color: transparent; }
+.card-purpose { display: block; color: var(--read-muted); font-size: 12px; font-weight: 400; }
+.card-risk-count { display: inline-block; font-size: 11px; margin-top: 4px; color: var(--vscode-editorWarning-foreground, var(--read-ink)); }
+.pseudocode-card .card-heading { font-weight: 700; margin-top: 6px; }
+.pseudocode-card .code-line { grid-template-columns: 4.2em minmax(0, 1fr); }
+.reading-block[open] .card-closed-summary { display: none; }
+.pseudocode-card .card-annotation { color: var(--read-muted); }
+.pseudocode-card .card-annotation .step-body { margin-inline-start: 1em; }
+.pseudocode-card .card-handled .step-number { color: var(--vscode-testing-iconPassed, var(--read-ink)); }
+.pseudocode-card .card-risk .step-number { color: var(--vscode-editorWarning-foreground, var(--read-ink)); }
 .block-index { font: 600 11px ui-monospace, monospace; min-width: 20px; color: var(--read-muted); }
 h2 { flex: 1; font-size: 15px; line-height: 1.5; font-weight: 650; margin: 0; }
 .line { font: 10px ui-monospace, monospace; white-space: nowrap; }
@@ -482,6 +492,13 @@ const glossaryMatcher = ${glossaryMatcher.toString()};
 const glossaryParts = ${glossaryParts.toString()};
 let termMatcher, symbolMatcher, appliedFocus;
 const pseudocodeLines = ${pseudocodeLines.toString()};
+const parseCard = ${parseCard.toString()};
+function appendCardSummary(parent, card) {
+  parent.append(node('span', card.purpose, 'card-purpose'));
+  const badge = node('span', '⚠ ' + card.riskCount, 'card-risk-count');
+  badge.setAttribute('aria-label', card.riskCount + ' risky edge cases to check');
+  parent.append(badge);
+}
 const mathParts = ${mathParts.toString()};
 const emphasisParts = ${emphasisParts.toString()};
 const send = (type, extra = {}) => vscode.postMessage({ type, ...extra });
@@ -656,11 +673,13 @@ function render(s) {
       appliedFocus = s.focusLine.token;
       if (index >= 0) focusedBlocks.set(navKey, index);
     }
+    const cards = s.result.sections.map(section => parseCard(section.pseudocode || ''));
     let selected = focusedBlocks.get(navKey);
     if (selected >= s.result.sections.length) selected = undefined;
-    if (selected === undefined && (s.result.sections.length === 1 || s.partial && !s.result.draftComplete)) selected = 0;
+    if (selected === undefined && (s.result.sections.length === 1 && !cards[0] || s.partial && !s.result.draftComplete)) selected = 0;
     const openBlock = index => {
       focusedBlocks.set(navKey, index);
+      if (cards[index]) collapsed.delete([s.name, s.level, s.providerLabel, index].join('|'));
       const key = draftKey(s, index), draft = drafts.get(key);
       editing = draft && (draft.draft !== draft.baseText || draft.instruction) ? { key, index, documentKey: s.documentKey } : undefined;
       animateNext = true; render(state);
@@ -675,7 +694,10 @@ function render(s) {
       const list = node('ol');
       s.result.sections.forEach((section, index) => {
         const item = node('li'), button = node('button', undefined, 'map-item');
-        button.append(node('span', String(index + 1).padStart(2, '0'), 'map-number'), node('span', section.title, 'map-title'));
+        const card = cards[index];
+        const label = node('span', section.title, 'map-title');
+        if (card) appendCardSummary(label, card);
+        button.append(node('span', String(index + 1).padStart(2, '0'), 'map-number'), label);
         const draft = drafts.get(draftKey(s, index));
         const detail = blockIsStale(s, index) ? (s.removedBlocks?.includes(index) ? 'Removed' : 'Changed') : draft && (draft.draft !== draft.baseText || draft.instruction) ? 'Draft' : section.startLine ? 'L' + section.startLine + '–' + section.endLine : 'Writing…';
         button.append(node('span', detail, 'map-range'), node('span', '→', 'map-arrow'));
@@ -684,7 +706,7 @@ function render(s) {
       map.append(list); content.append(map);
     } else {
       const navigation = node('nav', undefined, 'block-navigation'); navigation.setAttribute('aria-label', 'Block navigation');
-      const back = node('button', '← Logic map'); back.disabled = s.result.sections.length === 1;
+      const back = node('button', '← Logic map'); back.disabled = s.result.sections.length === 1 && !cards[0];
       back.addEventListener('click', () => { focusedBlocks.delete(navKey); editing = undefined; render(state); content.querySelector?.('.map-item')?.focus?.(); content.scrollIntoView?.({ block: 'start', behavior: 'instant' }); });
       const count = node('span', String(selected + 1).padStart(2, '0') + ' / ' + String(s.result.sections.length).padStart(2, '0'), 'block-count');
       const previous = node('button', '←'); previous.title = 'Previous block'; previous.setAttribute('aria-label', 'Previous block'); previous.disabled = selected === 0; previous.addEventListener('click', () => openBlock(selected - 1));
@@ -693,6 +715,7 @@ function render(s) {
     }
     s.result.sections.forEach((section, index) => {
       if (index !== selected) return;
+      const card = cards[index];
       const blockStale = blockIsStale(s, index);
       const el = node('details'); el.className = 'reading-block' + (animateNext ? ' jump-in' : ''); animateNext = false; const heading = node('summary', undefined, 'section-heading');
       const blockKey = [s.name, s.level, s.providerLabel, index].join('|');
@@ -701,7 +724,13 @@ function render(s) {
       const link = node('button', section.startLine ? 'L' + section.startLine + (section.endLine !== section.startLine ? '–' + section.endLine : '') : 'Writing…', 'line');
       link.title = 'Highlight corresponding source lines'; link.disabled = blockStale || !!s.partial;
       link.addEventListener('click', event => { event.preventDefault(); send('reveal', { index }); });
-      heading.append(node('span', String(index + 1).padStart(2, '0'), 'block-index'), node('h2', section.title), link);
+      const title = node('h2', section.title);
+      if (card) {
+        const closed = node('span', undefined, 'card-closed-summary');
+        appendCardSummary(closed, card);
+        title.append(closed);
+      }
+      heading.append(node('span', String(index + 1).padStart(2, '0'), 'block-index'), title, link);
       const actions = node('span', undefined, 'block-actions');
       const copyBlock = node('button', 'Copy'); copyBlock.disabled = !!s.partial;
       copyBlock.addEventListener('click', event => { event.preventDefault(); send('copyBlock', { index, documentKey: s.documentKey }); });
@@ -721,15 +750,21 @@ function render(s) {
       const code = node('pre');
       let stepNumber = 0;
       const rowsByLine = [];
-      pseudocodeLines(section.pseudocode).forEach(({ text, kind }, lineIndex) => {
+      if (card) code.className = 'pseudocode-card';
+      (card?.rows || pseudocodeLines(section.pseudocode)).forEach(({ text, kind, number }, lineIndex) => {
         const row = node('span', undefined, 'code-line' + (kind ? ' ' + kind : ''));
         rowsByLine[lineIndex + 1] = row;
         if (kind === 'note' && /^\\s*#\\s*(Context|Why|How|What):/i.test(text)) row.className += ' context-note';
         const mapping = section.lineMap?.find(m => m.pseudocodeLine === lineIndex + 1);
-        row.append(node('span', text.trim() && kind !== 'note' ? String(++stepNumber) : '', 'step-number'));
+        row.append(node('span', card ? number || '' : text.trim() && kind !== 'note' ? String(++stepNumber) : '', 'step-number'));
+        if (kind === 'card-handled' || kind === 'card-risk') {
+          const status = kind === 'card-handled' ? 'Handled · worth checking' : 'Risky · worth checking';
+          row.title = status;
+          row.setAttribute('aria-label', status + '. ' + text);
+        }
         if (mapping && !blockStale && !s.partial) {
           row.className += ' linked'; row.setAttribute('role', 'button'); row.setAttribute('tabindex', '0');
-          row.title = 'Hover to highlight source L' + mapping.startLine + '–' + mapping.endLine + ' · Click to jump';
+          row.title = (row.title ? row.title + '. ' : '') + 'Hover to highlight source L' + mapping.startLine + '–' + mapping.endLine + ' · Click to jump';
           row.setAttribute('aria-label', text.trim() + '. ' + row.title);
           const jump = () => send('revealStep', { index, pseudocodeLine: lineIndex + 1 });
           row.addEventListener('click', jump);
