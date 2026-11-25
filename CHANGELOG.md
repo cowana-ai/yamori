@@ -1,5 +1,13 @@
 # Changelog
 
+### 0.27.0 · 2026-11-25
+
+- **Pseudocode generation uses fewer tokens.** In a pre-release comparison with Open VSX 0.26.19, generating pseudocode for a 302-line Python file used **59% fewer input tokens** (77,028 vs. 186,404, including cache reads and writes). Total tokens fell **51%**, and reported generation cost fell **36%** ($0.384 vs. $0.598). The benchmark used Sonnet for pseudocode, Haiku for the overview or gist, low effort, and refinement off.
+- **Smaller updates.** Yamori reuses unchanged pseudocode and starts with the affected blocks and edited lines. File gist and card generation use a smaller prompt with bounded source context. Per-block estimates show how many tokens source and pseudocode would use with the selected model.
+- **File Flow in Read.** See how blocks connect, hover to focus on direct dependencies, and open a card for its purpose, steps, and source links. Closing the card brings back the flow.
+- **Review and edit beside the source.** See added and removed behavior in cached pseudocode and jump to the matching editor diff. Preview, apply, cancel, or undo an edit from a step.
+- **Continue in the editor terminal.** Start a persistent Codex or Claude Code conversation from Read. The terminal displays your question, and Yamori passes the file and block context separately.
+
 ### 0.26.17 · 2026-11-22
 - **Instant reopen:** explanations and their line links are stored on this computer, keyed by workspace, file path and content hash. Reopening an unchanged file shows the saved pseudocode with no model request. A git commit is kept as metadata and does not change the key.
 - **Freshness:** a changed file, a different model or provider, or a new prompt or cache format is never shown as the current explanation. Unchanged blocks keep their pseudocode and their line links move with the code; changed blocks are regenerated when you update.
