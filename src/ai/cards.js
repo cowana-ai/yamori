@@ -2,52 +2,80 @@
 
 const EDGE_CASE_MIN_LINES = 12;
 const EDGE_CASE_LIMIT = 3;
+const CARD_ANNOTATIONS = ['note', 'why', 'shapes', 'formula'];
 
 const CARD_FORMAT = `FUNCTION AND METHOD CARDS (override legacy grouping and lineMap rules):
 - One section per function or method, titled with its symbol. For module-level code or incomplete selections use the legacy pseudocode + lineMap section.
-- In card, p is one-line purpose, i inputs and preconditions, r result or error, x meaningful side effects (empty if none), s steps, c checks.
-- Step string: "18 Return null" or "18-19 Return null". Start with the smallest inclusive original source range, then a space, then the action. Add four more spaces for each branch depth. Put source rationale or existing annotations on newline(s) in that same string using #, WHY:, SHAPES:, or FORMULA:. Only refinement adds new annotations.
-- Check string: "+18 scenario -> behaviour" if explicitly handled, or "!18-19 scenario -> behaviour" if risky. Prefix the source range with + or !. Up to ${EDGE_CASE_LIMIT} grounded checks for functions spanning ${EDGE_CASE_MIN_LINES}+ lines. Cover material assumptions, ordering, numerical, state or resource caveats. Use [] if none.
-- Only steps and checks carry source links. Do not emit pseudocode or lineMap for cards.`;
+- In card, p is one-line purpose, i inputs and preconditions, r result or error, x meaningful side effects (write a short ✓ None statement when this is grounded, or leave empty when unknown), s steps, c checks.
+- Steps s contain objects such as {"a":18,"b":19,"d":0,"t":"Return null","n":[]}. a and b are the smallest inclusive original source range, both inside this section. Use a=b for one line. d is the nesting depth, starting at 0. t is the one-line action. n is an array of annotations with k (note, why, shapes, formula) and t (annotation text). Preserve source rationale and existing annotations. Only refinement adds new annotations.
+- Checks c contain objects with a and b (the inclusive source range), k (handled or risk), q (scenario), and o (behavior or question). Include up to ${EDGE_CASE_LIMIT} grounded checks for functions spanning ${EDGE_CASE_MIN_LINES}+ lines. For shorter functions omit c when the schema omits it, or use [] when c is required.
+- Only steps and checks carry source links. Return objects for s and c, with plain text in text fields. Do not emit pseudocode or lineMap for cards.`;
 
 const CARD_REFINEMENT = `Keep function cards compact. Decide per step whether to append:
-- WHY: for a surprising constant, scaling, guard or ordering. Prefix with "likely" if inferred.
+- WHY: for a surprising constant, scaling, guard or ordering. Prefix the explanation with "likely:" if inferred.
 - SHAPES: for tensor or array-heavy code, naming before and after shapes.
 - FORMULA: for math that benefits from short inline LaTeX.
-Omit these on routine steps. Append them as newline(s) inside that step string; there is no separate line map.`;
+Omit these on routine steps. Put them in the step's n array using the corresponding k and t fields.`;
 
 function expandCardSection(section) {
   if (!section || !Object.hasOwn(section, 'card')) return section;
   const card = section.card;
+  const short = section.endLine - section.startLine + 1 < EDGE_CASE_MIN_LINES;
+  const checks = short && card?.c === undefined ? [] : card?.c;
   const field = text => typeof text === 'string' && !/[\r\n]/.test(text);
   const range = (start, end = start) => {
     const s = Number(start), e = Number(end);
     return Number.isSafeInteger(s) && Number.isSafeInteger(e) &&
       s >= section.startLine && e <= section.endLine && s <= e ? [s, e] : undefined;
   };
-  const invalid = () => new Error('The provider returned an invalid compact function card. Try Refresh.');
+  const invalid = detail => new Error('The provider returned an invalid compact function card for ' +
+    JSON.stringify(typeof section.title === 'string' ? section.title.slice(0, 120) : 'this block') + ': ' + detail + '.');
   if (!card || ![card.p, card.i, card.r, card.x].every(field) || !card.p.trim() ||
-      !card.i.trim() || !card.r.trim() || !Array.isArray(card.s) || !card.s.length || !Array.isArray(card.c)) throw invalid();
-  if (card.c.length > EDGE_CASE_LIMIT || card.c.length && section.endLine - section.startLine + 1 < EDGE_CASE_MIN_LINES) throw invalid();
+      !card.i.trim() || !card.r.trim() || !Array.isArray(card.s) || !card.s.length || !Array.isArray(checks)) throw invalid('expected purpose, inputs, returns, steps and the permitted checks');
+  if (checks.length > EDGE_CASE_LIMIT || checks.length && short) throw invalid('too many checks for this source range');
   const lines = ['PURPOSE: ' + card.p.trim(), 'INPUTS: ' + card.i.trim(), 'RETURNS: ' + card.r.trim(), 'STEPS:'];
   const lineMap = [];
   const append = (text, link) => { lines.push(text); lineMap.push([lines.length, ...link]); };
-  for (const row of card.s) {
-    if (typeof row !== 'string') throw invalid();
+  const nonempty = text => field(text) && !!text.trim();
+  const linkedRange = row => Number.isSafeInteger(row?.a) && Number.isSafeInteger(row.b) ? range(row.a, row.b) : undefined;
+  for (const [index, row] of card.s.entries()) {
+    const label = 'step ' + (index + 1);
+    if (typeof row !== 'string') {
+      const link = linkedRange(row);
+      if (!link) throw invalid(label + ' has a source range outside the block or in reverse order');
+      if (!Number.isSafeInteger(row.d) || row.d < 0 || row.d > 64 || !nonempty(row.t) || !Array.isArray(row.n)) {
+        throw invalid(label + ' needs a depth, action and annotations array');
+      }
+      const indent = '    '.repeat(row.d);
+      append(indent + '- ' + row.t.trim(), link);
+      for (const annotation of row.n) {
+        if (!CARD_ANNOTATIONS.includes(annotation?.k) || !nonempty(annotation.t)) throw invalid(label + ' has an invalid annotation');
+        lines.push(indent + '    ' + (annotation.k === 'note' ? '# ' : annotation.k.toUpperCase() + ': ') + annotation.t.trim());
+      }
+      continue;
+    }
     const [first, ...annotations] = row.split(/\r?\n/);
     const match = /^(\d+)(?:-(\d+))? ( *)(\S.*)$/.exec(first);
     const link = match && range(match[1], match[2]);
-    if (!link || annotations.some(value => !/^\s*(?:#|(?:WHY|SHAPES|FORMULA):)\s*\S/.test(value))) throw invalid();
+    if (!link || annotations.some(value => !/^\s*(?:#|(?:WHY|SHAPES|FORMULA):)\s*\S/.test(value))) throw invalid(label + ' has an invalid source range or annotation');
     const [, , , indent, action] = match;
     append(indent + '- ' + action.trimEnd(), link);
     for (const annotation of annotations) lines.push(indent + '    ' + annotation.trim());
   }
   if (card.x.trim()) lines.push('SIDE EFFECTS: ' + card.x.trim());
-  if (card.c.length) lines.push('EDGE CASES:');
-  for (const row of card.c) {
+  if (checks.length) lines.push('EDGE CASES:');
+  for (const [index, row] of checks.entries()) {
+    const label = 'check ' + (index + 1);
+    if (typeof row !== 'string') {
+      const link = linkedRange(row);
+      if (!link) throw invalid(label + ' has a source range outside the block or in reverse order');
+      if (!['handled', 'risk'].includes(row.k) || !nonempty(row.q) || !nonempty(row.o)) throw invalid(label + ' needs a kind, scenario and behavior');
+      append((row.k === 'handled' ? '✓ ' : '⚠ ') + row.q.trim() + ' -> ' + row.o.trim(), link);
+      continue;
+    }
     const match = field(row) && /^([+!])(\d+)(?:-(\d+))? (\S.*?\s*->\s*\S.*)$/.exec(row);
     const link = match && range(match[2], match[3]);
-    if (!link) throw invalid();
+    if (!link) throw invalid(label + ' has an invalid source range or scenario');
     append((match[1] === '+' ? '✓ ' : '⚠ ') + match[4].trimEnd(), link);
   }
   const { card: ignored, ...scope } = section;
@@ -86,4 +114,4 @@ function parseCard(pseudocode) {
   return rows.some(row => row.kind === 'card-step') ? { purpose, riskCount, rows } : undefined;
 }
 
-module.exports = { CARD_FORMAT, CARD_REFINEMENT, EDGE_CASE_MIN_LINES, EDGE_CASE_LIMIT, parseCard, expandCardSection };
+module.exports = { CARD_FORMAT, CARD_REFINEMENT, EDGE_CASE_MIN_LINES, EDGE_CASE_LIMIT, CARD_ANNOTATIONS, parseCard, expandCardSection };

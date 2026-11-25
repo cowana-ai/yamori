@@ -1,12 +1,26 @@
 'use strict';
 const { parseCard } = require('../ai/cards');
 const { randomBytes } = require('node:crypto');
+const { LOGIC_STYLE, logicWorkspaceUI } = require('./logic-workspace');
 
 function mathParts(text) {
   const parts = []; let offset = 0;
-  for (const match of text.matchAll(/\$\$([^$]+)\$\$|\$([^$\n]+)\$/g)) {
+  for (const match of text.matchAll(/(?<!\\)\$\$([^$]+)\$\$|(?<!\\)\$([^$\n]+)\$|\\\[([\s\S]+?)\\\]|\\\(([^\n]+?)\\\)/g)) {
     if (match.index > offset) parts.push({ text: text.slice(offset, match.index) });
-    parts.push({ text: match[0], tex: match[1] || match[2] });
+    parts.push({ text: match[0], tex: match[1] || match[2] || match[3] || match[4], display: !!(match[1] || match[3]) });
+    offset = match.index + match[0].length;
+  }
+  if (offset < text.length) parts.push({ text: text.slice(offset) });
+  return parts;
+}
+
+function codeParts(text, block = false) {
+  const pattern = block ? /^ {0,3}`{3}[^\n]*\n([\s\S]*?)^ {0,3}`{3}[ \t]*(?=\r?$)/gm : /`([^`\r\n]+)`/g;
+  const parts = [];
+  let offset = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > offset) parts.push({ text: text.slice(offset, match.index) });
+    parts.push({ text: match[1], code: true });
     offset = match.index + match[0].length;
   }
   if (offset < text.length) parts.push({ text: text.slice(offset) });
@@ -200,6 +214,23 @@ body.vscode-light:not([data-palette="slate"]), body[data-palette="paper"] {
   --read-mark-bg: #e4e4e4; --read-mark-ink: #111; --read-hover: #eaeaea; --read-error: #111;
 }
 body[data-palette="slate"] { color-scheme: dark; }
+body[data-palette="auto"] {
+  --read-page: var(--vscode-sideBar-background, light-dark(oklch(98% .004 255), oklch(21% .008 255)));
+  --read-surface: var(--vscode-editorWidget-background, light-dark(oklch(96% .005 255), oklch(25% .009 255)));
+  --read-ink: var(--vscode-foreground, light-dark(oklch(25% .012 255), oklch(87% .012 255)));
+  --read-muted: var(--vscode-descriptionForeground, light-dark(oklch(44% .012 255), oklch(66% .012 255)));
+  --read-border: var(--vscode-panel-border, light-dark(oklch(81% .012 255), oklch(33% .012 255)));
+  --read-accent: var(--vscode-button-background, light-dark(oklch(44% .14 252), oklch(45% .095 252)));
+  --read-on-accent: var(--vscode-button-foreground, oklch(96% .015 252));
+  --read-link: var(--vscode-textLink-foreground, light-dark(oklch(43% .14 252), oklch(76% .12 252)));
+  --read-header: color-mix(in srgb, var(--read-ink) 4%, var(--read-page));
+  --read-hover: color-mix(in srgb, var(--read-ink) 9%, var(--read-page));
+  --read-mark-bg: color-mix(in srgb, var(--read-ink) 12%, var(--read-page));
+  --read-note-bg: var(--read-header); --read-context-bg: var(--read-header);
+  --read-note-ink: var(--read-muted); --read-context-ink: var(--read-ink);
+  --read-mark-ink: var(--read-ink);
+  --read-error: var(--vscode-errorForeground, var(--read-ink));
+}
 * { box-sizing: border-box; }
 body { --flow: var(--read-ink); --value: var(--read-ink); --string: var(--read-ink); --output: var(--read-ink); --note: var(--read-note-ink); --call: var(--read-ink); margin: 0; background: var(--read-page); color: var(--read-ink); font: 13px/1.6 var(--vscode-font-family, system-ui); }
 button { font: inherit; color: inherit; cursor: pointer; border: 1px solid transparent; border-radius: 0; background: transparent; padding: 5px 9px; transition: background 120ms, transform 120ms, box-shadow 120ms; }
@@ -240,7 +271,15 @@ pre { font: 15px/1.85 var(--vscode-font-family, system-ui); white-space: pre-wra
 .number, .literal { font-weight: 550; }
 .code-line.note { margin: 7px 0; padding-block: 9px; font-size: 13px; line-height: 1.7; color: var(--note); background: var(--read-note-bg); border-block: 1px dotted var(--read-border); }
 .code-line.context-note { font-size: 14px; }
-math { font: 1.12em 'STIX Two Math', 'Cambria Math', math; margin-inline: 2px; }
+math { max-inline-size:100%; font: 1.12em 'STIX Two Math', 'Cambria Math', math; margin-inline: 2px; }
+.math-display { display:block; overflow:auto; margin-block:.4em; }
+.reader-reply { white-space:pre-wrap; overflow-wrap:anywhere; }
+.reader-reply code { color:var(--read-ink); background:var(--read-surface); border-radius:3px; padding-inline:3px; }
+.reader-reply pre { white-space:pre; overflow:auto; padding:6px 8px; background:var(--read-surface); margin:4px 0; border-radius:4px; }
+.reader-reply pre code { padding:0; }
+.edge-mark { display:inline-block; font:700 14px/1 system-ui, sans-serif; text-align:center; color:var(--vscode-editorWarning-foreground,var(--read-ink)); }
+.edge-mark.handled { color:var(--vscode-testing-iconPassed,var(--read-ink)); }
+.value-emoji { font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif; }
 `;
 const LOGO = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges"><path fill="#888" d="M3 8h9V5h4V3h5v2h3v8h-3v3h3v3h3v3h-5v-2h-4v3h3v4h4v3h-8v-5h-3v5H7v-3h4v-5H8v-4H5v-3h7v-2H6v-2H3z"/><path fill="#fafafa" d="M16 5h4v4h-4zM12 16h9v3h-9z"/><path fill="#161616" d="M17 6h3v1h-3zM2 17h27v2H2z"/></svg>');
 function panelHTML(initialPalette = 'auto') {
@@ -305,16 +344,6 @@ body.vscode-light:not([data-palette="slate"]) .brand img, body[data-palette="pap
 .value-emoji { font-size: 14px; }
 .run-log pre { max-height: 140px; overflow: auto; font-size: 11px; }
 .code-line.run-current { background: var(--read-mark-bg); box-shadow: inset 3px 0 0 var(--read-ink); }
-.tour { margin: 0 0 18px; padding: 8px 10px; border: 1px solid var(--read-border); background: var(--read-surface); font-size: 12px; }
-.tour-row, .tour-links { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
-.tour-links { margin-top: 6px; color: var(--read-muted); }
-.tour-where { font: 600 11px/1.6 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em; color: var(--read-muted); }
-.tour button { font-size: 12px; padding: 3px 8px; }
-.tour .tour-next { border: 1px solid var(--read-ink); box-shadow: 2px 2px 0 var(--read-ink); font-weight: 650; }
-.tour .tour-prev, .tour .tour-guide { border: 1px solid var(--read-border); }
-.tour .tour-guide { margin-left: auto; }
-.tour .tour-link { padding: 0 2px; text-decoration: underline; text-underline-offset: 3px; }
-.tour-status { font-size: 11px; color: var(--read-muted); }
 .term:hover, .term:focus-visible { background: var(--read-mark-bg); color: var(--read-mark-ink); outline: none; }
 main { max-width: 76ch; margin: 0 auto; padding: 28px 24px 44px; scroll-margin-top: 170px; }
 h1 { font-size: 22px; line-height: 1.3; font-weight: 650; margin: 0 0 12px; letter-spacing: -.025em; overflow-wrap: anywhere; }
@@ -495,7 +524,7 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
   --read-ink: var(--vscode-editor-foreground); --read-muted: var(--vscode-editor-foreground); --read-border: var(--vscode-contrastBorder, var(--vscode-editor-foreground));
   --read-accent: var(--vscode-editor-foreground); --read-on-accent: var(--vscode-editor-background);
   --read-context-bg: var(--vscode-editor-background); --read-context-ink: var(--vscode-editor-foreground); --read-note-bg: var(--vscode-editor-background); --read-note-ink: var(--vscode-editor-foreground);
-  --read-mark-bg: var(--vscode-editor-findMatchHighlightBackground); --read-mark-ink: var(--vscode-editor-foreground); --read-hover: var(--vscode-editor-findMatchHighlightBackground);
+  --read-mark-bg: color-mix(in srgb, var(--read-ink) 14%, var(--read-page)); --read-mark-ink: var(--read-ink); --read-hover: color-mix(in srgb, var(--read-ink) 9%, var(--read-page));
 }
 @media(forced-colors: active) { body, header, .reading-block, .section-heading, .code-line.note { background: Canvas; color: CanvasText; } button, .segments, details, .code-line.note { border: 1px solid ButtonText; } }
 .workspace-nav { display:flex; align-items:center; gap:3px; padding:3px; border:1px solid var(--read-border); }
@@ -503,7 +532,19 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
 .workspace-nav .current-view { color:var(--read-ink); background:var(--read-header); opacity:1; }
 .workspace-nav button:focus-visible { outline:2px solid var(--read-accent); outline-offset:2px; }
 @media(max-width:600px) { .workspace-nav { order:2; } .top { flex-wrap:wrap; } }
-</style></head><body data-palette="${palette}">
+
+body { --diff-add: #79c99b; --diff-remove: #f0a29a; }
+body.vscode-light:not([data-palette="slate"]), body[data-palette="paper"] { --diff-add: #21633e; --diff-remove: #a23733; }
+.diff-added { --diff-ink: var(--diff-add); }
+.diff-removed { --diff-ink: var(--diff-remove); }
+.code-line.diff-added, .code-line.diff-removed { background: color-mix(in srgb, var(--diff-ink) 10%, var(--read-surface)); }
+.code-line:is(.diff-added,.diff-removed):hover { background: color-mix(in srgb, var(--diff-ink) 19%, var(--read-surface)); }
+.code-line .diff-sign, .block-diff .diff-sign { color: var(--diff-ink); font-weight: 700; }
+.block-diff { display: inline-flex; gap: .35em; margin-inline-end: .55em; }
+.comparison-label { margin: 0 0 14px; color: var(--read-muted); font-size: 12px; overflow-wrap: anywhere; }
+body[data-comparison] .ai-settings, body[data-comparison] #colors, body[data-comparison] #map, body[data-comparison] #plan { display: none; }
+
+${LOGIC_STYLE}</style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
 <nav class="workspace-nav" aria-label="Yamori navigation"><button aria-current="page" class="current-view" disabled>Read</button><button id="map" title="Explore project files and connections">Map</button><button id="plan" title="Plan changes with Codex or Claude">Plan</button></nav>
 <button id="source" class="crumb" title="Show this file in the editor">No file yet</button>
@@ -554,6 +595,7 @@ function appendCardSummary(parent, card) {
   parent.append(badge);
 }
 const mathParts = ${mathParts.toString()};
+const codeParts = ${codeParts.toString()};
 const emphasisParts = ${emphasisParts.toString()};
 const send = (type, extra = {}) => vscode.postMessage({ type, ...extra });
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el; };
@@ -601,36 +643,15 @@ function appendText(parent, text) {
     parent.append(span);
   }
 }
-// Where this file sits in a reading order, and the files around it.
-function renderTour(s) {
-  const tour = s.tour, bar = node('nav', undefined, 'tour'); bar.setAttribute('aria-label', 'Reading tour');
-  const go = (item, text, className) => { const button = node('button', text, className); button.title = 'Open ' + item.id + ' in Yamori'; button.addEventListener('click', () => send('tourGo', { id: item.id })); return button; };
-  const row = node('div', undefined, 'tour-row');
-  row.append(node('span', tour.label + ' · Step ' + (tour.index + 1) + ' of ' + tour.total, 'tour-where'));
-  if (tour.prev) row.append(go(tour.prev, '← ' + tour.prev.label, 'tour-prev'));
-  if (tour.next) {
-    row.append(go(tour.next, 'Next: ' + tour.next.label + ' →', 'tour-next primary'));
-    row.append(node('span', tour.next.status === 'ready' ? 'ready ✓' : tour.next.status === 'preparing' ? 'preparing…' : 'written when you open it', 'tour-status'));
-  } else row.append(node('span', 'Last step in ' + tour.label, 'tour-status'));
-  const guide = node('button', 'Project guide', 'tour-guide'); guide.title = 'Where to start reading, how files connect'; guide.addEventListener('click', () => send('map'));
-  row.append(guide); bar.append(row);
-  const links = node('div', undefined, 'tour-links');
-  for (const [label, items] of [['Used by', tour.usedBy], ['Uses', tour.uses]]) {
-    if (!items?.length) continue;
-    const group = node('span', undefined, 'tour-group'); group.append(node('span', label + ': ', 'tour-label'));
-    items.forEach((item, index) => { if (index) group.append(document.createTextNode(', ')); group.append(go(item, item.label, 'tour-link')); });
-    links.append(group);
-  }
-  if (links.children.length) bar.append(links);
-  content.append(bar);
-}
 function appendMath(parent, text) {
   for (const part of mathParts(text)) {
     if (!part.tex) { appendText(parent, part.text); continue; }
     try {
-      const markup = katex.renderToString(part.tex, { output: 'mathml', throwOnError: true, trust: false, strict: 'ignore', maxExpand: 100, maxSize: 10 });
+      const markup = katex.renderToString(part.tex, { output: 'mathml', displayMode: part.display, throwOnError: true, trust: false, strict: 'ignore', maxExpand: 100, maxSize: 10 });
       const parsed = new DOMParser().parseFromString(markup, 'text/html');
-      parent.append(document.importNode(parsed.querySelector('math'), true));
+      const math = document.importNode(parsed.querySelector('math'), true);
+      if (!part.display) parent.append(math);
+      else { const display = node('span', undefined, 'math-display'); display.append(math); parent.append(display); }
     } catch { appendText(parent, part.text); }
   }
 }
@@ -640,6 +661,52 @@ function appendInline(parent, text) {
     appendMath(target, part.text); if (part.strong) parent.append(target);
   }
 }
+function appendReply(parent, text) {
+  parent.className += ' reader-reply';
+  for (const part of codeParts(text, true)) {
+    if (part.code) { const block = node('pre'); block.append(node('code', part.text.trimEnd())); parent.append(block); continue; }
+    for (const phrase of emphasisParts(part.text)) {
+      const target = phrase.strong ? node('strong') : parent;
+      for (const inline of codeParts(phrase.text)) {
+        if (inline.code) target.append(node('code', inline.text));
+        else appendMath(target, inline.text);
+      }
+      if (phrase.strong) parent.append(target);
+    }
+  }
+}
+function edgeMark(kind) {
+  const handled = kind === 'card-handled';
+  const marker = node('span', handled ? '✓' : '⚠︎', 'step-number edge-mark' + (handled ? ' handled' : ''));
+  marker.setAttribute('aria-label', handled ? 'Handled edge case' : 'Worth checking');
+  return marker;
+}
+function wireDiff(row, change, text, s) {
+  const label = change.kind === 'removed' ? 'Removed step' : 'Added step';
+  row.className += ' diff-' + change.kind + ' linked';
+  row.title = label + ' · source L' + change.sourceLine;
+  row.setAttribute('role', 'button'); row.setAttribute('tabindex', '0');
+  row.setAttribute('aria-label', label + ' · ' + text.trim() + ' · Open source diff');
+  const jump = () => send('inlineDiffJump', { documentKey: s.documentKey, id: change.id });
+  row.addEventListener('click', jump);
+  row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); } });
+}
+function diffSign(kind, className = '') {
+  const sign = node('span', kind === 'added' ? '+' : '−', 'diff-sign diff-' + kind + (className ? ' ' + className : ''));
+  sign.setAttribute('aria-hidden', 'true');
+  return sign;
+}
+function appendRemoved(code, changes, s) {
+  for (const change of changes || []) {
+    const row = node('span', undefined, 'code-line');
+    const body = node('span', undefined, 'step-body');
+    body.style.paddingInlineStart = Math.min(change.text.length - change.text.trimStart().length, 40) * .55 + 'em';
+    appendInline(body, change.text.trimStart());
+    row.append(diffSign('removed', 'step-number'), body);
+    wireDiff(row, change, change.text, s); code.append(row);
+  }
+}
+const workspaceUI = (${logicWorkspaceUI.toString()})({ node, send, appendInline, appendReply, edgeMark, parseCard, pseudocodeLines, diffSign, appendRemoved, appendTests, mascotImage: ${JSON.stringify(logo)} });
 function render(s) {
   send('clearHover');
   const restoreEditorFocus = editing && draftEditors.get(editing.key)?.hasFocus();
@@ -648,6 +715,8 @@ function render(s) {
   symbolMatcher = glossaryMatcher((s.symbols || []).map(link => ({ term: link.name })));
   for (const row of s.drafts || []) if (!drafts.has(row.key)) drafts.set(row.key, { ...row, scope: s.draftScope });
   document.body.setAttribute('data-palette', ['paper', 'slate'].includes(s.readingPalette) ? s.readingPalette : 'auto');
+  if (s.comparison) document.body.setAttribute('data-comparison', '');
+  else document.body.removeAttribute?.('data-comparison');
   if (editing && editing.documentKey !== s.documentKey) editing = undefined;
   if (!s.busy || reacting?.documentKey !== s.documentKey) reacting = undefined;
   content.className = s.level === 'logic' ? 'paper' : '';
@@ -668,11 +737,47 @@ function render(s) {
     crumb.title = 'Show ' + file + ' in the editor';
   } else { crumb.textContent = 'No file yet'; crumb.title = 'Open a file to explain it'; }
   crumb.disabled = !s.name;
-  document.querySelectorAll('[data-level]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.level === s.level)); });
+  if (s.comparison) crumb.title = 'Open source diff';
+  const fileButton = document.getElementById('files');
+  if (s.comparison) { fileButton.textContent = 'Changed files'; fileButton.title = 'Choose another file in this comparison'; fileButton.setAttribute('aria-label', 'Changed files'); }
+  document.querySelectorAll('[data-level]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.level === s.level)); if (s.comparison) b.disabled = !!s.busy; });
   refresh.textContent = s.busy ? 'Stop' : s.stale ? 'Update from code' : 'Regenerate'; refresh.disabled = !s.name || (!!s.sourceMissing && !s.busy);
   refresh.title = s.busy ? 'Stop the current request' : s.stale ? 'The code changed: update this explanation to match it' : 'Write this explanation again from the current code';
-  content.setAttribute('aria-busy', String(!!s.busy)); content.replaceChildren();
-  if (s.tour) renderTour(s);
+  if (s.comparison && !s.busy) { refresh.textContent = 'Refresh'; refresh.title = 'Refresh this comparison'; }
+  content.setAttribute('aria-busy', String(!!s.busy));
+  if (s.workspace) {
+    document.body.setAttribute('data-workspace', '');
+    workspaceUI.show(content, s);
+    return;
+  }
+  document.body.removeAttribute?.('data-workspace');
+  workspaceUI.hide(); content.replaceChildren();
+  if (s.comparison) {
+    const comparison = s.comparison;
+    content.append(node('p', comparison.label, 'comparison-label'));
+    const message = comparison.notice || comparison.status;
+    if (message && !s.busy) { const notice = node('p', message, 'notice'); notice.setAttribute('role', 'status'); content.append(notice); }
+    if (comparison.generate && !s.busy) {
+      const explain = node('button', comparison.generate, 'primary');
+      explain.addEventListener('click', () => send('explainComparison', { documentKey: s.documentKey }));
+      content.append(explain);
+    }
+  }
+  if (s.sourceProposal && !s.workspace) {
+    const proposal = s.sourceProposal;
+    const notice = node('div', undefined, 'notice');
+    notice.append(node('p', proposal.phase === 'previewing' ? 'Preparing preview…' : proposal.message || 'Preview ready'));
+    if (proposal.ready) {
+      const apply = node('button', proposal.mode === 'test' ? 'Accept test' : 'Apply to code', 'primary');
+      apply.addEventListener('click', () => send('workspaceAccept', { id: proposal.id }));
+      const diff = node('button', 'Preview diff');
+      diff.addEventListener('click', () => send('workspaceShowDiff', { id: proposal.id }));
+      notice.append(apply, diff);
+    }
+    const close = node('button', 'Dismiss');
+    close.addEventListener('click', () => send('workspaceCancel'));
+    notice.append(close); content.append(notice);
+  }
   if (s.result?.refinement?.warning) {
     const notice = node('div', undefined, 'notice'); notice.setAttribute('role', 'status'); notice.append(node('p', s.result.refinement.warning));
     if (s.result.refinement.status === 'incomplete') { const retry = node('button', 'Retry review'); retry.disabled = !!s.busy || !!s.sourceMissing; retry.addEventListener('click', () => { flushDrafts(); send('retryReview'); }); notice.append(retry); }
@@ -732,7 +837,7 @@ function render(s) {
   if (aiSummary) aiSummary.textContent = 'AI: ' + s.providerLabel + (s.requestedModel ? ' · ' + s.requestedModel : '') + ' ▾';
   if (s.result) {
     content.append(node('h1', s.result.title));
-    const navKey = [s.name, s.level, s.providerLabel].join('|');
+    const navKey = s.comparison ? s.documentKey : [s.name, s.level, s.providerLabel].join('|');
     // A link, hover or CodeLens asked for the block covering a line.
     if (s.focusLine?.token && s.focusLine.token !== appliedFocus && !s.partial) {
       const index = s.result.sections.findIndex(section => s.focusLine.line >= section.startLine && s.focusLine.line <= section.endLine);
@@ -742,6 +847,10 @@ function render(s) {
     const cards = s.result.sections.map(section => parseCard(section.pseudocode || ''));
     let selected = focusedBlocks.get(navKey);
     if (selected >= s.result.sections.length) selected = undefined;
+    if (selected === undefined && !focusedBlocks.has(navKey) && (s.comparison || s.result.sections.length === 1)) {
+      const firstChanged = Object.keys(s.inlineDiff?.blocks || {})[0];
+      if (firstChanged !== undefined) { selected = Number(firstChanged); focusedBlocks.set(navKey, selected); }
+    }
     if (selected === undefined && (s.result.sections.length === 1 && !cards[0] || s.partial && !s.result.draftComplete)) selected = 0;
     const openBlock = index => {
       focusedBlocks.set(navKey, index);
@@ -766,14 +875,25 @@ function render(s) {
         button.append(node('span', String(index + 1).padStart(2, '0'), 'map-number'), label);
         const draft = drafts.get(draftKey(s, index));
         const detail = blockIsStale(s, index) ? (s.removedBlocks?.includes(index) ? 'Removed' : 'Changed') : draft && (draft.draft !== draft.baseText || draft.instruction) ? 'Draft' : s.legacyCardBlocks?.includes(index) ? 'Legacy format' : section.startLine ? 'L' + section.startLine + '–' + section.endLine : 'Writing…';
-        button.append(node('span', detail, 'map-range'), node('span', '→', 'map-arrow'));
+        const range = node('span', detail, 'map-range');
+        const diff = s.inlineDiff?.blocks?.[index];
+        if (diff) {
+          const marks = Object.values(diff.marks);
+          const added = marks.some(mark => mark.kind === 'added'), removed = marks.some(mark => mark.kind === 'removed') || Object.keys(diff.removed).length > 0;
+          const signs = node('span', undefined, 'block-diff');
+          signs.setAttribute('aria-label', added && removed ? 'Added and removed steps' : added ? 'Added steps' : 'Removed steps');
+          if (added) signs.append(diffSign('added'));
+          if (removed) signs.append(diffSign('removed'));
+          range.append(signs);
+        }
+        button.append(range, node('span', '→', 'map-arrow'));
         button.addEventListener('click', () => openBlock(index)); item.append(button); list.append(item);
       });
       map.append(list); content.append(map);
     } else {
       const navigation = node('nav', undefined, 'block-navigation'); navigation.setAttribute('aria-label', 'Block navigation');
       const back = node('button', '← Logic map'); back.disabled = s.result.sections.length === 1 && !cards[0];
-      back.addEventListener('click', () => { focusedBlocks.delete(navKey); editing = undefined; render(state); content.querySelector?.('.map-item')?.focus?.(); content.scrollIntoView?.({ block: 'start', behavior: 'instant' }); });
+      back.addEventListener('click', () => { focusedBlocks.set(navKey, undefined); editing = undefined; render(state); content.querySelector?.('.map-item')?.focus?.(); content.scrollIntoView?.({ block: 'start', behavior: 'instant' }); });
       const count = node('span', String(selected + 1).padStart(2, '0') + ' / ' + String(s.result.sections.length).padStart(2, '0'), 'block-count');
       const previous = node('button', '←'); previous.title = 'Previous block'; previous.setAttribute('aria-label', 'Previous block'); previous.disabled = selected === 0; previous.addEventListener('click', () => openBlock(selected - 1));
       const next = node('button', '→'); next.title = 'Next block'; next.setAttribute('aria-label', 'Next block'); next.disabled = selected === s.result.sections.length - 1; next.addEventListener('click', () => openBlock(selected + 1));
@@ -783,6 +903,7 @@ function render(s) {
       if (index !== selected) return;
       const card = cards[index];
       const blockStale = blockIsStale(s, index);
+      const diff = s.inlineDiff?.blocks?.[index];
       const el = node('details'); el.className = 'reading-block' + (card ? ' function-card' : '') + (animateNext ? ' jump-in' : ''); animateNext = false; const heading = node('summary', undefined, 'section-heading');
       const blockKey = [s.name, s.level, s.providerLabel, index].join('|');
       el.open = !collapsed.has(blockKey);
@@ -825,7 +946,7 @@ function render(s) {
       const refreshBlock = node('button', '↻'); refreshBlock.title = 'Refresh this cached block'; refreshBlock.setAttribute('aria-label', 'Refresh block: ' + section.title);
       refreshBlock.disabled = !!s.busy || !!s.sourceMissing || !!s.partial || !!s.removedBlocks?.includes(index);
       refreshBlock.addEventListener('click', event => { event.preventDefault(); flushDrafts(); send('refreshBlock', { index, documentKey: s.documentKey }); });
-      actions.append(copyBlock, edit, refreshBlock); heading.append(actions);
+      actions.append(copyBlock, edit, refreshBlock); if (!s.comparison) heading.append(actions);
       const code = node('pre');
       let stepNumber = 0;
       const rowsByLine = [];
@@ -838,7 +959,10 @@ function render(s) {
         rowsByLine[lineIndex + 1] = row;
         if (kind === 'note' && /^\\s*#\\s*(Context|Why|How|What):/i.test(text)) row.className += ' context-note';
         const mapping = section.lineMap?.find(m => m.pseudocodeLine === lineIndex + 1);
-        row.append(node('span', card ? number || '' : text.trim() && kind !== 'note' ? String(++stepNumber) : '', 'step-number'));
+        const line = lineIndex + 1, mark = diff?.marks[line];
+        appendRemoved(code, diff?.removed[line], s);
+        const stepLabel = card ? number || '' : text.trim() && kind !== 'note' ? String(++stepNumber) : '';
+        row.append(mark ? diffSign(mark.kind, 'step-number') : ['card-handled', 'card-risk'].includes(kind) ? edgeMark(kind) : node('span', stepLabel, 'step-number'));
         if (kind === 'card-handled' || kind === 'card-risk') {
           const status = kind === 'card-handled' ? 'Handled · worth checking' : 'Risky · worth checking';
           row.title = status;
@@ -847,7 +971,7 @@ function render(s) {
         const canLink = mapping && !blockStale && !s.partial;
         const cardLink = card && (kind === 'card-step' || kind === 'card-risk' || kind === 'card-handled');
         if (kind === 'card-risk' && canLink) riskLines.push(lineIndex + 1);
-        if (canLink && (!card || cardLink)) {
+        if (canLink && !mark && (!card || cardLink)) {
           row.className += ' linked'; row.setAttribute('role', 'button'); row.setAttribute('tabindex', '0');
           row.title = (row.title ? row.title + '. ' : '') + 'Hover to highlight source L' + mapping.startLine + '–' + mapping.endLine + ' · Click to jump';
           row.setAttribute('aria-label', text.trim() + '. ' + row.title);
@@ -891,8 +1015,10 @@ function render(s) {
           const range = 'L' + mapping.startLine + (mapping.endLine === mapping.startLine ? '' : '–' + mapping.endLine);
           row.append(node('span', range, 'card-source-chip'));
         }
+        if (mark) wireDiff(row, mark, text, s);
         code.append(row);
       });
+      appendRemoved(code, diff?.removed.end, s);
       el.append(heading);
       // Fixed-rule check of this block against the source (no AI): shown only when it found something to look at.
       const found = s.checks?.[index];
@@ -905,7 +1031,9 @@ function render(s) {
       }
       if (blockStale) { const warning = node('div', undefined, 'block-stale'); warning.append(node('span', s.removedBlocks?.includes(index) ? 'This code was removed. Update from code to reorganize the map.' : 'This cached block needs review.')); if (!s.removedBlocks?.includes(index)) { const refresh = node('button', 'Refresh block'); refresh.disabled = !!s.busy || !!s.sourceMissing; refresh.addEventListener('click', () => { flushDrafts(); send('refreshBlock', { index, documentKey: s.documentKey }); }); warning.append(refresh); } el.append(warning); }
 
-      if (editing?.index === index && editing.documentKey === s.documentKey) {
+      if (s.comparison) {
+        el.append(code);
+      } else if (editing?.index === index && editing.documentKey === s.documentKey) {
         el.open = true;
         const record = drafts.get(editing.key);
         const editor = node('div', undefined, 'block-editor');
@@ -979,12 +1107,12 @@ function render(s) {
     const footer = node('footer');
     if (s.result?.refinement) footer.append(node('span', s.result.refinement.status === 'incomplete' ? 'Draft · review incomplete' : s.result.refinement.status === 'skipped' ? 'Straightforward code · refinement skipped' : 'Refined ' + s.result.refinement.selectedBlocks?.length + (s.result.refinement.selectedBlocks?.length === 1 ? ' block · ' : ' blocks · ') + s.result.refinement.stepsCompleted + '/' + s.result.refinement.stepsRequested + ' steps'));
     footer.append(node('span', s.partial ? s.result.draftComplete ? 'Draft · reviews running · final result will be cached' : 'Writing draft · source links activate when complete' : s.stale ? 'Cached locally · source needs review' : s.cacheSavedAt ? 'Cached on this device · ' + dateLabel(s.cacheSavedAt) : 'AI-generated · Verify against source'));
-    const copy = node('button', 'Copy'); copy.disabled = !!s.partial; copy.addEventListener('click', () => send('copy')); footer.append(copy); content.append(footer);
+    const copy = node('button', 'Copy'); copy.disabled = !!s.partial; copy.addEventListener('click', () => send('copy')); footer.append(copy); if (!s.comparison) content.append(footer);
   } else if (s.busy) {
     for (let i = 0; i < 8; i++) { const line = node('div', undefined, 'skeleton'); line.style.width = i % 3 === 0 ? '55%' : '90%'; content.append(line); }
   } else if (s.error) {
     const retry = node('button', 'Try again', 'primary'); retry.addEventListener('click', () => send('refresh')); content.append(retry);
-  } else {
+  } else if (!s.comparison) {
     const empty = node('div', undefined, 'empty');
     empty.append(node('h1', 'Big ideas. Less guesswork.'), node('p', 'Explain a file as short pseudocode, or let the project guide show where to start reading.'));
     const actions = node('div', undefined, 'empty-actions');
@@ -1133,7 +1261,7 @@ document.getElementById('model').addEventListener('click', () => send('model'));
 document.getElementById('effort').addEventListener('click', () => send('effort'));
 document.getElementById('refinement').addEventListener('click', () => send('refinement'));
 document.getElementById('setup-ai').addEventListener('click', () => send('setup'));
-document.addEventListener?.('keydown', event => { if (event.key === 'Escape') document.querySelector?.('.ai-settings')?.removeAttribute('open'); });
+document.addEventListener?.('keydown', event => { if (state.workspace) workspaceUI.key(event); if (event.key === 'Escape') document.querySelector?.('.ai-settings')?.removeAttribute('open'); });
 document.getElementById('colors').addEventListener('click', () => send('palette'));
 document.getElementById('source').addEventListener('click', () => send('showSource'));
 document.getElementById('files').addEventListener('click', () => send('switchFile'));
@@ -1143,6 +1271,8 @@ refresh.addEventListener('click', () => { flushDrafts(); send(state.busy ? 'stop
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => send('level', { level: b.dataset.level })));
 window.addEventListener('message', e => {
   if (e.data.type === 'state') render(e.data.state);
+  if (e.data.type === 'workspaceCursor' && state.workspace) workspaceUI.cursorLine(e.data.line);
+  if (e.data.type === 'workspaceTerminalResult' && state.workspace) workspaceUI.terminalResult(e.data);
   if (e.data.type === 'draftSaved') { const record = drafts.get(e.data.key); if (record && record.version === e.data.version) { record.savedAt = e.data.savedAt; record.saving = false; const label = document.getElementById('draft-cache-status'); if (editing?.key === e.data.key && label) label.textContent = 'Draft saved on this device · ' + dateLabel(record.savedAt); } }
   if (e.data.type === 'draftApplied') { for (const key of e.data.keys || []) { if (draftTimers.has(key) && typeof clearTimeout === 'function') clearTimeout(draftTimers.get(key)); draftTimers.delete(key); draftEditors.get(key)?.destroy(); draftEditors.delete(key); drafts.delete(key); } }
   if (e.data.type === 'cacheCleared') { for (const timer of draftTimers.values()) if (typeof clearTimeout === 'function') clearTimeout(timer); draftTimers.clear(); for (const editor of draftEditors.values()) editor.destroy(); draftEditors.clear(); drafts.clear(); editing = undefined; }

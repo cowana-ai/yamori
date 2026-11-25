@@ -28,6 +28,7 @@ Claude Desktop or the ChatGPT app) and offers one button: Use, Sign in or Instal
 **Also in Yamori**
 - **Project guide:** where to start reading, folder by folder; a map of how files connect; a glossary of project terms
 - **Explain how it flows:** search any name and trace it across files
+- **Review changes:** see added and removed pseudocode steps beside the editor's source diff
 - **Run with a test:** watch a function run line by line, with values (a real Python test, or a labelled simulation)
 - **Chat & plan:** turn a goal into steps on the map, then let your agent implement after you approve
 - **For your agents:** an MCP server so Claude Code and Codex can use the same map and pseudocode

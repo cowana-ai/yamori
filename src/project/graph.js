@@ -129,6 +129,25 @@ class Indexer {
     })());
     return this.languages.get(grammar);
   }
+  async pythonBindings(text) {
+    const { parser } = await this.language('python');
+    const tree = parser.parse(text);
+    try {
+      const bindings = new Map();
+      for (const statement of tree.rootNode.namedChildren) {
+        if (!['import_statement', 'import_from_statement'].includes(statement.type)) continue;
+        const module = statement.childForFieldName('module_name')?.text;
+        for (const item of statement.childrenForFieldName('name')) {
+          const name = (item.childForFieldName('name') || item).text;
+          const alias = item.childForFieldName('alias')?.text;
+          const local = alias || (module ? name : name.split('.')[0]);
+          if (module) bindings.set(local, { spec: module, member: name });
+          else bindings.set(local, { spec: name, qualifier: alias || name });
+        }
+      }
+      return bindings;
+    } finally { tree.delete(); }
+  }
   async extract(rel, text) {
     const grammar = GRAMMAR_FOR[posix.extname(rel).toLowerCase()];
     if (isContextFile(rel)) return { defs: [], refs: [], imports: [], tests: [] };

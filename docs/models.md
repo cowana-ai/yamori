@@ -58,15 +58,14 @@ and reviewed after you can already read it. Measured on a 354-line Python file
 - Yamori splits the file locally with tree-sitter, no AI, into parts made of whole
   functions and classes. A definition longer than a part splits into its inner
   definitions. Decorators and doc comments stay with their definition.
-- Each request explains one part with the whole file as context, and is told which
+- Each request receives its assigned source, supporting context and an outline marking which
   other parts exist so it names them instead of re-explaining them. Part 1 also
   writes the title and summary.
 - Blocks appear as each part finishes; the draft is ready about when the slowest part is.
 - A section that strays outside its part is trimmed to it. A failed part is retried
-  once; if it fails again, Yamori writes the whole file in one request as before.
+  once, using the same source scope.
 - Used for Logic on Python, JavaScript/TypeScript, Go, Java and Rust files big
-  enough for two parts (about 50 lines). Set 1 to always use one request. Parts
-  read the whole file each, so they use more of your plan for the same output.
+  enough for two parts (about 50 lines). Set 1 to always use one request.
 
 **Background review:**
 - Once the draft is shown, the review runs on its own: picking difficult blocks, two

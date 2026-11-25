@@ -183,7 +183,7 @@ test('Claude Desktop’s own Claude Code is found, newest first, and status chec
     assert.deepEqual([c.installed, c.ready, c.problem], [false, false, 'Not installed']);
   } finally { await fsp.rm(dir, { recursive: true, force: true }); }
 });
-test('setup comes before the app: no ready AI shows Setup, one click continues to the file, and readers switch AI', async () => {
+test('Overview opens Setup without a provider, one click continues, and readers switch AI', async () => {
   const h = await readerHarness({ prefetchNext: false, autoNotes: false });
   try {
     const setupView = (...args) => JSON.parse(JSON.stringify(h.exports.setupView(...args)));
@@ -198,7 +198,7 @@ test('setup comes before the app: no ready AI shows Setup, one click continues t
     assert.match(view.notice, /ChatGPT isn’t ready \(Not signed in\)\. Claude is ready to use instead\./); assert.equal(view.next, 'explain plan.py');
     assert.match(setupView({ claude: missing.claude, codex: { installed: false, ready: false } }).notice, /Neither is on this computer yet/);
     // A first-time user (no AI chosen) gets Setup instead of an empty reader.
-    const state = new Map(); h.context.globalState.get = (k, f) => state.get(k) ?? f; h.context.globalState.update = async (k, v) => state.set(k, v);
+    const state = new Map([['detail', 'overview']]); h.context.globalState.get = (k, f) => state.get(k) ?? f; h.context.globalState.update = async (k, v) => state.set(k, v);
     const readersBefore = h.readers().length;
     testStatus.codex = { provider: 'codex', installed: true, signedIn: false, ready: false, problem: 'Not signed in', path: '/usr/local/bin/codex', source: 'Command line' };
     await h.commands.get('yamori.openAt')(new h.Uri(require('node:path').join(h.root, 'pipeline/plan.py')).toString(), 3);
@@ -238,6 +238,18 @@ test('process cancellation terminates a running request', async () => {
 test('process timeout and nonzero exit become errors, credentials are redacted', async () => {
   await assert.rejects(runProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], '', { timeout: 40 }), /too long/);
   await assert.rejects(runProcess(process.execPath, ['-e', 'console.error("sk-private-secret"); process.exit(1)'], ''), error => error.message.includes('[redacted]') && !error.message.includes('sk-private'));
+});
+test('Claude authentication errors show the sign-in command instead of CLI telemetry', async () => {
+  const result = { type: 'result', is_error: true, session_id: 'private-session-id',
+    result: 'Failed to authenticate: this login reached its time limit and cannot be renewed. Run claude auth login.',
+    telemetry: 'x'.repeat(2000) };
+  for (const stream of ['stdout', 'stderr']) {
+    const script = 'process.' + stream + '.write(' + JSON.stringify(JSON.stringify({ type: 'system' }) + '\n' + JSON.stringify(result) + '\n') + ');process.exitCode=1;';
+    await assert.rejects(runProcess(process.execPath, ['-e', script], '', { provider: 'claude' }), error =>
+      error.message === 'Claude Code needs you to sign in again. Run claude auth login in a terminal, then retry.');
+  }
+  const script = 'console.log(JSON.stringify({type:"result",is_error:true,result:"Rate limit exceeded."}));process.exitCode=1;';
+  await assert.rejects(runProcess(process.execPath, ['-e', script], '', { provider: 'claude' }), /^Error: Rate limit exceeded\.$/);
 });
 test('webview scripts compile and model content is inserted as text, never HTML', () => {
   const html = panelHTML();
@@ -600,7 +612,8 @@ test('extension workflow switches levels, reuses cache, marks edits stale and ig
     await receive({ type: 'level', level: 'overview' });
     assert.equal(calls, beforeChoice + 1, 'model-specific companion view is cached');
     nextPick = 'claude'; await receive({ type: 'provider' });
-    assert.equal(lastModel, '', 'Claude has a separate default');
+    assert.equal(calls, beforeChoice + 1, 'changing providers must not regenerate');
+    assert.equal(messages.at(-1).requestedModel, '', 'Claude has a separate default');
     nextPick = 'test-choice'; await commands.get('yamori.model')();
     assert.equal(state.get('claudeModel').id, 'test-choice');
     nextPick = 'codex'; await receive({ type: 'provider' });
@@ -720,6 +733,8 @@ test('math delimiters preserve prose and typeset subscripts, sums and fractions'
   assert.match(markup, /<math/);
   assert.equal(mathParts('No equations here.')[0].text, 'No equations here.');
   assert.equal(mathParts('Unfinished $x').length, 1);
+  assert.deepEqual(mathParts(String.raw`\(x_1\) then \[\frac{1}{2}\]`).filter(part => part.tex).map(part => [part.tex, part.display]),
+    [['x_1', false], [String.raw`\frac{1}{2}`, true]]);
 });
 
 test('edit requests ground one block and revisions preserve user intent across levels', () => {
@@ -1124,7 +1139,7 @@ test('a batched source refresh returns only changed blocks and merges untouched 
     const reply = {title:previous.title,summary:previous.summary,sections:[{...previous.sections[0],index:0,pseudocode:'Set x to 2.'}]};
     await fs.writeFile(binary, 'const fs=require("node:fs"),a=process.argv.slice(2),schema=JSON.parse(fs.readFileSync(a[a.indexOf("--output-schema")+1],"utf8"));'+
       'if(schema.properties.views||schema.properties.sections.maxItems!==1||!schema.properties.sections.items.anyOf.every(item=>item.properties.index.enum[0]===0))process.exit(3);'+
-      'let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{if(!prompt.includes("CACHED DOCUMENT DATA")||!prompt.includes("Keep this useful cached note"))process.exit(4);const reply='+JSON.stringify(reply)+';if(a.includes("bad"))reply.sections[0].index=1;if(a.includes("bounds")){reply.sections[0].startLine=11;reply.sections[0].endLine=11;}fs.writeFileSync(a[a.indexOf("--output-last-message")+1],JSON.stringify(reply))});');
+      'let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{if(!prompt.includes("CACHED DOCUMENT DATA")||prompt.includes("Keep this useful cached note"))process.exit(4);const reply='+JSON.stringify(reply)+';if(a.includes("bad"))reply.sections[0].index=1;if(a.includes("bounds")){reply.sections[0].startLine=11;reply.sections[0].endLine=11;}fs.writeFileSync(a[a.indexOf("--output-last-message")+1],JSON.stringify(reply))});');
     const options={source:{...source,text:'x = 2\nprint(x)'},level:'logic',provider:'codex',cliPath:binary,sourceRefresh:{previous,patch:true,staleBlocks:[0]}};
     const value=await generate(options);
     assert.equal(value.sections[0].pseudocode,'Set x to 2.'); assert.deepEqual(value.sections[1],previous.sections[1]);
@@ -1132,6 +1147,39 @@ test('a batched source refresh returns only changed blocks and merges untouched 
     await assert.rejects(generate({...options,model:'bad'}),/unexpected block patch/);
     await assert.rejects(generate({...options,model:'bounds'}),/changed source boundaries/);
   } finally {await fs.rm(temp,{recursive:true,force:true});}
+});
+
+test('a focused refresh starts with changed lines and expands only when needed', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-delta-provider-'));
+  const binary = path.join(temp, 'provider.js'), log = path.join(temp, 'calls');
+  const current = { ...source, text: 'x = 2\nSAME_BLOCK_SOURCE\nUNRELATED_BLOCK_SOURCE' };
+  const sections = [
+    { index: 0, title: 'Set', startLine: 10, endLine: 11, pseudocode: 'Set x to 2.', lineMap: [[1, 10, 10]] },
+    { title: 'Other', startLine: 12, endLine: 12, pseudocode: 'Unrelated cached block.', lineMap: [] }
+  ];
+  const previous = { title: 'Title', summary: 'Summary', sections: [{ ...sections[0], pseudocode: 'Set x to 1.', lineMap: [] }, sections[1]] };
+  try {
+    const reply = { title: previous.title, summary: previous.summary, sections: [sections[0]] };
+    await fs.writeFile(binary,
+      'const fs=require("node:fs"),a=process.argv.slice(2),schema=JSON.parse(fs.readFileSync(a[a.indexOf("--output-schema")+1],"utf8"));' +
+      'let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{' +
+      'const focused=!!schema.properties.needsContext;const reply=' + JSON.stringify(reply) + ';' +
+      'if(focused){reply.needsContext=a.includes("expand");if(reply.needsContext)reply.sections=[];}' +
+      'fs.appendFileSync(' + JSON.stringify(log) + ',JSON.stringify({focused,prompt})+"\\n");' +
+      'fs.writeFileSync(a[a.indexOf("--output-last-message")+1],JSON.stringify(reply))});');
+    const opts = { source: current, level: 'logic', provider: 'codex', cliPath: binary,
+      sourceRefresh: { previous, patch: true, staleBlocks: [0], focused: { hunks: [{ removed: [[10, 'x = 1']], added: [[10, 'x = 2']], currentLine: 10 }], lineMap: [] } } };
+    assert.equal((await generate(opts)).sections[0].pseudocode, 'Set x to 2.');
+    assert.deepEqual((await generate({ ...opts, model: 'expand' })).sections[1], previous.sections[1]);
+    const calls = (await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.deepEqual(calls.map(call => call.focused), [true, true, false]);
+    assert.match(calls[0].prompt, /x = 2/);
+    assert.match(calls[0].prompt, /Set x to 1/);
+    assert.doesNotMatch(calls[0].prompt, /SAME_BLOCK_SOURCE|UNRELATED_BLOCK_SOURCE|Unrelated cached block/);
+    assert.match(calls[2].prompt, /SAME_BLOCK_SOURCE/);
+    assert.doesNotMatch(calls[2].prompt, /UNRELATED_BLOCK_SOURCE/);
+  } finally { await fs.rm(temp, { recursive: true, force: true }); }
 });
 
  test('deleted selections are not silently remapped to unrelated code', () => {
@@ -1197,7 +1245,7 @@ function respond(prompt,schema){
  if(schema.properties.blocks){type='selector';value={blocks:mode==='skip'?[]:[{index:1,reason:'The count identity needs a short derivation.'}]};}
  else if(schema.properties.score){
   type=prompt.includes('independent remaining-uncertainty')?'entropy':'readCost';
-  if(JSON.stringify(schema.properties.issues.items.properties.view.enum)!=='[\"main\"]'||JSON.stringify(schema.properties.issues.items.properties.section.enum)!=='[-1,0]')throw new Error('Review schema allows absent references');
+  if(schema.properties.issues.items.properties.section.type!=='integer'||schema.properties.issues.items.properties.section.enum)throw new Error('Review schema is not stable');
   const match=prompt.match(/CANDIDATE EXPLANATION DATA: ([\s\S]*)\nReturn the review JSON only\./),candidate=JSON.parse(match[1]);
   if(candidate.sections.length!==1||candidate.sections[0].title!=='Recover matches')throw new Error('Reviewer received an easy section');
   const improved=candidate.sections[0].pseudocode.includes('Let m');value={score:improved?2:7,faithful:true,issues:improved?[]:[{section:0,view:'main',severity:'major',problem:'The count identity is unexplained.',suggestion:'Define matches and derive the identity.'}]};
@@ -1326,9 +1374,9 @@ test('compact refinement context retains source numbering, user intent and defin
   assert.ok(context.length<promptFor(source,'logic').length/2,'the evaluator context excludes the long writing guide and illustrative examples');
 });
 
-test('review schemas expose only available targets and normalize only a known detail alias',()=>{
+test('review schema is stable and response validation normalizes only a known detail alias',()=>{
   const {reviewSchema,parseReview}=require('../src/ai/engine'),schema=reviewSchema(valid),item=schema.properties.issues.items;
-  assert.deepEqual(item.properties.view.enum,['main']);assert.deepEqual(item.properties.section.enum,[-1,0]);assert.equal(item.properties.problem.maxLength,2000);
+  assert.equal(item.properties.section.type,'integer');assert.deepEqual(reviewSchema({...valid,sections:[...valid.sections,...valid.sections]}),schema);assert.equal(item.properties.problem.maxLength,2000);
   const feedback={score:3,faithful:true,issues:[{view:'logic',section:0,severity:'critical',problem:'Wrong behavior.',suggestion:'Fix it.'}]};
   const parsed=parseReview(JSON.stringify(feedback),valid,{level:'logic'});assert.equal(parsed.issues[0].view,'main');assert.equal(parsed.faithful,false,'normalizing an alias never clears a critical fidelity objection');
   assert.throws(()=>parseReview(JSON.stringify({...feedback,issues:[{...feedback.issues[0],section:1}]}),valid,{level:'logic'}),error=>error.code==='YAMORI_REVIEW_FORMAT','one-based or original indices are not guessed');
@@ -1366,9 +1414,11 @@ test('packaged validators work with no Ajv installation, schema compilation or d
   const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'yamori-validator-runtime-'));
   try{
-    await Promise.all(['engine.js','cards.js','schemas.js','validation.min.js'].map(file=>fs.copyFile(path.join(__dirname,'..','src','ai',file),path.join(root,file))));
+    await Promise.all(['ai','project'].map(dir=>fs.mkdir(path.join(root,dir))));
+    const files=['ai/engine.js','ai/cards.js','ai/schemas.js','ai/validation.min.js','project/token-estimates.js'];
+    await Promise.all(files.map(file=>fs.copyFile(path.join(__dirname,'..','src',file),path.join(root,file))));
     const script=`const Module=require('node:module'),load=Module._load;Module._load=function(id,...args){if(id==='ajv'||id.startsWith('ajv/')||id==='esbuild')throw new Error('Build-only dependency loaded at runtime');return load.call(this,id,...args);};global.Function=function(){throw new Error('Runtime schema compilation is forbidden');};const {parseResult}=require('./engine');const source=${JSON.stringify(source)},value=${JSON.stringify(valid)};if(parseResult(JSON.stringify(value),source).title!==value.title)process.exit(2);process.stdout.write('Standalone validation works');`;
-    const output=await runProcess(process.execPath,['-e',script],'',{cwd:root});assert.equal(output,'Standalone validation works');
+    const output=await runProcess(process.execPath,['-e',script],'',{cwd:path.join(root,'ai')});assert.equal(output,'Standalone validation works');
   }finally{await fs.rm(root,{recursive:true,force:true});}
 });
 
@@ -1600,7 +1650,7 @@ test('project guide lists folder reading steps and a folder-box map; drag, fold,
   assert.equal(stepDetails.className, 'step-details'); assert.ok(!stepDetails.attributes.open, 'step details start collapsed');
   assert.ok(all(stepDetails).some(el => el.textContent === 'Used by: main.py'));
   all(stepItems[0]).find(el => el.textContent === 'Explain').events.click();
-  assert.deepEqual(sent.at(-1), { type: 'openFile', id: 'pipeline/write.py', tour: 'pipeline' }, 'Start here opens files as a tour of the folder');
+  assert.deepEqual(sent.at(-1), { type: 'openFile', id: 'pipeline/write.py' }, 'Start here opens the selected file');
   // Map: folders are boxes holding their files, and the map comes first.
   elements['tab-map'].events.click();
   assert.equal(elements['map-view'].hidden, false);
@@ -1742,7 +1792,7 @@ test('opening the project map scans locally, AI notes use the estimated requests
     assert.equal(generated.length, 1);
     assert.equal(generated[0].file.purpose, 'Purpose of pipeline/plan.py');
     assert.ok(generated[0].glossary.some(term => term.term === 'L1' && /opened by the hook/.test(term.meaning)));
-    assert.ok(usedTools[0]?.args[0].endsWith('mcp.js') && usedTools[0].args.includes('--root') && usedTools[0].env.ELECTRON_RUN_AS_NODE === '1', 'a mapped file gets Yamori lookups');
+    assert.equal(usedTools[0], undefined, 'the file gist does not use model tools');
     await new Promise(resolve => setTimeout(resolve, 20));
     const index = JSON.parse(await fs.readFile(path.join(storage, 'cache', 'projects', require('../src/ai/engine').hash('file://' + root).slice(0, 32), 'explanations.json'), 'utf8'));
     assert.deepEqual(Object.keys(index), ['pipeline/plan.py']); assert.equal(index['pipeline/plan.py'].logic.title, 'Plan');
@@ -2130,8 +2180,9 @@ async function readerHarness(settings = {}, options = {}) {
       createFileSystemWatcher: () => ({ onDidCreate: noop, onDidDelete: noop, onDidChange: noop, dispose() {} }), getConfiguration: () => ({ get: (key, fallback) => key in settings ? settings[key] : fallback, inspect: () => ({}) }), onDidChangeTextDocument: fn => { harness.changeDocument = fn; return noop(); } },
     window: { createStatusBarItem: statusItem, activeTextEditor: undefined, visibleTextEditors: [], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showErrorMessage(message) { throw new Error(message); }, showInformationMessage: async () => undefined,
       showWarningMessage: async message => { harness.warnings.push(message); return harness.answer; },
+      onDidCloseTerminal(fn) { (harness.terminalClosers ||= []).push(fn); return noop(); },
       showTextDocument: async (doc, options) => { harness.shown.push([path.relative(root, doc.uri.fsPath), options?.selection?.start.line]); return { document: doc, setDecorations() {}, revealRange() {} }; },
-      createWebviewPanel: type => { const panel = { type, messages: [], reveal() {}, onDidDispose: noop, onDidChangeViewState: noop, webview: { postMessage: m => panel.messages.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage(fn) { panel.receive = fn; return noop(); } } }; harness.panels.push(panel); return panel; } },
+      createWebviewPanel: type => { const panel = { type, messages: [], reveal() {}, onDidDispose: noop, ...(type === 'yamori' ? { onDidDispose(fn) { this.onClose = fn; return noop(); }, dispose() { this.onClose?.(); } } : {}), onDidChangeViewState: noop, webview: { postMessage: m => panel.messages.push(JSON.parse(JSON.stringify(m))), onDidReceiveMessage(fn) { panel.receive = fn; return noop(); } } }; harness.panels.push(panel); return panel; } },
     env: { clipboard: { writeText: async () => {} } } };
   harness.vscode = vscode;
   const real = require('../src/ai/engine');
@@ -2167,52 +2218,456 @@ async function readerHarness(settings = {}, options = {}) {
   return harness;
 }
 
-test('a guide tour shows where each file sits, prepares only the next step, and Next opens it without waiting', async () => {
+test('opening a file from the guide opens only that reader', async () => {
   const h = await readerHarness({ autoNotes: false });
   try {
-    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py', tour: 'pipeline' });
-    const write = h.readers()[0];
-    await h.until(() => h.generated.includes('pipeline/plan.py'), 'the next step is prepared in the background');
-    await h.until(() => h.last(write).tour?.next?.status === 'ready', 'the tour bar says the next step is ready');
-    let tour = h.last(write).tour;
-    assert.deepEqual([tour.label, tour.index, tour.total, tour.next.id, tour.prev], ['pipeline/', 0, 2, 'pipeline/plan.py', undefined]);
-    assert.deepEqual(tour.usedBy.map(item => item.id), ['main.py']);
-    assert.deepEqual(JSON.parse(JSON.stringify(h.generated)), ['pipeline/write.py', 'pipeline/plan.py'], 'exactly one step ahead');
-    assert.equal(h.readers().length, 1, 'preparing a step opens no tab');
-    await write.receive({ type: 'tourGo', id: '../../etc/passwd' });
-    await write.receive({ type: 'tourGo', id: 'pipeline/plan.py' });
-    assert.equal(h.readers().length, 2);
-    const plan = h.readers()[1];
-    await h.until(() => h.last(plan).tour?.index === 1, 'Next keeps the tour');
-    tour = h.last(plan).tour;
-    assert.equal(tour.prev.id, 'pipeline/write.py'); assert.equal(tour.next, undefined);
-    assert.equal(h.generated.length, 2, 'the prepared step opens without another request');
+    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py' });
+    const reader = h.readers()[0];
+    assert.ok(h.last(reader).result);
+    assert.equal(h.last(reader).tour, undefined);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.generated)), ['pipeline/write.py']);
+    assert.equal(h.readers().length, 1);
   } finally { await h.close(); }
 });
 
-test('files opened outside a tour, or with prefetch off, never prepare other files', async () => {
-  const h = await readerHarness({ prefetchNext: false, autoNotes: false });
+test('the reading composer reuses a native terminal until it exits, even if the reader closes', async () => {
+  const path = require('node:path'), terminals = [];
+  const h = await readerHarness({ autoNotes: false, refinementSteps: 0 }, { engine: () => ({
+    findCLI: async owner => '/fixture/' + owner
+  }) });
+  h.vscode.window.createTerminal = options => {
+    const terminal = { options, shown: 0, show() { this.shown++; } };
+    terminals.push(terminal);
+    return terminal;
+  };
   try {
-    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py', tour: 'pipeline' });
-    await h.until(() => h.last(h.readers()[0]).tour, 'the tour bar still shows');
-    await new Promise(resolve => setTimeout(resolve, 60));
-    assert.deepEqual(JSON.parse(JSON.stringify(h.generated)), ['pipeline/write.py']);
-    assert.equal(h.last(h.readers()[0]).tour.next.status, 'waiting');
+    const uri = h.Uri.file(path.join(h.root, 'pipeline', 'write.py'));
+    await h.context.globalState.update('claudeModel', { id: 'sonnet', effort: 'low' });
+    await h.commands.get('yamori.read')(uri);
+    let reader = h.readers().at(-1);
+    const ask = (provider, instruction, clientId) => reader.receive({ type: 'workspaceTerminal', provider, instruction, clientId, index: 0,
+      documentKey: h.last(reader).documentKey });
+    await ask('claude', 'Explain the loop; $(echo literal).', 1);
+    assert.equal(terminals.length, 1);
+    assert.equal(terminals[0].options.cwd, h.root);
+    assert.equal(terminals[0].options.shellPath, '/fixture/claude');
+    assert.equal(terminals[0].options.hideFromUser, true, 'the Python environment extension skips startup activation');
+    const args = [...terminals[0].options.shellArgs];
+    assert.deepEqual(args.slice(0, 5), ['--model', 'sonnet', '--effort', 'low', '--append-system-prompt']);
+    assert.match(args[5], /"file":"pipeline\/write\.py".*"lines":\[1,/);
+    assert.deepEqual(args.slice(6), ['--', 'Explain the loop; $(echo literal).']);
+    assert.deepEqual(h.last(reader).workspace.terminalProviders, ['claude']);
+    reader.dispose();
+    await h.commands.get('yamori.read')(uri);
+    reader = h.readers().at(-1);
+    await ask('claude', undefined, 2);
+    assert.equal(terminals.length, 1);
+    assert.equal(terminals[0].shown, 2);
+    for (const closed of h.terminalClosers) closed(terminals[0]);
+    assert.deepEqual(h.last(reader).workspace.terminalProviders, []);
+    await ask('codex', 'How does this work?', 3);
+    assert.equal(terminals.length, 2);
+    assert.equal(terminals[1].options.shellPath, '/fixture/codex');
+    const codexArgs = [...terminals[1].options.shellArgs];
+    const developer = codexArgs.find(arg => arg.startsWith('developer_instructions='));
+    assert.match(JSON.parse(developer.slice('developer_instructions='.length)), /"file":"pipeline\/write\.py"/);
+    assert.deepEqual(codexArgs.slice(-2), ['--', 'How does this work?']);
   } finally { await h.close(); }
-  const casual = await readerHarness({ autoNotes: false });
+});
+
+test('Read as Pseudocode uses cached working changes inside the reader and opens their source diff', async () => {
+  const h = await readerHarness({ autoNotes: false, refinementSteps: 0 });
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const { LocalCache } = require('../src/storage/cache');
+  const { hash } = require('../src/ai/engine');
+  const { execFileSync } = require('node:child_process');
   try {
-    await casual.commands.get('yamori.openAt')('file://' + require('node:path').join(casual.root, 'pipeline/write.py'), 4);
-    await casual.until(() => casual.last(casual.readers()[0]).tour, 'a casually opened file still knows its place');
-    await new Promise(resolve => setTimeout(resolve, 60));
-    assert.deepEqual(JSON.parse(JSON.stringify(casual.generated)), ['pipeline/write.py'], 'no tour, no background requests');
-    assert.equal(casual.last(casual.readers()[0]).focusLine.line, 4, 'openAt focuses the block for that line');
-  } finally { await casual.close(); }
+    const filename = 'sample.py', absolute = path.join(h.root, filename), uri = h.Uri.file(absolute);
+    const before = 'value = 1\n', after = 'value = 2\n';
+    await fs.writeFile(absolute, before);
+    const git = (...args) => execFileSync('git', args, { cwd: h.root, stdio: 'ignore' });
+    git('init'); git('add', filename);
+    git('-c', 'user.name=Tests', '-c', 'user.email=tests@example.test', '-c', 'commit.gpgsign=false', 'commit', '-m', 'Original');
+    await fs.writeFile(absolute, after);
+    const disk = new LocalCache(path.join(h.context.globalStorageUri.fsPath, 'cache'));
+    const opts = { provider: 'codex', level: 'logic', effort: 'low', refinementSteps: 0 };
+    for (const [text, pseudocode] of [[before, 'Set value to 1.'], [after, 'Set value to 2.']]) {
+      const source = { uri: uri.toString(), text, fullText: text, fullHash: hash(text), startLine: 1, endLine: 2, name: filename, workspace: h.root, relPath: filename };
+      const value = { title: 'Set value', summary: 'Set value.', sections: [
+        { title: 'Set value', startLine: 1, endLine: 1, pseudocode, lineMap: [[1, 1, 1]] }
+      ] };
+      await disk.save(source, opts, value, hash(text));
+    }
+    h.Uri.from = ({ scheme, path, query }) => ({ scheme, path, toString: () => scheme + ':' + path + '?' + query });
+    let diff;
+    h.vscode.commands.executeCommand = async (command, ...args) => { if (command === 'vscode.diff') diff = args; };
+    await h.commands.get('yamori.read')(uri);
+    const reader = h.readers()[0];
+    await h.until(() => h.last(reader).inlineDiff?.blocks[0], 'the live reader gets a cache-only overlay');
+    const state = h.last(reader), block = state.inlineDiff.blocks[0];
+    assert.equal(block.removed[1][0].text, 'Set value to 1.');
+    assert.equal(block.marks[1].text, 'Set value to 2.');
+    assert.deepEqual(h.generated, []);
+    await reader.receive({ type: 'inlineDiffJump', documentKey: state.documentKey, id: block.marks[1].id });
+    assert.equal(diff[3].selection.start.line, 0);
+  } finally { await h.close(); }
+});
+
+test('Logic paints an offline cached queue and persists block review without contacting a provider', async () => {
+  const h = await readerHarness({ autoNotes: false, refinementSteps: 0 });
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const { LocalCache } = require('../src/storage/cache');
+  const { hash } = require('../src/ai/engine');
+  try {
+    const filename = 'offline.py', uri = h.Uri.file(path.join(h.root, filename));
+    const text = 'def total():\n    return 3\n';
+    await fs.writeFile(uri.fsPath, text);
+    const disk = new LocalCache(path.join(h.context.globalStorageUri.fsPath, 'cache'));
+    const source = { uri: uri.toString(), text, fullText: text, fullHash: hash(text), startLine: 1, endLine: 3,
+      name: filename, workspace: h.root, relPath: filename };
+    await disk.save(source, { provider: 'codex', level: 'logic', effort: 'low' }, {
+      title: 'Total', summary: 'Return the total.', sections: [{ title: 'total', startLine: 1, endLine: 2,
+        pseudocode: 'Return three.', lineMap: [[1, 2, 2]] }]
+    }, hash('offline'));
+    testStatus.codex = { provider: 'codex', installed: false, signedIn: false, ready: false };
+    await h.commands.get('yamori.read')(uri);
+    const reader = h.readers()[0];
+    await h.until(() => h.last(reader).workspace?.rows[0]?.symbol === 'total', 'the cached review row is mapped');
+    const state = h.last(reader), row = state.workspace.rows[0];
+    assert.equal(state.workspace.online, false);
+    assert.equal(state.workspace.canUpdate, false);
+    assert.equal(state.result.title, 'Total');
+    assert.deepEqual(h.generated, []);
+    await reader.receive({ type: 'workspaceReview', documentKey: state.documentKey, index: row.index, identity: row.identity, contentHash: row.contentHash });
+    assert.equal(h.last(reader).workspace.rows[0].reviewed, true);
+    for (let n = 0; n < 20 && !Object.keys((await disk.logicState(source)).reviews).length; n++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok((await disk.logicState(source)).reviews[row.identity]);
+  } finally { delete testStatus.codex; await h.close(); }
+});
+
+test('switching to a signed-out provider retains and reopens existing pseudocode without generation', async () => {
+  const h = await readerHarness({ autoNotes: false, refinementSteps: 0 });
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const { LocalCache } = require('../src/storage/cache'), { hash } = require('../src/ai/engine');
+  try {
+    const filename = 'switch.py', uri = h.Uri.file(path.join(h.root, filename));
+    const text = 'def total():\n    return 3\n';
+    await fs.writeFile(uri.fsPath, text);
+    const disk = new LocalCache(path.join(h.context.globalStorageUri.fsPath, 'cache'));
+    const source = { uri: uri.toString(), text, fullText: text, fullHash: hash(text), startLine: 1, endLine: 3, name: filename,
+      workspace: h.root, relPath: filename };
+    const section = { title: 'Calculate total', startLine: 1, endLine: 2, pseudocode: 'Return three.', lineMap: [[1, 2, 2]] };
+    await disk.save(source, { provider: 'codex', level: 'logic', effort: 'low' },
+      { title: 'Total', summary: 'Return the total.', model: 'codex-original', sections: [section] }, hash('codex-switch'));
+    await disk.save(source, { provider: 'claude', level: 'logic', effort: 'low' },
+      { title: 'Incomplete Claude refresh', summary: '', sections: [{ ...section, pseudocode: '# Waiting for pseudocode.', lineMap: [] }] },
+      hash('claude-switch'), { staleBlocks: [0] });
+    await h.commands.get('yamori.read')(uri);
+    const reader = h.readers()[0];
+    const before = h.last(reader).result;
+    assert.equal(before.sections[0].pseudocode, 'Return three.');
+    h.vscode.window.showQuickPick = async items => (await items).find(item => item.value === 'claude');
+    testStatus.claude = { provider: 'claude', installed: true, signedIn: false, ready: false };
+    await reader.receive({ type: 'provider' });
+    const switched = h.last(reader);
+    assert.equal(switched.workspace.provider, 'claude');
+    assert.equal(switched.workspace.online, false);
+    assert.equal(switched.stale, false);
+    assert.deepEqual(switched.result, before);
+    assert.equal(switched.error, '');
+    assert.deepEqual(h.generated, []);
+    reader.dispose();
+    await h.commands.get('yamori.read')(uri);
+    const reopened = h.readers().at(-1);
+    const current = h.last(reopened);
+    assert.equal(current.workspace.provider, 'claude');
+    assert.equal(current.stale, false);
+    assert.equal(current.result.sections[0].pseudocode, 'Return three.');
+    await reopened.receive({ type: 'level', level: 'overview' });
+    assert.ok(h.last(reopened).result.sections.length);
+    await reopened.receive({ type: 'level', level: 'logic' });
+    assert.equal(h.last(reopened).result.sections[0].pseudocode, 'Return three.');
+    assert.deepEqual(h.generated, []);
+  } finally { delete testStatus.claude; await h.close(); }
+});
+
+test('Logic routes composer requests through Codex and Claude Code and retains reported token totals', async () => {
+  const calls = [];
+  const h = await readerHarness({ autoNotes: false, refinementSteps: 0 }, { engine: () => ({
+    async requestStructured(request) {
+      calls.push(request.provider);
+      return { raw: JSON.stringify({ edit: false, message: 'This is the answer.', replacement: '' }),
+        usage: { input: 11, output: 3, cacheRead: 8, cacheWrite: 0 } };
+    }
+  }) });
+  try {
+    const uri = h.Uri.file(require('node:path').join(h.root, 'main.py'));
+    await h.commands.get('yamori.read')(uri);
+    const reader = h.readers()[0];
+    const { documentKey } = h.last(reader);
+    await reader.receive({ type: 'workspacePreview', clientId: 1, mode: 'command', provider: 'claude', documentKey, instruction: 'Explain this file.' });
+    await reader.receive({ type: 'workspacePreview', clientId: 2, mode: 'command', provider: 'codex', documentKey, instruction: 'Explain again.' });
+    assert.deepEqual(calls, ['claude', 'codex']);
+    const { workspace } = h.last(reader);
+    assert.equal(workspace.provider, 'codex', 'the Ask picker leaves the reader default intact');
+    assert.equal(workspace.proposal.phase, 'answer');
+    assert.equal(workspace.proposal.provider, 'codex');
+    assert.equal(workspace.proposal.message, 'This is the answer.');
+    assert.deepEqual(JSON.parse(JSON.stringify(workspace.usage)), { input: 22, output: 6, cacheRead: 16, cacheWrite: 0 });
+  } finally { await h.close(); }
+});
+
+test('Logic Ask locates imported Python definitions without a language server', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const requests = [];
+  const h = await readerHarness({ autoNotes: false, refinementSteps: 0 }, { engine: () => ({
+    async requestStructured(request) {
+      assert.equal(request.provider, 'claude');
+      assert.ok(request.readRoot);
+      requests.push(JSON.parse(request.prompt.split('\n').at(-1)));
+      return { raw: JSON.stringify({ edit: false, message: 'The answer comes from train.py.', replacement: '' }) };
+    }
+  }) });
+  try {
+    const uri = h.Uri.file(path.join(h.root, 'main.py'));
+    await fs.writeFile(path.join(h.root, 'train.py'), [
+      'def choose_other():', '    return "unrelated implementation"',
+      '', 'def pick_device():', '    if cuda_available():', '        return "cuda"', '    return "cpu"', ''
+    ].join('\n'));
+    await fs.writeFile(uri.fsPath, 'import os, train\nfrom train import pick_device as pick\n\ndef main():\n    return train.pick_device(), pick()\n');
+    await h.commands.get('yamori.read')(uri);
+    const reader = h.readers()[0];
+    await reader.receive({ type: 'workspacePreview', clientId: 1, mode: 'command', provider: 'claude',
+      documentKey: h.last(reader).documentKey, index: 0, instruction: 'How does it pick a device?' });
+    assert.deepEqual(requests[0].context.definitions, [{ symbol: 'train.pick_device', file: 'train.py', startLine: 4, endLine: 7 }]);
+    assert.match(requests[0].context.lookup, /smallest relevant line range/);
+    assert.equal(h.last(reader).workspace.proposal.phase, 'answer');
+  } finally { await h.close(); }
+});
+
+test('Logic sends only the cheaper fresh representation for reading questions', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const requests = [], longBody = [
+    'def calculate():',
+    ...Array.from({ length: 18 }, (_, i) => '    value_' + i + ' = ' + i + ' * 1000'),
+    '    return value_17'
+  ].join('\n'), shortBody = 'def tiny():\n    return 1';
+  const models = [], settings = { autoNotes: false, refinementSteps: 0 };
+  const h = await readerHarness(settings, { engine: () => ({
+    async generate({ source }) {
+      const sections = [
+        { title: 'Calculate', startLine: 1, endLine: 20, pseudocode: 'Compute and return a multiple of 1000.', lineMap: [] },
+        { title: 'Tiny', startLine: 22, endLine: 23, pseudocode: 'Return the constant 1. ' + 'This is extra explanation. '.repeat(12), lineMap: [] }
+      ];
+      assert.match(source.text, /def tiny/);
+      return { title: 'Calculations', summary: 'Two calculations.', sections };
+    },
+    async requestStructured(request) {
+      models.push(request.model);
+      requests.push(JSON.parse(request.prompt.split('\n').at(-1)));
+      return { raw: JSON.stringify({ edit: true, message: 'Explain the result.', replacement: 'untrusted replacement' }),
+        actualModel: request.model, usage: { input: 50, output: 3 } };
+    }
+  }) });
+  try {
+    const uri = h.Uri.file(path.join(h.root, 'main.py'));
+    await fs.writeFile(uri.fsPath, longBody + '\n\n' + shortBody);
+    await h.context.globalState.update('codexModel', { id: 'gpt-4-0613' });
+    await h.commands.get('yamori.read')(uri);
+    const reader = h.readers()[0], ask = async (clientId, index, instruction) => reader.receive({ type: 'workspacePreview',
+      clientId, mode: 'command', index, provider: 'codex', documentKey: h.last(reader).documentKey, instruction });
+    const { workspace } = h.last(reader);
+    const [large, tiny] = workspace.rows.map(row => row.tokenEstimates.codex);
+    assert.ok(large.pseudo < large.code);
+    assert.ok(tiny.code < tiny.pseudo);
+    assert.equal(workspace.tokenModels.codex, 'gpt-4-0613');
+    await ask(1, 0, 'How does it work?');
+    assert.equal(requests[0].input.kind, 'pseudocode');
+    assert.equal(requests[0].input.blocks[0].startLine, 1);
+    assert.equal(requests[0].before, undefined);
+    assert.equal(requests[0].context.card, undefined);
+    assert.equal(requests[0].context.surrounding, undefined);
+    assert.equal(h.last(reader).workspace.proposal.phase, 'answer', 'a reading question cannot produce an edit preview');
+    assert.equal(h.last(reader).workspace.proposal.estimate.tokens, large.pseudo);
+    assert.equal(h.last(reader).workspace.proposal.estimate.reportedInput, 50);
+    await ask(2, 1, 'Explain what this does.');
+    assert.deepEqual(requests[1].input, { kind: 'code', text: shortBody });
+    assert.equal(h.last(reader).workspace.proposal.estimate.tokens, tiny.code);
+    await h.context.globalState.update('codexModel', { id: 'gpt-5' });
+    await reader.receive({ type: 'ready' });
+    await ask(3, 0, 'Change it to return zero.');
+    const switched = h.last(reader).workspace;
+    assert.equal(switched.tokenModels.codex, 'gpt-5');
+    assert.notDeepEqual(switched.rows[0].tokenEstimates.codex, large);
+    assert.equal(requests[2].input, undefined);
+    assert.equal(requests[2].before, longBody);
+    await ask(4, 0, 'Explain the calculation.');
+    assert.deepEqual(models, ['gpt-4-0613', 'gpt-4-0613', 'gpt-5', 'gpt-5']);
+    assert.equal(h.last(reader).workspace.proposal.estimate.model, 'gpt-5');
+  } finally { await h.close(); }
+});
+
+test('Flow writes one gist, fills only demanded cards, and cancels an old fill when the cursor moves', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const groups = [], gistCalls = [], signals = [], reviews = [], settings = { autoNotes: false, generateCardsOnOpen: false, refinementSteps: 1, parallelRequests: 2 };
+  let release;
+  const h = await readerHarness(settings, { engine: () => ({
+    async reviewDraft(options) { reviews.push(options); return options.initial; },
+    async generate({ gist, sourceRefresh, fast, tools, signal, onUsage }) {
+      if (gist) {
+        gistCalls.push(gist);
+        assert.equal(tools, undefined);
+        assert.equal(fast.model, 'fast-test');
+        onUsage({ input: 40, output: 20 });
+        return { gist: { version: 1, story: { lead: 'Queue demo', in: 'Constants', then: 'Read functions', out: 'Values' },
+          blocks: Object.fromEntries(gist.selected.map(block => [block.identity, { title: 'Return a value', stage: 'Process', step: 'Return the constant.' }])) } };
+      }
+      const ids = sourceRefresh.staleBlocks;
+      groups.push([...ids]); signals.push(signal);
+      if (ids.includes(9)) await new Promise(resolve => { release = resolve; });
+      if (!signal.aborted) onUsage({ input: 10, output: 5 });
+      return { ...sourceRefresh.previous, sections: sourceRefresh.previous.sections.map((section, index) => ids.includes(index) ? { ...section,
+        pseudocode: 'PURPOSE: Return a value.\nINPUTS: None.\nRETURNS: A value.\nSTEPS:\n- Return the constant.',
+        lineMap: [{ pseudocodeLine: 5, startLine: section.endLine, endLine: section.endLine }]
+      } : section) };
+    }
+  }) });
+  try {
+    const uri = h.Uri.file(path.join(h.root, 'large.py'));
+    await fs.writeFile(uri.fsPath, Array.from({ length: 12 }, (_, i) => 'def item_' + i + '():\n    return ' + i + '\n').join('\n'));
+    await h.commands.get('yamori.openAt')(uri.toString(), 29);
+    const reader = h.readers()[0];
+    const demand = async indices => reader.receive({ type: 'workspaceDemand', indices, documentKey: h.last(reader).documentKey });
+    const initial = h.last(reader);
+    assert.equal(initial.workspace.flow.story.lead, 'Queue demo');
+    assert.equal(initial.workspace.rows.length, 12);
+    assert.ok(initial.workspace.rows.every(row => row.missing));
+    assert.ok(initial.workspace.rows.every(row => !row.generating));
+    assert.equal(gistCalls.length, 1);
+    assert.deepEqual(groups, []);
+    await demand([9]);
+    await h.until(() => !!release, 'the selected block starts on demand');
+    assert.deepEqual(h.last(reader).workspace.rows.filter(row => row.generating).map(row => row.index), [9]);
+    await demand([2]);
+    assert.equal(signals[0].aborted, true);
+    release();
+    await h.until(() => !h.last(reader).workspace.rows[2].missing, 'the later demanded block fills');
+    assert.deepEqual(groups, [[9], [2]]);
+    assert.ok(h.last(reader).workspace.rows.every((row, i) => row.missing === (i !== 2)));
+    assert.notEqual(h.last(reader).result.refinement?.status, 'pending');
+    assert.deepEqual(reviews, []);
+    assert.ok(h.last(reader).workspace.rows.every(row => row.index === 2 || !row.generating));
+    const text = await fs.readFile(uri.fsPath,'utf8');
+    await fs.writeFile(uri.fsPath, text.replace('return 8', 'return 80'));
+    settings.tokenBudgetPerFilePerDay = 70;
+    await reader.receive({ type: 'workspaceUpdate' });
+    assert.match(h.warnings.at(-1), /daily token budget/);
+    assert.equal(gistCalls.length, 1);
+    settings.tokenBudgetPerFilePerDay = 0;
+    await reader.receive({ type: 'workspaceUpdate' });
+    assert.equal(gistCalls.length, 2);
+    assert.deepEqual(gistCalls[1].selected.map(block => block.symbol), ['item_8']);
+    assert.deepEqual(groups, [[9], [2]], 'Update all does not fill the rest of the file');
+    assert.equal(h.last(reader).workspace.flow.usage.calls.gist, 2);
+    assert.equal(h.last(reader).workspace.flow.usage.calls.card, 1);
+  } finally { release?.(); await h.close(); }
+});
+
+test('opening a file fills all missing Logic cards once, without starting background review', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const groups = [], reviews = [];
+  let gists = 0;
+  const h = await readerHarness({ autoNotes: false, refinementSteps: 1, parallelRequests: 2 }, { engine: () => ({
+    async reviewDraft(options) { reviews.push(options); options.onUsage({ input: 7, output: 2 }); return options.initial; },
+    async generate({ gist, sourceRefresh, onUsage, tools, readRoot }) {
+      assert.equal(tools, undefined);
+      assert.equal(readRoot, undefined);
+      if (gist) {
+        gists++;
+        onUsage({ input: 14, output: 4, cacheWrite: 2 });
+        return { gist: { version: 1, story: { lead: 'Return constants' }, blocks: Object.fromEntries(gist.selected.map(block =>
+          [block.identity, { title: 'Return a constant', step: 'Return the value.' }])) } };
+      }
+      const { previous, staleBlocks } = sourceRefresh;
+      groups.push([...staleBlocks]);
+      onUsage({ input: 10, output: 5, cacheRead: 3 });
+      return { ...previous, sections: previous.sections.map((section, index) => staleBlocks.includes(index) ? {
+        ...section, pseudocode: 'PURPOSE: Return a constant.\nINPUTS: None.\nRETURNS: A number.\nSTEPS:\n- Return the value.',
+        lineMap: [{ pseudocodeLine: 5, startLine: section.endLine, endLine: section.endLine }]
+      } : section) };
+    }
+  }) });
+  try {
+    const uri = h.Uri.file(path.join(h.root, 'fill.py'));
+    await h.context.globalState.update('provider', 'claude');
+    await fs.writeFile(uri.fsPath, Array.from({ length: 9 }, (_, i) => 'def item_' + i + '():\n    return ' + i + '\n').join('\n'));
+    await h.commands.get('yamori.read')(uri);
+    const reader = h.readers()[0];
+    await h.until(() => {
+      const state = h.last(reader);
+      return state.workspace?.rows.length === 9 && state.workspace.rows.every(row => !row.missing) && !state.busy;
+    }, 'opening alone fills all nine cards');
+    assert.deepEqual(groups.flat().sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.ok(groups.every(group => group.length <= 4));
+    assert.equal(gists, 1);
+    assert.deepEqual(reviews, []);
+    const batches = groups.length;
+    await h.commands.get('yamori.read')(uri);
+    assert.equal(groups.length, batches, 'opening a cached file reuses its cards');
+    await reader.receive({ type: 'reviewBlock', index: 2, documentKey: h.last(reader).documentKey });
+    assert.equal(reviews.length, 1);
+    assert.deepEqual([...reviews[0].sourceRefresh.staleBlocks], [2]);
+    assert.equal(reviews[0].sourceRefresh.preselected, true);
+    const { byAction } = h.last(reader).workspace.flow.usage;
+    assert.deepEqual({ ...byAction.gist }, { requests: 1, input: 14, cacheWrite: 2, cacheRead: 0, output: 4 });
+    assert.deepEqual({ ...byAction.card }, { requests: batches, input: 10 * batches, cacheWrite: 0, cacheRead: 3 * batches, output: 5 * batches });
+    assert.deepEqual({ ...byAction.review }, { requests: 1, input: 7, cacheWrite: 0, cacheRead: 0, output: 2 });
+  } finally { await h.close(); }
+});
+
+test('Flow warns before a cold gist can exceed the daily budget', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const h = await readerHarness({ autoNotes: false, tokenBudgetPerFilePerDay: 1 }, { engine: () => ({
+    async generate() { assert.fail('the budget warning is shown before any AI request'); }
+  }) });
+  try {
+    const uri = h.Uri.file(path.join(h.root, 'budget.py'));
+    await fs.writeFile(uri.fsPath, 'def pick():\n    return 1\n');
+    await h.commands.get('yamori.read')(uri);
+    assert.match(h.warnings.at(-1), /daily token budget for budget.py/);
+  } finally { await h.close(); }
+});
+
+test('Flow opens with a partial gist and retries only the missing entries', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const requests = [];
+  const h = await readerHarness({ autoNotes: false, generateCardsOnOpen: false, refinementSteps: 0 }, { engine: () => ({
+    async generate({ gist }) {
+      requests.push(gist.selected.map(block => block.symbol));
+      const entries = requests.length === 1 ? gist.selected.slice(0, 1) : gist.selected;
+      return { gist: { version: 1, story: { lead: 'Two values' }, blocks: Object.fromEntries(entries.map(block =>
+        [block.identity, { title: 'Explain ' + block.symbol, step: 'Return a value.' }])) } };
+    }
+  }) });
+  try {
+    const uri = h.Uri.file(path.join(h.root, 'partial.py'));
+    await fs.writeFile(uri.fsPath, 'def first():\n    return 1\n\ndef second():\n    return 2\n');
+    await h.commands.get('yamori.read')(uri);
+    const reader = h.readers()[0];
+    const opened = h.last(reader);
+    assert.equal(opened.error, '');
+    assert.deepEqual(opened.workspace.rows.map(row => row.gistMissing), [false, true]);
+    assert.match(opened.workspace.activity[0].message, /Using source labels for 1 block/);
+    await reader.receive({ type: 'workspaceUpdate' });
+    assert.deepEqual(requests, [['first', 'second'], ['second']]);
+    assert.ok(h.last(reader).workspace.rows.every(row => !row.gistMissing));
+  } finally { await h.close(); }
 });
 
 test('project names in pseudocode open the explanation that defines them', async () => {
   const h = await readerHarness({ prefetchNext: false, autoNotes: false });
   try {
-    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py', tour: 'pipeline' });
+    await h.guide.receive({ type: 'openFile', id: 'pipeline/write.py' });
     const write = h.readers()[0];
     await h.until(() => h.last(write).symbols?.length, 'links are computed');
     const state = h.last(write), names = state.symbols.map(link => link.name);
@@ -2270,19 +2725,24 @@ test('editor hovers and CodeLens show what Yamori knows, with escaped text and o
   finally { await off.close(); }
 });
 
-test('the reader shows a tour bar, project-name links and jumps to a requested block', () => {
+test('the reader shows inline changes, project-name links and the requested block without the tour strip', () => {
   const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'plan', 'ai-summary', 'setup-ai']);
   const sent = []; let receive;
   vm.runInNewContext(panelHTML().match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1], { document, DOMParser: class { parseFromString() { return { querySelector: () => ({}) }; } }, acquireVsCodeApi: () => ({ postMessage: m => sent.push(JSON.parse(JSON.stringify(m))) }), katex: { renderToString: () => '' }, window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Intl, Date });
   const result = { title: 'Write blocks', summary: 's', sections: [{ title: 'First', startLine: 1, endLine: 3, pseudocode: 'Use _loop_hint on each loop.' }, { title: 'Second', startLine: 4, endLine: 6, pseudocode: 'Add <b>BRIDGE</b> text in write_blocks.' }] };
   const symbols = [{ name: '_loop_hint', file: 'pipeline/plan.py', line: 11, kind: 'function', block: 'Hint', purpose: 'Plans loops.', explained: true }, { name: 'BRIDGE', file: 'models/script.py', line: 3, kind: 'constant', explained: false }, { name: 'write_blocks', file: 'pipeline/write.py', line: 4, kind: 'function', explained: true }];
   const tour = { folder: 'pipeline', label: 'pipeline/', index: 0, total: 2, next: { id: 'pipeline/plan.py', label: 'plan.py', status: 'preparing' }, usedBy: [{ id: 'main.py', label: 'main.py' }], uses: [] };
-  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'pipeline/write.py', documentKey: 'doc', result, symbols, tour, focusLine: { line: 5, token: 1 } } } });
-  const bar = all(elements.content).find(el => el.className === 'tour');
-  const barText = all(bar).map(el => el.textContent).filter(Boolean);
-  assert.ok(barText.includes('pipeline/ · Step 1 of 2') && barText.includes('Next: plan.py →') && barText.includes('preparing…'));
-  all(bar).find(el => el.textContent === 'Next: plan.py →').events.click(); assert.deepEqual(sent.at(-1), { type: 'tourGo', id: 'pipeline/plan.py' });
-  all(bar).find(el => el.textContent === 'main.py').events.click(); assert.deepEqual(sent.at(-1), { type: 'tourGo', id: 'main.py' });
+  const inlineDiff = { blocks: { 1: {
+    marks: { 1: { kind: 'added', id: 1, sourceLine: 5 } },
+    removed: { 1: [{ kind: 'removed', id: 0, sourceLine: 5, text: 'Skip the bridge.' }] }
+  } } };
+  receive({ data: { type: 'state', state: { providerLabel: 'Codex', level: 'logic', name: 'pipeline/write.py', documentKey: 'doc', result, symbols, tour, inlineDiff, focusLine: { line: 5, token: 1 } } } });
+  const shown = all(elements.content);
+  assert.ok(!shown.some(el => el.className === 'tour'));
+  assert.deepEqual(shown.filter(el => el.className?.includes('diff-sign')).map(el => el.textContent), ['−', '+']);
+  const removed = shown.find(el => el.className?.startsWith('code-line') && el.className.includes('diff-removed'));
+  removed.events.click();
+  assert.deepEqual(sent.at(-1), { type: 'inlineDiffJump', documentKey: 'doc', id: 0 });
   // The requested line opened the second block, whose names are links.
   const links = all(elements.content).filter(el => el.className === 'symbol');
   assert.deepEqual(links.map(el => el.textContent), ['BRIDGE', 'write_blocks'], 'the focused (second) block is shown, with its names linked');
@@ -2626,7 +3086,7 @@ test('parts for parallel writing are whole definitions of similar size, planned 
   assert.deepEqual(JSON.parse(JSON.stringify(offset.map(part => [part.startLine, part.endLine]))), [[101, 129], [130, 170], [171, 220]]);
 });
 
-test('parallel parts: at most N at once, stitched in order, kept inside their lines, retried once, else one whole-file request', async () => {
+test('parallel parts: at most N at once, stitched in order, kept inside their lines, retried once within its source scope', async () => {
   const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-parts-'));
   try {
@@ -2636,7 +3096,7 @@ let prompt='';process.stdin.on('data',d=>prompt+=d).on('end',()=>{const schema=J
 const part=prompt.match(/PARALLEL PART (\\d+) OF (\\d+): .*?source lines (\\d+)–(\\d+)/);
 const kind=schema.properties.blocks?'select':schema.properties.score?'review':/Detail: overview\\./.test(prompt)?'overview':part?'part':'whole';
 const started=Date.now();
-const finish=out=>setTimeout(()=>{fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({kind,model,part:part&&+part[1],started,ended:Date.now()})+'\\n');process.stdout.write(JSON.stringify({type:'result',structured_output:out,modelUsage:{[model||'claude-opus-test']:{}}}))},kind==='part'?150:20);
+const finish=out=>setTimeout(()=>{fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({kind,model,part:part&&+part[1],source:prompt.match(/SOURCE DATA.*?END SOURCE DATA/s)?.[0],tools:a[a.indexOf('--tools')+1],cwd:process.cwd(),started,ended:Date.now()})+'\\n');process.stdout.write(JSON.stringify({type:'result',structured_output:out,modelUsage:{[model||'claude-opus-test']:{}}}))},kind==='part'?150:20);
 if(kind==='part'&&(model==='broken-parts'||(part[1]==='2'&&!fs.existsSync(${JSON.stringify(marker)})))){fs.writeFileSync(${JSON.stringify(marker)},'');fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({kind:'failed',part:+part[1]})+'\\n');process.stderr.write('overloaded');process.exit(1)}
 if(kind==='select')return finish({blocks:[{index:0,reason:'hard'}]});
 if(kind==='review')return finish({score:1,faithful:true,issues:[]});
@@ -2649,7 +3109,7 @@ finish({title:k===1?'Whole file':'Part '+k,summary:k===1?'Explains the file.':'p
     const input = { uri: 'file:///work.py', name: 'work.py', language: 'python', startLine: 1, text };
     const parts = [{ startLine: 1, endLine: 30, names: ['a'] }, { startLine: 31, endLine: 60, names: ['b'] }, { startLine: 61, endLine: 90, names: ['c'] }];
     const phases = [];
-    const result = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, parts, parallel: 2, onProgress: update => phases.push(update) });
+    const result = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, readRoot: dir, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, parts, parallel: 2, onProgress: update => phases.push(update) });
     const calls = await read(), runs = calls.filter(call => call.kind === 'part');
     assert.deepEqual(runs.map(call => call.part).sort(), [1, 2, 3]); assert.deepEqual(calls.filter(call => call.kind === 'failed').map(call => call.part), [2], 'part 2 failed once and was retried');
     const overlap = Math.max(...runs.map(a => runs.filter(b => b.started <= a.started && b.ended > a.started).length));
@@ -2657,14 +3117,20 @@ finish({title:k===1?'Whole file':'Part '+k,summary:k===1?'Explains the file.':'p
     assert.equal(result.title, 'Whole file'); assert.equal(result.summary, 'Explains the file.'); assert.equal(result.parts, 3);
     assert.deepEqual(JSON.parse(JSON.stringify(result.sections.map(section => [section.title, section.startLine, section.endLine]))), [['Part 1 work', 1, 30], ['Part 2 work', 31, 60], ['Part 3 work', 61, 90]], 'in order, clamped to their part; sections outside are dropped');
     assert.deepEqual(JSON.parse(JSON.stringify(result.sections[1].lineMap)), [{ pseudocodeLine: 1, startLine: 31, endLine: 31 }], 'links that leave the part are dropped');
-    assert.equal(result.views.overview.title, 'Overview', 'the fast Overview still runs alongside');
+    assert.ok(!calls.some(call => call.kind === 'overview' || call.kind === 'whole'));
+    for (const call of runs) {
+      const range = parts[call.part - 1];
+      const numbered = call.source.split('\n').flatMap(line => /^\d+:/.test(line) ? [Number(line.split(':')[0])] : []);
+      assert.deepEqual(numbered, Array.from({ length: 30 }, (_, i) => range.startLine + i));
+      assert.equal(call.tools, 'Read,Glob,Grep');
+      assert.equal(await fs.realpath(call.cwd), await fs.realpath(dir));
+    }
     assert.ok(phases.some(update => update.stage === 'write' && /Writing 3 parts in parallel \(3\/3 done\)/.test(update.phase)));
     assert.ok(phases.some(update => update.preview?.sections?.length >= 1 && update.preview.title === 'Whole file'), 'a combined preview streams');
-    // Parts that keep failing fall back to one whole-file request.
+    // A failure keeps retries in scope.
     await fs.writeFile(log, ''); phases.length = 0;
-    const fallback = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'broken-parts', effort: 'low', parts, parallel: 3, onProgress: update => phases.push(update) });
-    assert.equal(fallback.title, 'Whole file'); assert.equal(fallback.sections[0].title, 'Everything'); assert.equal(fallback.parts, undefined);
-    assert.ok(phases.some(update => /^Parallel writing failed .*; writing the whole file in one request/.test(update.phase)));
+    await assert.rejects(generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'broken-parts', effort: 'low', parts, parallel: 3 }), /overloaded/);
+    assert.ok((await read()).every(call => call.kind === 'failed'));
     // Background review: the draft returns at once; reviewDraft later uses the review model.
     await fs.writeFile(log, '');
     const draft = await generate({ source: input, level: 'logic', provider: 'claude', cliPath: binary, model: 'opus', effort: 'low', fast: { model: 'haiku', effort: 'low' }, parts, parallel: 3, refinementSteps: 1, background: true });
@@ -2723,7 +3189,7 @@ test('background review: the draft is readable at once, improved blocks swap in 
     const shown = h.last(reader);
     assert.equal(shown.busy, false, 'not busy while reviewing'); assert.equal(shown.result.sections[0].pseudocode, 'Draft text', 'the draft is readable at once');
     assert.match(shown.review.text, /Reviewing difficult blocks in the background with review-test\. You can read now/);
-    assert.deepEqual(JSON.parse(JSON.stringify(opened[0])), { level: 'logic', background: true, parallel: 6, parts: 4, review: { model: 'review-test', effort: 'low' }, refine: 1, refresh: false });
+    assert.deepEqual(JSON.parse(JSON.stringify(opened[0])), { level: 'logic', background: true, parts: 0, refine: 1, refresh: false });
     assert.equal(shown.run.state, 'done'); assert.equal(shown.run.steps.find(step => step.id === 'review').state, 'active');
     assert.deepEqual(JSON.parse(JSON.stringify(gates[0].args.review)), { model: 'review-test', effort: 'low' });
     // A level switch does not stop it; finishing swaps the improved block in and caches it.
@@ -4054,6 +4520,7 @@ test('approving a plan executes once, excludes rejected and finished steps, arch
     await h.guide.receive({ type: 'planEdit', plan: { ...h.guideState().plan.plan, summary: 'Changed while waiting for trust.' } });
     h.vscode.workspace.isTrusted = true; h.grantTrust(); assert.equal(calls.length, 0, 'trust cannot execute a changed plan without fresh approval'); assert.match(h.guideState().plan.error, /plan changed/);
     const run = h.guide.receive({ type: 'planExecute', id }); await h.until(() => calls.length === 1, 'implementation started');
+    assert.ok(calls[0].tools, 'Work can use the project knowledge server');
     assert.equal(h.guideState().plan.busy.stage, 'implement'); assert.equal(calls[0].cwd, h.root); assert.equal(calls[0].model, 'chosen-model'); assert.equal(calls[0].effort, 'high');
     assert.match(calls[0].prompt, /Active change/); assert.match(calls[0].prompt, /Keep the hook/); assert.doesNotMatch(calls[0].prompt.slice(calls[0].prompt.indexOf('Goal: plan loops')), /Already finished|Rejected change/, 'only active steps are in the execution instructions; history remains available as context');
     await h.guide.receive({ type: 'planExecute', id }); await h.guide.receive({ type: 'planClear' }); await h.guide.receive({ type: 'planEdit', plan: { steps: [] } }); assert.equal(calls.length, 1); assert.equal(h.guideState().plan.plan.id, id);
@@ -4564,7 +5031,7 @@ test('function cards retain physical source-link indices and parse selective ann
   assert.throws(() => parseResult(raw(), source, { validateCards: true }), /missing or invalid/);
 });
 
-test('adding a test from a card sends the linked caveat to Work mode', async () => {
+test('adding a test from a card previews the linked caveat without creating a file', async () => {
   const fs = require('node:fs/promises'), path = require('node:path');
   const calls = [];
   const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 0 }, { engine: () => ({
@@ -4573,7 +5040,9 @@ test('adding a test from a card sends the linked caveat to Work mode', async () 
       lineMap: [[5, 2], [6, 3], [7, 4], [10, 2], [11, 4]].map(([pseudocodeLine, line]) =>
         ({ pseudocodeLine, startLine: line, endLine: line }))
     }] }),
-    implementPlan: async options => { calls.push(options); return { summary: 'Checked the lookup.' }; }
+    requestStructured: async options => { calls.push(options); return { raw: JSON.stringify({
+      edit: true, replacement: 'def test_bad_email():\n    assert True\n', message: 'Regression test'
+    }) }; }
   }) });
   try {
     const file = h.Uri.file(path.join(h.root, 'lookup.py'));
@@ -4586,17 +5055,10 @@ test('adding a test from a card sends the linked caveat to Work mode', async () 
     assert.equal(calls.length, 0, 'handled cases cannot start this action');
     await reader.receive({ type: 'addEdgeTest', index: 0, documentKey, pseudocodeLine: 11 });
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].mode, 'work');
-    assert.match(calls[0].prompt, /add a focused regression test/);
+    assert.match(calls[0].prompt, /focused regression test/);
     assert.match(calls[0].prompt, /Database unavailable/);
-    assert.match(calls[0].prompt, /Selected code · lookup.py:L4–4/);
     assert.match(calls[0].prompt, /return user_index.get/);
-    const map = h.guide.messages.filter(message => message.type === 'map').at(-1).state;
-    assert.equal(map.view, 'plan');
-    assert.equal(map.plan.mode, 'work');
-    const task = map.plan.conversation.find(row => row.role === 'user');
-    assert.equal(task.details.selection.startLine, 4);
-    assert.equal(task.details.selection.endLine, 4);
+    await assert.rejects(fs.stat(path.join(h.root, 'tests', 'test_lookup.py')), { code: 'ENOENT' });
   } finally { await h.close(); }
 });
 
