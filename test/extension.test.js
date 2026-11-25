@@ -4564,6 +4564,42 @@ test('function cards retain physical source-link indices and parse selective ann
   assert.throws(() => parseResult(raw(), source, { validateCards: true }), /missing or invalid/);
 });
 
+test('adding a test from a card sends the linked caveat to Work mode', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path');
+  const calls = [];
+  const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 0 }, { engine: () => ({
+    generate: async () => ({ title: 'Lookup', summary: 'Look up a user.', sections: [{
+      title: 'Lookup (lookup)', pseudocode: plainCard, startLine: 1, endLine: 4,
+      lineMap: [[5, 2], [6, 3], [7, 4], [10, 2], [11, 4]].map(([pseudocodeLine, line]) =>
+        ({ pseudocodeLine, startLine: line, endLine: line }))
+    }] }),
+    implementPlan: async options => { calls.push(options); return { summary: 'Checked the lookup.' }; }
+  }) });
+  try {
+    const file = h.Uri.file(path.join(h.root, 'lookup.py'));
+    await fs.writeFile(file.fsPath, 'def lookup(email):\n    if not email:\n        return None\n    return user_index.get(email)\n');
+    await h.commands.get('yamori.openAt')(file.toString(), 1);
+    const reader = h.readers().at(-1);
+    await h.until(() => h.last(reader)?.result?.sections?.length && !h.last(reader).busy, 'the card is ready');
+    const { documentKey } = h.last(reader);
+    await reader.receive({ type: 'addEdgeTest', index: 0, documentKey, pseudocodeLine: 10 });
+    assert.equal(calls.length, 0, 'handled cases cannot start this action');
+    await reader.receive({ type: 'addEdgeTest', index: 0, documentKey, pseudocodeLine: 11 });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].mode, 'work');
+    assert.match(calls[0].prompt, /add a focused regression test/);
+    assert.match(calls[0].prompt, /Database unavailable/);
+    assert.match(calls[0].prompt, /Selected code · lookup.py:L4–4/);
+    assert.match(calls[0].prompt, /return user_index.get/);
+    const map = h.guide.messages.filter(message => message.type === 'map').at(-1).state;
+    assert.equal(map.view, 'plan');
+    assert.equal(map.plan.mode, 'work');
+    const task = map.plan.conversation.find(row => row.role === 'user');
+    assert.equal(task.details.selection.startLine, 4);
+    assert.equal(task.details.selection.endLine, 4);
+  } finally { await h.close(); }
+});
+
 test('reader shows collapsed function summaries and links nested steps and edge cases', () => {
   const { document, elements, all } = fakeDocument(['content', 'refresh', 'provider', 'model', 'effort', 'refinement', 'colors', 'source', 'files', 'map', 'setup-ai']);
   const messages = [];
@@ -4593,7 +4629,7 @@ test('reader shows collapsed function summaries and links nested steps and edge 
   assert.ok(find('card-risk').classList.contains('card-active'));
   assert.equal(all(find('card-risk')).find(el => el.className === 'card-source-chip').textContent, 'L2–3');
   find('card-test-action').events.click();
-  assert.deepEqual(messages.at(-1), { type: 'draftEdgeTest', index: 0, documentKey: 'cards', pseudocodeLine: 11 });
+  assert.deepEqual(messages.at(-1), { type: 'addEdgeTest', index: 0, documentKey: 'cards', pseudocodeLine: 11 });
   show([{ ...section, title: 'Compute attention (attention)', pseudocode: tensorCard, lineMap: [] }]);
   assert.equal(find('card-symbol').textContent, 'attention()');
   assert.equal(all(elements.content).filter(el => el.className?.split(' ').includes('card-annotation')).length, 3);

@@ -960,11 +960,11 @@ function render(s) {
         if (riskLines.length && !s.notebook) {
           const addTest = node('button', '+ Add test for ⚠', 'card-test-action');
           addTest.disabled = !!s.busy || !!s.sourceMissing;
-          addTest.title = 'Ask Yamori to draft a test in project chat';
+          addTest.title = 'Add a regression test in Work mode';
           addTest.addEventListener('click', () => {
             if (addTest.disabled) return;
             const selectedLine = activeCardLines.get(cardKey);
-            send('draftEdgeTest', { index, documentKey: s.documentKey,
+            send('addEdgeTest', { index, documentKey: s.documentKey,
               pseudocodeLine: riskLines.includes(selectedLine) ? selectedLine : riskLines[0] });
           });
           row.append(addTest);
