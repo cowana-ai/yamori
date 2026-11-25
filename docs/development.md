@@ -33,13 +33,12 @@ Launch an extension development host with:
 code --extensionDevelopmentPath=/absolute/path/to/yamori
 ```
 
-Build the installer with the VS Code packaging CLI. The base URL flags rewrite
-relative README images and links to this repository, so the Marketplace and
-Open VSX can render them. The demo GIF stays in git and out of the VSIX:
-
-```sh
-npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/cowana-ai/yamori/blob/HEAD --baseImagesUrl https://github.com/cowana-ai/yamori/raw/HEAD
-```
+Build the installer with `npm run package`. The script passes `--baseContentUrl`
+and `--baseImagesUrl` for this repository on `main`, so relative README links
+resolve on the Marketplace and Open VSX. Images in the README are absolute
+`raw.githubusercontent.com` URLs, so they still render if those flags are left
+off. The demo GIF stays in git and out of the VSIX. Open VSX shows
+`CHANGELOG.md` on the extension page.
 
 ```
 src/
