@@ -1,31 +1,30 @@
-<p align="center"><img src="https://github.com/cowana-ai/yamori/raw/HEAD/media/yamori.png" width="160" alt="Yamori, a teal gecko samurai"></p>
-
-<h1 align="center">Yamori 🦎</h1>
-
-<p align="center"><strong>Work in pseudocode.</strong><br>
-Read, plan and edit in numbered steps beside the source. Your agent updates the code.</p>
+# Yamori: Work in pseudocode
+Read, plan and edit code as numbered pseudocode beside the editor. Your agent updates the code.
 
 <p align="center">
+  <a href="https://open-vsx.org/extension/cowana-ai/yamori"><img alt="Open VSX" src="https://img.shields.io/open-vsx/v/cowana-ai/yamori?label=Open%20VSX&color=161616"></a>
+  <a href="https://open-vsx.org/extension/cowana-ai/yamori"><img alt="Open VSX downloads" src="https://img.shields.io/open-vsx/dt/cowana-ai/yamori?label=downloads&color=161616"></a>
+  <a href="https://github.com/cowana-ai/yamori/blob/main/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-161616"></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori"><img alt="VS Code Marketplace" src="https://img.shields.io/visual-studio-marketplace/v/cowana-ai.yamori?label=VS%20Code%20Marketplace&color=161616"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori"><img alt="Installs" src="https://img.shields.io/visual-studio-marketplace/i/cowana-ai.yamori?label=installs&color=161616"></a>
-  <a href="https://open-vsx.org/extension/cowana-ai/yamori"><img alt="Open VSX for Cursor" src="https://img.shields.io/open-vsx/v/cowana-ai/yamori?label=Open%20VSX&color=161616"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori"><img alt="VS Code Marketplace installs" src="https://img.shields.io/visual-studio-marketplace/i/cowana-ai.yamori?label=installs&color=161616"></a>
   <a href="https://github.com/cowana-ai/yamori/actions/workflows/ci.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/cowana-ai/yamori/ci.yml?branch=main&label=tests"></a>
-  <a href="https://github.com/cowana-ai/yamori/blob/HEAD/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-161616"></a>
 </p>
 
 <p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori">Install from the VS Code Marketplace</a>
-  &nbsp;·&nbsp;
+  <img src="https://raw.githubusercontent.com/cowana-ai/yamori/main/media/demo.gif" width="720" alt="Yamori reading nanoGPT attention as numbered pseudocode with rendered formulas, each step linked to the Python, then stepping through the editor, the project Map, and Plan mode">
+</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/cowana-ai/yamori/main/media/yamori.png" width="128" alt="Yamori, a teal gecko samurai"></p>
+
+<p align="center">
   <a href="https://open-vsx.org/extension/cowana-ai/yamori">Install from Open VSX</a>
+  &nbsp;·&nbsp;
+  <a href="https://marketplace.visualstudio.com/items?itemName=cowana-ai.yamori">Install from the VS Code Marketplace</a>
   &nbsp;·&nbsp;
   <a href="https://try-yamori.dev">try-yamori.dev</a><br>
   No API key: uses your Claude Code or Codex login.<br>
   Works in VS Code, Cursor, Kiro, and other VS Code-compatible editors.<br>
-  Python, JS/TS, Go, Rust and Java.
-</p>
-
-<p align="center">
-  <img src="media/demo.gif" width="720" alt="Yamori reading nanoGPT attention as numbered pseudocode with rendered formulas, each step linked to the Python, then stepping through the editor, the project Map, and Plan mode">
+  Free, MIT license. Python, JS/TS, Go, Rust and Java.
 </p>
 
 ## Why Yamori
@@ -38,7 +37,7 @@ Most of what you read in the editor now is code you didn't write: other people's
 Read a file at **Overview** (the goal and main stages) or **Logic** (every meaningful step, with formulas rendered as math). Click a pseudocode line to jump to the code it stands for. Block titles appear above the code itself.
 
 <p align="center">
-  <img src="media/screenshots/reader.png" width="760" alt="Yamori explaining the gradient-descent loop of a small Python classifier as numbered pseudocode with formulas and Why and Insight notes">
+  <img src="https://raw.githubusercontent.com/cowana-ai/yamori/main/media/screenshots/reader.png" width="760" alt="Yamori explaining the gradient-descent loop of a small Python classifier as numbered pseudocode with formulas and Why and Insight notes">
 </p>
 
 ### Edit in pseudocode
@@ -51,7 +50,7 @@ Open **Chat & plan**, describe a goal, and Yamori drafts editable steps on the p
 **Start here** lists, folder by folder, which files to read first. The **Map** shows how files connect. AI notes add a purpose to every file and a glossary of project terms such as IDs, stages and constants. Search any variable, function or term: every file that mentions it lights up on the map, and **Explain how it flows** traces it across those files in the same pseudocode style.
 
 <p align="center">
-  <img src="media/screenshots/guide.png" width="760" alt="The project guide map with the files that mention fastModel highlighted, beside an AI explanation of how fastModel flows from engine.js into extension.js">
+  <img src="https://raw.githubusercontent.com/cowana-ai/yamori/main/media/screenshots/guide.png" width="760" alt="The project guide map with the files that mention fastModel highlighted, beside an AI explanation of how fastModel flows from engine.js into extension.js">
 </p>
 
 ### [Uses the AI you already have](docs/getting-started.md#set-up-an-ai)
@@ -77,7 +76,7 @@ Explanations, notes and drafts are cached on your machine; cached reads use no A
 3. The first time, **Set up Yamori** shows which AI is on your computer, with one button each: **Use**, **Sign in** or **Install**. Then your file opens as pseudocode, ready to read, plan or edit.
 
 <p align="center">
-  <img src="media/screenshots/setup.png" width="620" alt="The Set up Yamori screen: Claude is ready through Claude Desktop, ChatGPT is installed but not signed in">
+  <img src="https://raw.githubusercontent.com/cowana-ai/yamori/main/media/screenshots/setup.png" width="620" alt="The Set up Yamori screen: Claude is ready through Claude Desktop, ChatGPT is installed but not signed in">
 </p>
 
 Try it on [examples/demo.py](examples/demo.py), a small logistic-regression example. Open **Project guide** to see where to start reading a whole project.
@@ -120,7 +119,7 @@ The extension is free and [MIT](LICENSE) licensed. Generation uses the limits of
 - [Models, speed and review](docs/models.md): models and effort, parallel parts, background review
 - [Yamori for your own agents](docs/agents.md): Connect, `.yamori/` pseudocode, tools, agent-written pseudocode
 - [Development](docs/development.md): layout, building, testing
-- [Release history](HISTORY.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Credits](docs/credits.md)
+- [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Credits](docs/credits.md)
 
 ## Contributing
 

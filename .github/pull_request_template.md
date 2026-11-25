@@ -4,4 +4,4 @@
 
 - [ ] `npm test`
 - [ ] `npm run check`
-- [ ] Docs and `HISTORY.md` updated if behaviour changed
+- [ ] Docs and `CHANGELOG.md` updated if behaviour changed

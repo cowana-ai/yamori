@@ -1,0 +1,200 @@
+# Changelog
+
+### 0.26.17 · 2026-11-22
+- **Instant reopen:** explanations and their line links are stored on this computer, keyed by workspace, file path and content hash. Reopening an unchanged file shows the saved pseudocode with no model request. A git commit is kept as metadata and does not change the key.
+- **Freshness:** a changed file, a different model or provider, or a new prompt or cache format is never shown as the current explanation. Unchanged blocks keep their pseudocode and their line links move with the code; changed blocks are regenerated when you update.
+- **Cache controls:** `yamori.cache` turns saving off. **Yamori: Clear Cached Explanations** still clears it. Saved explanations and name flows stay under about 64 MB, dropping the least recently opened ones. Name-flow answers are cached the same way. The reading-order tour stays local and does not call a model.
+
+### 0.26.16 · 2026-11-22
+- **Refresh retries:** keep successful blocks fresh when reconciling mixed historical snapshots against identical current source and dependency context; preserve sub-block boundaries instead of widening them. Older unfinished blocks cannot invalidate completed batches again.
+- **Visible batch progress:** show batch number, saved blocks and remaining work, with elapsed time for the whole refresh instead of restarting the timer per batch.
+
+### 0.26.15 · 2026-11-22
+- **Review lifecycle:** source changes and Stop cancel background review, retain cached text and mark review as stopped. Discarded results and setup failures always leave a terminal status; late completion cannot replace newer review state. Cancelled drafts no longer restart review just from switching levels.
+
+### 0.26.14 · 2026-11-22
+- **Preview validation:** inline formatting alone no longer turns ordinary prose into an unverified source name. Identifier-shaped names and explicit calls/member references still receive source checks; failed checks keep the saved preview without automatic retries.
+
+### 0.26.13 · 2026-11-20
+- **Planning reconnect:** a saved Codex thread owned by another writer is left alone; start a new read-only planning thread with saved context before sending one model turn. Other provider failures still stop without retrying inference.
+- **Chat-to-plan continuity:** plan revisions receive bounded recent shared conversation, so requests referring to the previous chat carry their context across modes. Saved steps remain intact on failure.
+
+### 0.26.12 · 2026-11-20
+- **Selective source refresh:** match cached explanations to parsed current definitions and previously fresh source, remove obsolete blocks, preserve unchanged explanations, and update affected blocks in bounded batches. Successful batches are cached even when another fails fidelity review.
+- **Precise dependencies:** invalidate actual callers, not every block; dependency signatures include reachable helpers and module context. Patch writers and reviewers receive affected source, with stable boundaries enforced locally. No project-specific exceptions or automatic generation on file changes.
+
+### 0.26.11 · 2026-11-20
+- **Visible implementation activity:** show newer Codex tool events and completion, provider retry notices and waiting states. Report long periods without new activity instead of silently looking frozen. Non-retryable provider errors stop with the saved plan intact. No automatic implementation retry.
+
+### 0.26.10 · 2026-11-20
+- **Action-first plans:** explain proposed work as “I’ll do this, so this happens” using everyday words, short sentences and concrete reasons. Explain source names by their role and preserve important constraints without turning proposals into compressed checklists. Applies to drafts and revisions without an extra model request.
+
+### 0.26.9 · 2026-11-20
+- **Single-pass planning:** use the selected model once by default; legacy auto is an alias. No paid starting-file ranking, automatic second draft or preview fallback. Validation preserves the saved plan for explicit retry.
+- **Retained investigation:** source edits send changed-file notices instead of replacing the planning session. Keep the separate implementation permission boundary and remove duplicate plan context from its bounded handoff.
+- **Workflow usage:** persist planning response usage and duration even when validation rejects it, and deduplicate shared call IDs in the display.
+
+### 0.26.8 · 2026-11-20
+- **Understandable change proposals:** drafts and revisions explain the current situation, proposed difference and concrete consequence before implementation names. Preserve meaningful constraints, distinguish intended refactoring from behavior changes, and check clarity in the existing request.
+
+### 0.26.7 · 2026-11-20
+- **Quiet chat:** working updates and command output stay in collapsed Activity instead of the conversation. Native session imports distinguish interim updates from answers, including previously imported updates.
+- **Clear speakers:** blue user messages and green Yamori labels, with explicit names in the terminal and accessible fallback.
+
+### 0.26.6 · 2026-11-19
+- **Stable inline questions:** ignore selections and focus changes from embedded comment editors. Keep drafts when the source highlight collapses; dismiss explicitly or replace the selection instead. Add a visible Dismiss action.
+- **Complete plan canvas:** render every affected file even before its map metadata arrives. Fit planning independently of the project map, with a readable initial zoom centred on the most affected file.
+
+### 0.26.5 · 2026-11-19
+- **Ask from a selection:** highlighting source code opens a native inline question field. Ask Yamori sends the question, file/range and frozen selected code to project chat. Deselecting dismisses an unsent field; context-menu and keyboard actions are also available. No AI request is made until Submit.
+
+### 0.26.4 · 2026-11-19
+- **Complete saved plans:** verify referenced source directly when the overview index is capped. Targeted tool reads can index a missing source file, and drafts with unverifiable steps keep the previous plan instead of silently saving a partial plan.
+- **Current editor context:** chat, planning and work receive the current source tab, cursor, selected lines and a bounded unsaved excerpt. Retain the last source editor while Yamori has focus; exclude files outside the current project.
+- **Commit evidence:** read-only git_history lets planning inspect local authorship before attributing a change to someone. Broader-plan requests can investigate missing scope.
+
+### 0.26.3 · 2026-11-19
+- **Live branch in focused chat:** redraw the conversation header when local Git HEAD changes, even if the plan and messages stay unchanged. Refresh local branch metadata on webview focus as well; no model call is needed.
+
+### 0.26.2 · 2026-11-19
+- **Clean conversation handoffs:** session titles derived from internal prompts use the actual user request instead. Picker labels and handoff messages never print Yamori context wrappers. Existing cached handoff labels are repaired locally without changing native sessions or removing chat history.
+
+### 0.26.1 · 2026-11-19
+- **Live replies:** Codex and Claude chat/work responses appear as provider text arrives, without a second AI request. JSON transport and private reasoning remain hidden; completion is still validated before saving the final reply.
+- **Stable canvas:** streaming updates the reply in place, preserving the canvas, input and cursor. The canvas is the default, with a highlighted < > Focus chat control to expand the conversation and return.
+
+### 0.26.0 · 2026-11-19
+- **One project conversation:** Chat, Plan and Work share durable local history, including reviewed changes, execution activity and outcomes. Completed plans leave the canvas while the discussion remains. New plans preserve the transcript.
+- **Native continuation:** coding and chat turns retain Codex/Claude Code session references. Continue from an existing local conversation, sync external updates on return, or reopen the same native session in an agent terminal. Copy/paste handoffs support web-only chats and other providers.
+- **Focused chat:** use the conversation as the main view before and after a plan, with an explicit return to the canvas. Older messages can be loaded locally, and agents can retrieve complete earlier context using get_conversation.
+- **AI-free branch indicator:** read Git HEAD directly, including worktrees and detached HEAD; refresh on local Git changes and focus without a model call.
+
+### 0.25.1 · 2026-11-19
+- **Autonomous planning access:** provide bundled read-only project tools in Restricted Mode, and start native planning sessions in the actual project folder. Preserve the initial request as later conversation grows; ask about missing intent rather than requesting project attachments.
+- **Profiles, prompts and configuration:** discover Markdown, text, JSON, YAML, TOML and INI/CFG files; search and read them with source line numbers. Text context has no invented code definitions or dependency edges.
+- **Branch evidence:** a read-only git_changes tool reports the current branch, changed paths and optional patches without fetching or modifying the repository.
+- **Trust handoff:** approving an implementation in Restricted Mode opens Workspace Trust and resumes the approved plan after the user grants trust. MCP startup failures become access errors rather than repeated attachment requests.
+
+### 0.25.0 · 2026-11-19
+- **Approve & implement:** start a separate coding run with the selected Codex or Claude model and effort. The planning agent remains read-only until approval. Active steps and notes are passed to the coding agent; rejected and finished changes are excluded.
+- **Completion cleanup:** successful implementations leave the canvas and are retained in local history, with a completion summary and token report. Errors, blocked operations, missing completion reports and cancellation retain the plan.
+- **Execution activity:** see file/tool activity and provider-reported token usage, stop a run, and prevent duplicate approvals or late plan edits during implementation.
+
+### 0.24.7 · 2026-11-19
+- **Visible plan details:** selected changes render directly, without a hidden disclosure controlling their text. The inspector uses available window height above the terminal, with its own scroll area; file rejection follows the description.
+
+### 0.24.6 · 2026-11-19
+- **Recover invalid step links:** keep readable pseudocode and valid links when an AI returns duplicate, blank-line or out-of-range step links. Disabled links are reported and the notice is cached. No automatic second model request is needed.
+- **Notebook numbering:** generation prompts explicitly use extracted code-view line marks rather than notebook JSON or cell-local numbers. Block ranges remain strictly validated.
+
+### 0.24.5 · 2026-11-19
+- **Reliable terminal input:** a wrapping prompt editor preserves multiline text, Unicode, selection and caret position without repeated terminal redraws. Enter sends; Shift+Enter adds a line.
+- **Resizable planning terminal:** drag its top edge up or down, or focus it and use arrow keys. Double-click resets; the webview remembers the height and the inspector adjusts with it.
+
+### 0.24.4 · 2026-11-19
+- **Fresh planning context:** discover files after pulls before planning; scoped agent tools rescan too and retry discovery for previously unknown paths.
+- **Notebook support:** map and explain notebook code cells, excluding outputs and execution metadata from prompts and source hashes. Source links open the notebook cell.
+- **Efficient cached refresh:** incremental requests send affected source blocks, keep untouched cached sections, and add independent new functions without invalidating the rest of the file.
+- **Cache consistency:** project-context updates no longer suggest regenerating unchanged code, and shutdown waits for pending cache writes.
+
+### 0.24.3 · 2026-11-19
+- **Paths on the plan canvas:** affected and proposed files show their project-relative locations, wrapping long paths.
+- **Open affected source:** click an existing file to open it in the editor at the first affected line. Expanded change rows still open plan details; proposed new files are not created or opened as existing source.
+
+### 0.24.2 · 2026-11-19
+- **Readable plan details:** show the complete change description without a three-line clamp or yellow text box.
+- **Stable inspector layout:** fixed file/change navigation and a separate scrolling body prevent actions from overlapping text. Change type remains visible as a small colored label.
+
+### 0.24.1 · 2026-11-19
+- **Plan inspector repair:** saved plans with token usage render their change descriptions, actions and pseudocode again.
+- **Visible planning activity:** current agent action and expandable recent activity stay visible in the terminal.
+- **Clear token accounting:** input, output and cached reads are shown separately, with pending usage and context estimates labeled. Revisions and pseudocode previews retain their reported usage.
+
+### 0.24.0 · 2026-11-19
+- **Direct planning:** open Plan from the editor title or the reader header, without navigating through the project guide.
+- **Clearer navigation:** persistent plan actions, visible change picker, previous/next navigation and a labeled Close button.
+- **Native Plan modes:** Codex uses native Plan collaboration mode; Claude keeps Plan mode when resuming. Codex clarification questions pause and resume the same turn inside Yamori.
+- **One pseudocode preview:** green additions, yellow changes, and unchanged context together, with no repeated before section.
+- **Clearer proposals:** short, concrete change descriptions explain inputs, results and essential programming context.
+- **Proposed new files:** visible on the canvas without fictional source lines; details stay open through updates.
+- **Efficient plan conversations:** retained provider sessions, focused plan patches and local pseudocode comparisons reuse previous investigation.
+
+### 0.23.0
+- **A knowledge server for your own agents.** One command registers it with Claude Code
+  and Codex: the project map, Start here, search, tests, the glossary and pseudocode by
+  outline, block or line, in every project, even with VS Code closed. It only registers
+  the server; your settings and instruction files are not changed.
+- **Agents share what they learn:** a file with no pseudocode can get it from the
+  agent's own reading; Yamori validates it and shows it labelled, with no AI request.
+- **Pseudocode is checked against its source** with fixed rules, no AI: invented names,
+  numbers the source doesn't contain, and side effects left unsaid. The reader shows a
+  note on an affected block; an agent's save with an invented name is refused with the
+  cause (inspired by Skill-as-Pseudocode's deterministic verification).
+- Optional `.yamori/` text copies of pseudocode (`yamori.pseudocodeMirror`, off by default).
+
+### 0.22.0 · 2026-11-16
+- **Search a name in the project guide.** A search box in the guide's header highlights
+  every file that mentions a variable, function or term, with counts on the map and a
+  side panel of matching lines.
+- **Explain how it flows.** The selected AI traces the name across those files and
+  answers as reader-style blocks: the same writing rules, styles and line links as
+  explanations.
+
+### 0.21.0 · 2026-11-16
+- **Guided AI setup.** A setup screen shows which AI is installed and signed in, with
+  one button each: Use, Sign in or Install. Claude Code bundled with Claude Desktop and
+  Codex bundled with the ChatGPT app are found automatically.
+- **Parallel parts.** Bigger files are explained by several requests at once, split
+  locally into whole functions and classes: a 354-line file's draft went from 49.5 s to 17.4 s.
+- **Background review** on a cheaper model (Sonnet under Opus, Codex's balanced model
+  under its default). The draft is readable at once; improved blocks swap in later.
+- AI notes start on their own, wait for setup instead of failing, and run in Restricted Mode.
+- Refinement defaults to 1 step.
+
+### 0.20.0 · 2026-11-16
+- **Project guide**: Start here reading order by folder, a draggable folder-box map,
+  AI notes and a project glossary, built with a tree-sitter repo map.
+- The AI can look up project knowledge while writing (a read-only MCP server).
+- Guided tours with the next file prepared ahead, project-name links, hovers and CodeLens.
+- **Run a function with its tests** as a notebook cell, with an AI simulation fallback.
+- Live progress, low effort by default, fast models for quick jobs, compact step links.
+- Detail levels are now Overview and Logic.
+
+### 0.19.4 · 2026-11-15
+- Model responses are validated with compiled Ajv schemas.
+
+### 0.19.3 · 2026-11-15
+- Evaluator references are repaired, and drafts are kept when review cannot finish.
+
+### 0.19.2 · 2026-11-14
+- Drafts stream during review; redundant refinement passes stop early.
+
+### 0.19.1 · 2026-11-14
+- Discoverable on first install and usable in Restricted Mode.
+
+### 0.19.0 · 2026-11-14
+- Difficult blocks are refined with independent uncertainty and reading-cost reviews.
+
+### 0.18.0 · 2026-11-14
+- Explanations and drafts are cached locally, with selective refresh when source changes.
+
+### 0.17.0 · 2026-11-14
+- Redesign: a logic map, rich block editing and the pixel interface.
+
+### 0.16.0 – 0.16.1 · 2026-11-14
+- A file-aware one-click launcher in the editor toolbar and status bar, with Yamori branding.
+
+### 0.15.0 · 2026-11-13
+- Windows CLI discovery and Claude connection onboarding.
+
+### 0.12.0 · 2026-11-13
+- High-contrast Paper and Slate reading palettes.
+
+### 0.11.0 · 2026-11-13
+- Focused reading boxes and grounded algorithm explanations.
+
+### 0.10.0 · 2026-11-13
+- Denser pseudocode and a better reading layout.
+
+### 0.9.0 · 2026-11-13
+- First release: programming context, made explicit.
