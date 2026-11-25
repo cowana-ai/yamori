@@ -1,7 +1,7 @@
 {
   "name": "yamori",
-  "displayName": "Yamori: Read Code as Pseudocode",
-  "description": "Read any code as pseudocode beside your editor, every line linked to the source. No API key: runs on your Claude Code or Codex login. Python, JS/TS, Go, Rust and Java.",
+  "displayName": "Yamori: Work in Pseudocode",
+  "description": "Work in numbered pseudocode beside your editor: read, plan and edit steps; your agent updates the code. No API key: uses your Claude Code or Codex login. Python, JS/TS, Go, Rust and Java.",
   "version": "0.26.17",
   "publisher": "cowana-ai",
   "license": "MIT",
@@ -9,8 +9,8 @@
     "vscode": "^1.90.0"
   },
   "categories": [
+    "AI",
     "Education",
-    "Machine Learning",
     "Visualization"
   ],
   "main": "./src/extension.js",
@@ -394,7 +394,8 @@
     "test": "node --test \"test/**/*.test.js\"",
     "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js",
     "build:validation": "node src/ai/schemas.js",
-    "build:parser": "node src/project/graph.js"
+    "build:parser": "node src/project/graph.js",
+    "package": "npx --yes @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/cowana-ai/yamori/blob/main --baseImagesUrl https://raw.githubusercontent.com/cowana-ai/yamori/main"
   },
   "files": [
     "src/",
@@ -403,46 +404,51 @@
     "media/yamori-icons.woff",
     "examples/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "HISTORY.md"
   ],
   "icon": "media/yamori.png",
   "galleryBanner": {
-    "color": "#0B3A38",
+    "color": "#0A3C48",
     "theme": "dark"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/cowana-ai/yamori.git"
   },
-  "homepage": "https://github.com/cowana-ai/yamori#readme",
+  "homepage": "https://try-yamori.dev",
   "bugs": {
     "url": "https://github.com/cowana-ai/yamori/issues"
   },
+  "qna": "https://github.com/cowana-ai/yamori/issues",
+  "pricing": "Free",
+  "markdown": "github",
   "keywords": [
     "pseudocode",
-    "code explanation",
-    "code reading",
-    "understand code",
     "explain code",
+    "understand code",
+    "code explanation",
     "code understanding",
-    "code comprehension",
-    "code navigation",
+    "code reading",
+    "edit pseudocode",
+    "pseudocode editor",
+    "plan changes",
+    "agentic coding",
+    "code review",
     "onboarding",
-    "machine learning",
-    "math",
-    "AI",
+    "agent",
+    "planning",
     "Claude Code",
     "Codex",
     "ChatGPT",
+    "Cursor",
+    "Kiro",
     "MCP",
     "project map",
-    "source code",
-    "programming",
-    "algorithm",
-    "learning",
-    "VS Code",
-    "Cursor",
+    "math",
+    "machine learning",
+    "AI",
     "Python",
     "JavaScript",
     "TypeScript",

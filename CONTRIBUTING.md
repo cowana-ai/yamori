@@ -35,8 +35,8 @@ The layout, the generated files and how to rebuild them are described in
 - Keep each pull request to one change, and describe what a reader of Yamori will notice.
 - Add or update tests in `test/extension.test.js`; tests must not call a real AI or
   depend on what is installed on your machine.
-- Update the docs in `docs/` when behaviour changes, and add a line to `HISTORY.md`
-  under the next version.
+- Update the docs in `docs/` when behaviour changes, and add a line to `CHANGELOG.md`
+  under the next version. `HISTORY.md` points at that file.
 - `npm test` and `npm run check` must pass; CI runs both on Linux and macOS.
 
 ## Principles
