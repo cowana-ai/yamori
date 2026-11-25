@@ -43,6 +43,9 @@ Read a file at **Overview** (the goal and main stages) or **Logic** (every meani
 ### Edit in pseudocode
 Edit steps in the pseudocode beside the file, and your agent updates the code. The steps stay linked to the source, so you can follow the logic as it changes. You can also ask a block to explain better, or make it shorter, without changing the source.
 
+### [Review changes](docs/reading.md#review-changes-in-read)
+See added and removed pseudocode steps in Read and open the corresponding source diff in the editor.
+
 ### [Plan a change](docs/project-guide.md#plan-a-change)
 Open **Chat & plan**, describe a goal, and Yamori drafts editable steps on the project map. Before/after pseudocode is there on demand, so you can review the intended logic before any source changes. Edit the steps, leave comments, or reject a file, then press **Approve & implement** to let your Claude Code or Codex agent apply the plan and run checks.
 

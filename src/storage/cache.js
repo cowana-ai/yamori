@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { diffArrays } = require('../../vendor/diff.min');
-const { hash, parseResult, PROMPT_FORMAT_VERSION, FLOW_FORMAT_VERSION } = require('../ai/engine');
+const { hash, lowerView, parseResult, PROMPT_FORMAT_VERSION, FLOW_FORMAT_VERSION } = require('../ai/engine');
 // Schema of the on-disk explanation record. Newer builds reject records above
 // this. Records from schema 1 stay readable: the explanation payload did not
 // change, and a missing promptVersion means PROMPT_FORMAT_VERSION.
@@ -149,7 +149,7 @@ function dependencyFingerprint(text, defs, name, kind) {
   return hash(JSON.stringify([global.trim(), [...reached].map(def => [def.kind, def.name, lines.slice((def.start || def.line) - 1, def.end || def.line).join('\n').trim()]).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]));
 }
 
-function refreshSupport(source, sections, defs, budget = 10000) {
+function refreshSupport(source, sections, defs, budget = 10000, referencesOnly = false, directOnly = false) {
   const lines = linesOf(source.text), blocks = defs.filter(def => ['function','class','method'].includes(def.kind));
   if (blocks.some(def => !Number.isInteger(def.end))) return 'Full definition boundaries are unavailable. Treat unsupplied custom-function behavior as unknown.';
   const numbered = (start,end) => lines.slice(start - source.startLine, end - source.startLine + 1).map((line,i) => (start + i) + ': ' + line).join('\n');
@@ -161,13 +161,22 @@ function refreshSupport(source, sections, defs, budget = 10000) {
       const start = def.start || def.line, end = def.end || def.line;
       if (included.has(def) || sections.some(section => start >= section.startLine && end <= section.endLine) || !new RegExp('\\b' + def.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(search)) continue;
       if ([...included].some(parent => start >= (parent.start || parent.line) && end <= (parent.end || parent.line))) continue;
-      const snippet = numbered(start,end);
+      const snippet = referencesOnly && !source.stamp?.dirty
+        ? (source.relPath || source.name) + ':' + start + '–' + end + ' ' + def.name : numbered(start,end);
       if (used + snippet.length > budget) { missing.add(def.name); continue; }
-      pieces.push(snippet); included.add(def); missing.delete(def.name); used += snippet.length; search += '\n' + snippet; added = true;
+      pieces.push(snippet); included.add(def); missing.delete(def.name); used += snippet.length;
+      if (!directOnly) search += '\n' + snippet;
+      added = true;
     }
-    if (!added) break;
+    if (!added || directOnly) break;
   }
-  const globals = lines.flatMap((line,i) => blocks.some(def => i + source.startLine >= (def.start || def.line) && i + source.startLine <= (def.end || def.line)) ? [] : [(source.startLine + i) + ': ' + line]).join('\n');
+  const names = new Set(search.match(/[A-Za-z_$][\w$]*/g) || []);
+  const globals = lines.flatMap((line,i) => {
+    const number = i + source.startLine;
+    if (blocks.some(def => number >= (def.start || def.line) && number <= (def.end || def.line)) ||
+        !(line.match(/[A-Za-z_$][\w$]*/g) || []).some(name => names.has(name))) return [];
+    return [referencesOnly && !source.stamp?.dirty ? (source.relPath || source.name) + ':' + number : number + ': ' + line];
+  }).join('\n');
   const room = Math.max(0, budget - used);
   if (globals) pieces.push('MODULE CONTEXT:\n' + globals.slice(0, room) + (globals.length > room ? '\n[Module context shortened; omitted values are unknown.]' : ''));
   if (missing.size) pieces.push('Definitions omitted by the context budget; do not invent their internals: ' + [...missing].join(', '));
@@ -176,12 +185,43 @@ function refreshSupport(source, sections, defs, budget = 10000) {
 
 // Rebuild block ownership locally after moves/deletions. Historical source is
 // evidence only when the SAME cached explanation was fresh for that source.
-async function reconcileRefresh(source, value, origins, indexer) {
+function focusedRefresh(source, section, origin) {
+  if (!origin || section.endLine - section.startLine < 6) return undefined;
+  const old = origin.section;
+  const before = linesOf(origin.source.text).slice(old.startLine - origin.source.startLine, old.endLine - origin.source.startLine + 1);
+  const after = linesOf(source.text).slice(section.startLine - source.startLine, section.endLine - source.startLine + 1);
+  if (before.length !== old.endLine - old.startLine + 1 || after.length !== section.endLine - section.startLine + 1) return undefined;
+  const plan = linePlan(before.join('\n'), after.join('\n'));
+  const changes = plan.changed.filter(change => change.meaningful);
+  if (plan.unknown || !changes.length || changes.some(change => change.oldStart === 1 || change.newStart === 1)) return undefined;
+  const hunks = changes.map(change => ({
+    removed: before.slice(change.oldStart - 1, change.oldEnd).map((text, i) => [old.startLine + change.oldStart - 1 + i, text]),
+    added: after.slice(change.newStart - 1, change.newEnd).map((text, i) => [section.startLine + change.newStart - 1 + i, text]),
+    currentLine: section.startLine + change.newStart - 1
+  }));
+  const linesChanged = hunks.reduce((sum, hunk) => sum + hunk.removed.length + hunk.added.length, 0);
+  if (linesChanged > 24 || linesChanged >= after.length || JSON.stringify(hunks).length >= after.join('\n').length) return undefined;
+  const lineMap = (old.lineMap || []).filter(link => {
+    const start = link.startLine - old.startLine + 1, end = link.endLine - old.startLine + 1;
+    return start >= 1 && end <= before.length && !changes.some(change => change.oldEnd >= change.oldStart
+      ? change.oldStart <= end && change.oldEnd >= start : change.oldStart > start && change.oldStart <= end);
+  }).map(link => [link.pseudocodeLine, ...[link.startLine, link.endLine].map(line => section.startLine + plan.map(line - old.startLine + 1) - 1)]);
+  return { hunks, lineMap };
+}
+
+async function reconcileRefresh(source, value, origins, indexer, focusChanges = false) {
   const records = await indexer.extract(source.name || new URL(source.uri).pathname, source.text);
   const top = defs => defs.filter(def => ['function', 'class', 'method'].includes(def.kind) && !defs.some(parent => parent !== def && ['function', 'class', 'method'].includes(parent.kind) && parent.line <= def.line && (parent.end || parent.line) >= (def.end || def.line) && (parent.line < def.line || (parent.end || parent.line) > (def.end || def.line))));
   const current = top(records.defs || []), parsed = new Map();
   if (source.selected || !current.length || current.some(def => !Number.isInteger(def.end))) return undefined;
   const body = (snapshot, def) => linesOf(snapshot.text).slice((def.start || def.line) - snapshot.startLine, (def.end || def.line) - snapshot.startLine + 1).join('\n').trim();
+  const renamedBody = (snapshot, def) => {
+    const rows = linesOf(snapshot.text).slice((def.start || def.line) - snapshot.startLine, def.end - snapshot.startLine + 1);
+    const at = def.line - (def.start || def.line);
+    const name = new RegExp('(^|[^\\w$])(' + def.name.replace(/[.*+?^\x24{}()|[\]\\]/g, '\\$&') + ')(?![\\w$])');
+    rows[at] = rows[at]?.replace(name, '$1@symbol') || '';
+    return rows.join('\n').trim();
+  };
   const key = def => def.kind + ':' + def.name;
   const occupied = new Set(), rows = [], changedNames = new Set(), changedGlobalLines = new Set(); let recovered = 0, removed = 0;
   const dependencies = snapshot => JSON.stringify((snapshot.callContext?.definitions || []).map(def => [def.uri, def.symbol, def.watchSignature || def.fullHash]).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
@@ -217,17 +257,29 @@ async function reconcileRefresh(source, value, origins, indexer) {
       continue;
     }
     if (oldDefs.some(def => !Number.isInteger(def.end))) { rows.push({ section, dirty: true }); continue; }
-    const matched = oldDefs.flatMap(def => { const matches = current.filter(next => key(next) === key(def)); return matches.length === 1 ? [{ old: def, next: matches[0] }] : []; });
+    const matched = oldDefs.flatMap(def => {
+      const matches = current.filter(next => key(next) === key(def));
+      if (matches.length === 1) return [{ old: def, next: matches[0] }];
+      if (matches.length || oldDefs.length !== 1) return [];
+      const signature = renamedBody(origin.source, def);
+      const unmatched = current.filter(next => next.kind === def.kind && !occupied.has(key(next)) &&
+        !top(parsed.get(origin.source.fullHash).defs || []).some(old => key(old) === key(next)) &&
+        renamedBody(source, next) === signature);
+      return unmatched.length === 1 ? [{ old: def, next: unmatched[0], renamed: true }] : [];
+    });
     for (const def of oldDefs) if (!matched.some(pair => pair.old === def)) changedNames.add(def.name);
     if (!matched.length) { removed++; recovered++; continue; }
     const startLine = Math.min(...matched.map(pair => pair.next.start || pair.next.line)), endLine = Math.max(...matched.map(pair => pair.next.end || pair.next.line));
     const inside = current.filter(def => def.line >= startLine && def.line <= endLine);
     matched.forEach(pair => occupied.add(key(pair.next))); inside.forEach(def => occupied.add(key(def)));
-    const identical = matched.length === oldDefs.length && inside.length === matched.length && matched.every((pair,i) => i === 0 || pair.next.line > matched[i - 1].next.line) && matched.every(pair => body(origin.source, pair.old) === body(source, pair.next));
+    const identical = matched.length === oldDefs.length && inside.length === matched.length && matched.every((pair,i) => i === 0 || pair.next.line > matched[i - 1].next.line) && matched.every(pair => pair.renamed || body(origin.source, pair.old) === body(source, pair.next));
     if (!identical) oldDefs.forEach(def => changedNames.add(def.name));
     const alignment = linePlan(origin.source.fullText || origin.source.text, source.fullText || source.text);
     const lineMap = identical ? (origin.section.lineMap || []).map(link => ({ ...link, startLine: alignment.map(link.startLine), endLine: alignment.map(link.endLine) })).filter(link => link.startLine >= startLine && link.endLine <= endLine) : [];
-    rows.push({ section: { ...section, startLine, endLine, lineMap }, dirty: !identical, origin, names: matched.map(pair => pair.next.name) }); recovered++;
+    const replacement = matched.find(pair => pair.renamed);
+    const rename = text => replacement ? text.replace(new RegExp('(^|[^\\w$])' + replacement.old.name.replace(/[.*+?^\x24{}()|[\]\\]/g, '\\$&') + '(?![\\w$])', 'g'),
+      (_match, prefix) => prefix + replacement.next.name) : text;
+    rows.push({ section: { ...section, title: rename(section.title), pseudocode: rename(section.pseudocode), startLine, endLine, lineMap }, dirty: !identical, origin, names: matched.map(pair => pair.next.name) }); recovered++;
   }
   if (!recovered) return undefined;
   for (const def of current) if (!occupied.has(key(def)) && !rows.some(row => row.section.startLine <= def.line && row.section.endLine >= (def.end || def.line))) {
@@ -279,7 +331,16 @@ async function reconcileRefresh(source, value, origins, indexer) {
     if (!added) break;
   }
   rows.sort((a,b) => a.section.startLine - b.section.startLine || a.section.endLine - b.section.endLine);
-  return { value: { ...value, views: undefined, sections: rows.map(row => row.dirty ? { ...row.section, lineMap: [] } : row.section) }, staleBlocks: rows.flatMap((row,i) => row.dirty ? [i] : []), removed };
+  const focused = new Map();
+  if (focusChanges && !changedGlobalLines.size) rows.forEach((row, index) => {
+    if (!row.dirty || !row.origin || dependencies(row.origin.source) !== currentDependencies) return;
+    const change = focusedRefresh(source, row.section, row.origin);
+    if (!change) return;
+    const code = linesOf(source.text).slice(row.section.startLine - source.startLine, row.section.endLine - source.startLine + 1).join('\n');
+    if ((code.match(/[A-Za-z_$][\w$]*/g) || []).some(name => changedNames.has(name) && !row.names?.includes(name))) return;
+    focused.set(index, change);
+  });
+  return { value: { ...value, views: undefined, sections: rows.map(row => row.dirty ? { ...row.section, lineMap: [] } : row.section) }, staleBlocks: rows.flatMap((row,i) => row.dirty ? [i] : []), removed, focused };
 }
 
 
@@ -430,6 +491,31 @@ class LocalCache {
     });
     return this.useChain;
   }
+  // Provider and model are provenance for a saved explanation. Reading can
+  // reuse coherent pseudocode when the selected writer has no current record.
+  async readable(source, level, { historical = false, excludeProvider } = {}) {
+    let best;
+    const files = await fs.readdir(this.root).catch(() => []);
+    for (const file of files) {
+      if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
+      const raw = await this.json(path.join(this.root, file)), meta = raw?._yamori, saved = meta?.source;
+      if (!isCurrent(meta) || (excludeProvider && meta.opts?.provider === excludeProvider) || saved?.uri !== source.uri || !!saved.selected !== !!source.selected ||
+          (source.selected && (saved.startLine !== source.startLine || saved.endLine !== source.endLine))) continue;
+      const currentSource = saved.text === source.text && (saved.fullText || saved.text) === (source.fullText || source.text);
+      if (!historical && !currentSource) continue;
+      const from = meta.opts?.level, direct = from === level;
+      if (!direct && (from !== 'logic' || level !== 'overview')) continue;
+      const score = Number(currentSource) * 2 + Number(direct);
+      if (best && (best.score > score || best.score === score && (best.meta.savedAt || 0) >= (meta.savedAt || 0))) continue;
+      let value;
+      try { value = parseResult(JSON.stringify(raw), saved); } catch { continue; }
+      if (!value.sections.length || value.sections.some(section => /^# (?:Waiting for pseudocode|New source block)\./.test(section.pseudocode))) continue;
+      if (direct) best = { value, meta, score, currentSource, file };
+      else best = { value: lowerView(value, from, level), meta: { ...meta, blocks: undefined }, score, currentSource, file };
+    }
+    if (best) await this.noteUse(best.file);
+    return best;
+  }
   async latest(source, opts, legacy = false) {
     const pointer = await this.json(path.join(this.root, 'latest', this.variant(source, opts) + '.json'));
     const entry = pointer && await this.entry(pointer.key);
@@ -452,22 +538,124 @@ class LocalCache {
     await this.noteUse(pointer.key + '.json');
     return entry;
   }
-  async save(source, opts, value, key, status = {}) {
-    const variant = this.variant(source, opts), version = (this.versions.get(variant) || 0) + 1;
-    this.versions.set(variant, version);
-    const git = await gitCommit(filePathOf(source)).catch(() => undefined);
+  async moved(source, opts) {
+    if (!source.workspace || source.selected) return undefined;
+    const matches = new Map();
+    for (const file of await fs.readdir(this.root).catch(() => [])) {
+      if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
+      const raw = await this.json(path.join(this.root, file)), meta = raw?._yamori, from = meta?.source;
+      if (!from || from.uri === source.uri || from.workspace !== source.workspace || from.selected ||
+          from.fullHash !== source.fullHash || from.text !== source.text || !isCurrent(meta) || !this.sameRequest(meta, from, opts)) continue;
+      const absolute = filePathOf(from);
+      if (!absolute) continue;
+      const gone = await fs.stat(absolute).then(() => false, error => error.code === 'ENOENT');
+      if (!gone || (matches.get(from.uri)?.meta.savedAt || 0) >= meta.savedAt) continue;
+      try { matches.set(from.uri, { value: parseResult(JSON.stringify(raw), source), meta, moved: true }); } catch {}
+    }
+    return matches.size === 1 ? [...matches.values()][0] : undefined;
+  }
+  async movedBlocks(source, opts, wanted) {
+    if (!source.workspace || source.selected || !wanted.length) return new Map();
+    const matches = new Map(), checked = new Map();
+    for (const file of await fs.readdir(this.root).catch(() => [])) {
+      if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
+      const raw = await this.json(path.join(this.root, file)), meta = raw?._yamori, from = meta?.source;
+      if (!from || from.uri === source.uri || from.workspace !== source.workspace || from.selected || !isCurrent(meta) ||
+          !this.sameRequest(meta, from, opts)) continue;
+      for (const record of meta.blocks || []) {
+        const index = wanted.findIndex(item => item.identity === record.identity && item.contentHash === record.contentHash &&
+          item.depsHash === record.depsHash);
+        if (index === -1) continue;
+        const absolute = filePathOf(from);
+        if (!absolute) continue;
+        if (!checked.has(absolute)) checked.set(absolute, fs.stat(absolute).then(stat => stat.isFile() && stat.size <= 120000 ?
+          fs.readFile(absolute, 'utf8') : undefined, error => error.code === 'ENOENT' ? '' : undefined).catch(() => undefined));
+        const live = await checked.get(absolute);
+        const oldText = linesOf(from.text).slice(record.startLine - 1, record.endLine).join('\n');
+        if (typeof live !== 'string' || !oldText || live.replace(/\r\n/g, '\n').includes(oldText)) continue;
+        let cached;
+        try { cached = parseResult(JSON.stringify(raw), from); } catch { continue; }
+        const section = cached.sections[(meta.blocks || []).indexOf(record)];
+        if (!section || /^# (Waiting for pseudocode|New source block)/.test(section.pseudocode)) continue;
+        const prior = matches.get(index) || new Map();
+        const key = from.uri + ':' + record.identity;
+        if (!prior.has(key) || prior.get(key).at < meta.savedAt) prior.set(key, { section, from, at: meta.savedAt });
+        matches.set(index, prior);
+      }
+    }
+    return new Map([...matches].filter(([, candidates]) => candidates.size === 1)
+      .map(([index, candidates]) => [index, [...candidates.values()][0]]));
+  }
+  logicStatePath(source) {
+    return path.join(this.root, 'logic-state', hash(JSON.stringify([source.workspace || '', source.relPath || source.uri])) + '.json');
+  }
+  async logicState(source) {
+    const state = await this.json(this.logicStatePath(source));
+    return { reviews: state?.reviews || {}, activity: Array.isArray(state?.activity) ? state.activity.slice(0, 40) : [] };
+  }
+  saveLogicState(source, reviews, activity) {
+    return this.write(this.logicStatePath(source), { reviews, activity: activity.slice(0, 40) });
+  }
+  async fileGist(source) {
+    return this.json(this.logicStatePath(source).replace(/\.json$/, '.gist.json'));
+  }
+  saveFileGist(source, gist) {
+    return this.write(this.logicStatePath(source).replace(/\.json$/, '.gist.json'), gist);
+  }
+  async fileUsage(source) {
+    return this.json(this.logicStatePath(source).replace(/\.json$/, '.usage.json'));
+  }
+  saveFileUsage(source, usage) {
+    return this.write(this.logicStatePath(source).replace(/\.json$/, '.usage.json'), usage);
+  }
+  // A review can look up historical snapshots independently of the reader's
+  // active model and latest pointer. Match actual text and full-file line maps.
+  async reviewViews(sources) {
+    const results = sources.map(() => ({}));
+    const targets = sources.map(source => source && { ...source, text: source.text.replace(/\r\n/g, '\n') });
+    if (!targets.some(Boolean)) return results;
+    const files = await fs.readdir(this.root).catch(() => []);
+    for (const file of files) {
+      if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
+      const raw = await this.json(path.join(this.root, file)), meta = raw?._yamori, saved = meta?.source;
+      if (!isCurrent(meta) || !saved || saved.selected || saved.startLine !== 1) continue;
+      const text = saved.fullText ?? saved.text;
+      if (typeof text !== 'string' || typeof saved.text !== 'string') continue;
+      const index = targets.findIndex(target => target && target.uri === saved.uri && target.text === text.replace(/\r\n/g, '\n') && target.text === saved.text.replace(/\r\n/g, '\n'));
+      if (index === -1) continue;
+      let value;
+      try { value = parseResult(JSON.stringify(raw), saved); } catch { continue; }
+      for (const [level, view] of Object.entries({ ...value.views, [meta.opts?.level]: value })) {
+        if (!['logic', 'overview'].includes(level)) continue;
+        const at = meta.savedAt || 0;
+        if (!results[index][level] || results[index][level].at < at) results[index][level] = { value: view, at };
+      }
+    }
+    // Identical before/after snapshots can share the result of the same lookup.
+    return targets.map((target, index) => target ? results[targets.findIndex(other => other?.uri === target.uri && other.text === target.text)] : results[index]);
+  }
+  async save(source, opts, value, key, status = {}, { index = true } = {}) {
+    const variant = index && this.variant(source, opts), version = (this.versions.get(variant) || 0) + 1;
+    if (index) this.versions.set(variant, version);
+    const git = index ? await gitCommit(filePathOf(source)).catch(() => undefined) : undefined;
     const contentHash = hash(source.text || '');
+    const ranges = blockRecords(source, value.sections);
     const meta = {
       staleBlocks: [], removedBlocks: [], ...status,
       version: CACHE_SCHEMA_VERSION, promptVersion: PROMPT_FORMAT_VERSION,
       source, opts: { provider: opts.provider, level: opts.level, model: opts.model || '', effort: opts.effort ?? null, refinementSteps: opts.refinementSteps || 0 },
       savedAt: Date.now(), contentHash, workspace: source.workspace || '', relPath: source.relPath || '',
-      git: git || null, blocks: blockRecords(source, value.sections)
+      git: git || null, blocks: ranges.map((range, index) => ({
+        ...range, ...status.workspaceBlocks?.[index]
+      }))
     };
+    delete meta.workspaceBlocks;
     const file = path.join(this.root, key + '.json');
     await this.write(file, { ...value, _yamori: meta });
-    await this.write(path.join(this.root, 'by-content', explainAddress(source, opts) + '.json'), { key });
-    if (this.versions.get(variant) === version) await this.write(path.join(this.root, 'latest', variant + '.json'), { key });
+    if (index) {
+      await this.write(path.join(this.root, 'by-content', explainAddress(source, opts) + '.json'), { key });
+      if (this.versions.get(variant) === version) await this.write(path.join(this.root, 'latest', variant + '.json'), { key });
+    }
     await this.noteUse(key + '.json');
     await this.track(file, key + '.json');
     return meta;

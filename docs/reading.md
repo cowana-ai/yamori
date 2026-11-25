@@ -64,12 +64,6 @@ other controls say what they do:
 - **Make an explanation your own.** Copy a block, edit it in place, then ask Codex or Claude to update that block. Approved edits are cached; other views are rebuilt when requested.
 - **Move between views quickly.** Generation prepares the lower-detail views too. Returning to them uses memory or disk cache.
 
-- **Follow a reading order without waiting.** Open a file from the guide's
-  **Start here** and a tour bar shows where it sits (**pipeline/ · Step 2 of 4**),
-  what uses it and what it uses, and **Next: write.py →**. While you read, Yamori
-  prepares the next step in the background with your AI settings, one file ahead,
-  so Next opens instantly. Files you open some other way show the bar but prepare
-  nothing. Turn this off with `yamori.prefetchNext`.
 - **Click through to the code a name refers to.** Project names in an
   explanation, such as `plan_loops` or `Script`, are underlined. Hover to see
   where each is defined, the Yamori block that explains it and its file's purpose.
@@ -95,6 +89,50 @@ pixel gecko samurai and subtle feedback on navigation and loading. One idea stay
 in focus. Steps, notes and equations remain clearly spaced and easy to read.
 Model, provider and effort choices sit behind one compact settings control.
 Keyboard navigation, high-contrast themes and reduced-motion preferences are supported.
+
+## Work in Logic
+
+**Logic** opens a review queue next to the editor. The block at the cursor opens
+inline. Filter by changed, risky or unreviewed blocks, or open a full card from
+a row. Marking a block reviewed records its source hash, so edits to that block
+invalidate the mark. Use **Activity** for progress, checks and retries.
+
+Double-click a linked step or press **E** to edit it. Select several consecutive
+steps with **Shift+↑/↓** to edit them together. Yamori asks the configured provider
+for a preview and shows the proposed code alongside the current source.
+**Apply to code** or **⌘↵** (Ctrl+Enter on Windows/Linux) applies the preview and
+refreshes the affected explanation. **Esc** cancels. A draft regression test
+also requires an explicit **Accept test**.
+
+**Update all** refreshes dirty or missing blocks. The individual refresh action
+can rewrite a clean card. Symbols, line links, cached cards and review
+controls are available offline. Generation, preview and apply require the provider.
+Yamori generates Worth checking with cards for functions spanning at least 12
+source lines. Any checks already in the cache stay available.
+
+## Continue in a terminal
+
+In Logic, choose Codex or Claude Code and send a message from the bottom
+bar. The VS Code terminal shows your question. Yamori passes the current file
+and block as session context. Use **Open terminal** to return to the same
+conversation while it’s running. Inline step edits still use the code preview.
+
+## Review changes in Read
+
+Open a changed file with **Yamori: Read as Pseudocode** to see working changes
+against HEAD directly in its cached Logic or Overview. Changed blocks carry a
+small marker in the logic map. Open a block to see green **+** and red **−**
+steps in context, and click a marked step to open the native source diff.
+
+Yamori matches the cached explanations to the two source snapshots. If the
+current explanation is outdated, use **Update from code** to explain the edits.
+The inline comparison itself uses the cache and runs in trusted workspaces.
+
+For two revisions, a deleted file, or a branch or pull request, run **Yamori:
+Review Changes**, pick the comparison and file, and read it in the same layout.
+Use a locally available branch, commit or fetched PR ref for a pull request.
+If a snapshot is missing from cache, **Explain missing version** sends that
+snapshot to your selected AI provider.
 
 ## Pixel interface
 

@@ -99,9 +99,11 @@ and refreshes include a bounded project context (about 6,000 characters):
 - what it uses and what uses it, with Yamori's one-line summary of each when available
 - glossary terms that appear in its code
 
-**Yamori lookups.** For mapped files, the AI writing an explanation can also look
-things up itself through Yamori's read-only knowledge server, a local MCP server
-started by the CLI for that one request:
+**Yamori lookups.** Pseudocode generation and refreshes use the supplied source
+and bounded context without opening tools. Plan can look up project details through
+Yamori's read-only knowledge server, a local MCP server started by the CLI. Work
+uses the tools required for the approved task. A conversation started from Logic
+opens in a terminal and uses its provider’s permissions.
 
 | Lookup | Returns |
 | --- | --- |
@@ -113,16 +115,9 @@ started by the CLI for that one request:
 | `get_explanation` | Yamori's Overview or Logic pseudocode for another file. |
 | `read_source` | Up to 200 numbered lines of another mapped file. |
 
-- Lookups only reach files in the map, through real paths inside the mapped
-  folder; nothing is written and no command runs. Built-in CLI tools stay off.
-- Each lookup appears in the activity trail ("Looked up file · models/script.py").
-- The AI decides whether to look anything up; small, well-covered files often need none.
-- Claude Code runs these requests with `--setting-sources ""` (safe mode drops
-  explicitly passed MCP servers) and allows only `mcp__yamori__*`. Codex runs them
-  through `app-server` and approves only Yamori's server.
-- If the CLI cannot start the server, Yamori retries once without lookups.
-- Lookups add model turns and can send more of your project's source to the
-  provider. Turn them off with `yamori.agentTools`. They are always off in Restricted Mode.
+The read-only server resolves paths inside the mapped folder and cannot run
+commands or edit source. Lookups can add model turns and send more project source
+to the provider. Work requires a trusted workspace.
 
 Glossary terms in the explanation become dotted links: hover for the meaning, click
 to open the definition. Every explanation is also asked to define IDs, labels and

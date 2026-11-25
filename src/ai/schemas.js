@@ -1,4 +1,5 @@
 'use strict';
+const { EDGE_CASE_MIN_LINES, EDGE_CASE_LIMIT, CARD_ANNOTATIONS } = require('./cards');
 // Models write each step link as a compact [pseudocodeLine, startLine, endLine]
 // triple. As objects, line maps were 35–42% of every answer's text.
 const STEP_LINK = { type: 'array', items: { type: 'integer' }, minItems: 3, maxItems: 3 };
@@ -15,6 +16,43 @@ const SCHEMA = {
     } }
   }, required: ['title', 'summary', 'sections']
 };
+// The provider sends compact card records. Only canonical sections reach the cache.
+const text = { type: 'string' }, integer = { type: 'integer' };
+const object = properties => ({ type: 'object', additionalProperties: false, properties, required: Object.keys(properties) });
+const list = items => ({ type: 'array', items });
+const legacySection = SCHEMA.properties.sections.items;
+const nonempty = { ...text, minLength: 1 };
+const oneOf = values => ({ type: 'string', enum: values });
+const fixedInteger = value => ({ ...integer, enum: [value] });
+const cardSection = (scope, includeBounds = true) => {
+  const line = { ...integer, minimum: scope?.startLine ?? 1, ...(scope ? { maximum: scope.endLine } : {}) };
+  const range = { a: line, b: line };
+  const steps = list(object({ ...range, d: { ...integer, minimum: 0, maximum: 64 }, t: nonempty,
+    n: list(object({ k: oneOf(CARD_ANNOTATIONS), t: nonempty })) }));
+  const checks = list(object({ ...range, k: oneOf(['handled', 'risk']), q: nonempty, o: nonempty }));
+  const canCheck = !scope || scope.endLine - scope.startLine + 1 >= EDGE_CASE_MIN_LINES;
+  return object({ title: text, ...(includeBounds ? {
+    startLine: scope ? fixedInteger(scope.startLine) : integer, endLine: scope ? fixedInteger(scope.endLine) : integer
+  } : {}), card: object({ p: nonempty, i: nonempty, r: nonempty, x: text,
+    s: { ...steps, minItems: 1 }, ...(canCheck ? { c: { ...checks, maxItems: EDGE_CASE_LIMIT } } : {}) }) });
+};
+const WIRE_SCHEMA = { ...SCHEMA, properties: { ...SCHEMA.properties, sections: list({ anyOf: [legacySection, cardSection()] }) } };
+function wirePatchSections(indices, includeBounds = true, cardBlocks = [], previousSections = []) {
+  const forced = new Set(cardBlocks);
+  const branches = indices.map(index => object({ index: fixedInteger(index), ...cardSection(previousSections[index], includeBounds).properties }));
+  const allowed = indices.filter(index => !forced.has(index));
+  if (allowed.length) {
+    const properties = { ...legacySection.properties };
+    if (!includeBounds) { delete properties.startLine; delete properties.endLine; }
+    branches.unshift(object({ index: { type: 'integer', enum: allowed }, ...properties }));
+  }
+  return { type: 'array', minItems: indices.length, maxItems: indices.length, items: { anyOf: branches } };
+}
+function wireRefinementSections(sections, hasCard) {
+  const cards = sections.map(section => cardSection(section));
+  const items = sections.every(hasCard) ? cards : [legacySection, ...cards];
+  return { type: 'array', minItems: sections.length, maxItems: sections.length, items: { anyOf: items } };
+}
 const REVIEW_SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
@@ -113,7 +151,7 @@ const EXPLANATION_DATA = {
     views: { type: 'object' }
   }
 };
-module.exports = { SCHEMA, REVIEW_SCHEMA, SELECTION_SCHEMA, EXPLANATION_DATA, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, SIMULATION_SCHEMA, FLOW_SCHEMA, PLAN_SCHEMA, PLAN_PATCH_SCHEMA, PLAN_SESSION_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA };
+module.exports = { SCHEMA, WIRE_SCHEMA, wirePatchSections, wireRefinementSections, REVIEW_SCHEMA, SELECTION_SCHEMA, EXPLANATION_DATA, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, SIMULATION_SCHEMA, FLOW_SCHEMA, PLAN_SCHEMA, PLAN_PATCH_SCHEMA, PLAN_SESSION_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA };
 
 // Build-only dependencies: production loads the generated standalone validators.
 if (require.main === module) {

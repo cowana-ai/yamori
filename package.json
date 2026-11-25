@@ -32,6 +32,7 @@
         "yamori.pythonPath",
         "yamori.pseudocodeMirror",
         "yamori.planBudget",
+        "yamori.tokenBudgetPerFilePerDay",
         "yamori.planModel"
       ]
     }
@@ -47,6 +48,11 @@
         "command": "yamori.plan",
         "title": "Yamori: Plan Changes",
         "icon": "$(lightbulb)"
+      },
+      {
+        "command": "yamori.reviewChanges",
+        "title": "Yamori: Review Changes",
+        "icon": "$(diff)"
       },
       {
         "command": "yamori.browse",
@@ -163,6 +169,11 @@
           "command": "yamori.plan",
           "when": "resourceScheme == file",
           "group": "yamori"
+        },
+        {
+          "command": "yamori.reviewChanges",
+          "when": "resourceScheme == file && isWorkspaceTrusted",
+          "group": "yamori"
         }
       ],
       "explorer/context": [
@@ -273,19 +284,30 @@
           "scope": "machine",
           "description": "Optional absolute path to Claude Code CLI. Otherwise detected automatically, including the copy inside Claude Desktop."
         },
+        "yamori.tokenBudgetPerFilePerDay": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Warn before writing or updating Logic when the estimated input would exceed this file’s daily token budget. Counts reported cached reads. Zero disables warnings."
+        },
         "yamori.refinementSteps": {
           "type": "integer",
           "default": 1,
           "minimum": 0,
           "maximum": 5,
-          "description": "Maximum refinement steps for difficult blocks. A selector skips straightforward functions; two reviewers check uncertainty and reading cost; a rewrite is kept only if both find it better and faithful. New explanations are reviewed in the background after the draft is shown, with yamori.reviewModel. Up to 3N+4 model requests per new explanation, or 2 if no hard blocks. 0 skips selection and refinement. Cached reads use no AI."
+          "description": "Maximum refinement steps. In File Flow, review a card explicitly or update a block with a linked risk. Opening a file only generates its missing cards. Reviewers check uncertainty and reading cost before keeping a faithful rewrite. 0 turns refinement off."
         },
         "yamori.parallelRequests": {
           "type": "integer",
           "default": 6,
           "minimum": 1,
           "maximum": 8,
-          "description": "How many requests write one Logic explanation at the same time. Yamori splits a bigger file locally (no AI) into parts made of whole functions and classes; each request explains one part with the whole file as context, so the draft is ready about when the slowest part is. 1 writes the whole file in one request. More parts use more of your plan for the same output."
+          "description": "How many requests write one Logic explanation at the same time. Yamori splits a bigger file locally (no AI) into parts made of whole functions and classes; Each request gets its assigned source, a file outline, and relevant context. 1 writes the whole file in one request."
+        },
+        "yamori.generateCardsOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Fill all missing Logic cards when you open a file in Yamori. Cached cards are reused. Turn off to generate a missing card only when you open it."
         },
         "yamori.reviewModel": {
           "type": "string",
@@ -318,12 +340,7 @@
         "yamori.agentTools": {
           "type": "boolean",
           "default": true,
-          "description": "Let Codex or Claude Code use Yamori's read-only project knowledge while writing explanations: the project map, AI notes, glossary, Yamori's pseudocode for other files and source lines of mapped files. Used only after a folder is mapped; off in Restricted Mode. Lookups add model turns and can send more of your project's source to the provider."
-        },
-        "yamori.prefetchNext": {
-          "type": "boolean",
-          "default": true,
-          "description": "When you read files from the Project guide (Start here, or Next in the tour bar), prepare the next file in the background so it opens without waiting. Uses your AI settings; only one file ahead."
+          "description": "Allow workspace lookups from the Logic Ask or Edit box in trusted projects. Pseudocode generation uses scoped context without calling tools. Plan and Work manage their own tool access."
         },
         "yamori.cache": {
           "type": "boolean",
@@ -343,7 +360,7 @@
         "yamori.fastModel": {
           "type": "string",
           "default": "auto",
-          "description": "Model for quick jobs: AI notes, the Overview level (and the Overview written alongside Logic) and picking blocks to review. auto uses Claude Haiku, or the fast model in Codex's catalog; off uses your main model for everything; or enter an exact model ID. Logic explanations and reviews always use your main model."
+          "description": "Model for quick jobs: the Logic file gist, AI notes, the Overview level (and the Overview written alongside Logic) and picking blocks to review. auto uses Claude Haiku, or the fast model in Codex's catalog; off uses your main model for everything; or enter an exact model ID. Logic explanations and reviews always use your main model."
         },
         "yamori.pythonPath": {
           "type": "string",
@@ -375,7 +392,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js",
+    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js",
     "build:validation": "node src/ai/schemas.js",
     "build:parser": "node src/project/graph.js",
     "package": "npx --yes @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/cowana-ai/yamori/blob/main --baseImagesUrl https://raw.githubusercontent.com/cowana-ai/yamori/main"
