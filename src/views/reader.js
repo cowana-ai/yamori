@@ -444,7 +444,7 @@ body.vscode-high-contrast, body.vscode-high-contrast-light {
 <header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
 <nav class="workspace-nav" aria-label="Yamori navigation"><button aria-current="page" class="current-view" disabled>Read</button><button id="map" title="Explore project files and connections">Map</button><button id="plan" title="Plan changes with Codex or Claude">Plan</button></nav>
 <button id="source" class="crumb" title="Show this file in the editor">No file yet</button>
-<details class="ai-settings"><summary id="ai-summary" title="Which AI writes explanations, and how hard it thinks">AI ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 1 ▾</button><button id="setup-ai" title="Install, sign in to or switch between Claude and ChatGPT">Set up AI…</button></div></details>
+<details class="ai-settings"><summary id="ai-summary" title="Which AI writes explanations, and how hard it thinks">AI ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 1 ▾</button><button id="local-agent" title="Choose a local agent for code questions">Local question agent…</button><button id="setup-ai" title="Install, sign in to or switch between Claude and ChatGPT">Set up AI…</button></div></details>
 <button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
 <div class="controls"><span class="control-label" id="detail-label">Detail</span><div class="segments" role="group" aria-labelledby="detail-label">
 <button data-level="overview" aria-pressed="false" title="Short: the goal and the main stages">Overview</button>
@@ -811,6 +811,12 @@ function render(s) {
           buttons.push(button); row.append(button);
         });
         el.append(row);
+        if (!s.notebook && !s.sourceMissing && !s.partial && !blockStale) {
+          const ask = node('button', 'Ask about this block');
+          ask.title = 'Ask your selected local agent about this source block';
+          ask.addEventListener('click', () => send('askCard', { index, documentKey: s.documentKey }));
+          row.append(ask);
+        }
       }
       content.append(el);
     });
@@ -973,6 +979,7 @@ document.getElementById('provider').addEventListener('click', () => send('provid
 document.getElementById('model').addEventListener('click', () => send('model'));
 document.getElementById('effort').addEventListener('click', () => send('effort'));
 document.getElementById('refinement').addEventListener('click', () => send('refinement'));
+document.getElementById('local-agent')?.addEventListener('click', () => send('chooseLocalAgent'));
 document.getElementById('setup-ai').addEventListener('click', () => send('setup'));
 document.addEventListener?.('keydown', event => { if (event.key === 'Escape') document.querySelector?.('.ai-settings')?.removeAttribute('open'); });
 document.getElementById('colors').addEventListener('click', () => send('palette'));

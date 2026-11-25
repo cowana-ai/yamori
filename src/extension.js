@@ -3,6 +3,7 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { answerLocalQuestion, discoverLocalAgents } = require('./ai/local-questions');
 const { verifyPseudocode, unknownNames, sourceNames, hiddenEffects } = require('./ai/verify');
 const planner = require('./project/plan');
 const journal = require('./project/conversation');
@@ -164,13 +165,13 @@ function connectionOptions(globalState, provider, api = vscode) {
 // positions) per mapped folder. The scan reads files but never runs them and
 // never asks a language service, so it also works in Restricted Mode.
 // Native inline question drafts: no source edits and no AI until Submit.
-function createSelectionQuestions(context, api, sendQuestion) {
+function createSelectionQuestions(context, api, sendQuestion, answerQuestion) {
   const subscriptions = [], drafts = new WeakMap();
   const controller = api.comments?.createCommentController('yamori-selection', 'Yamori');
   let current, timer, closed = false;
   const disposeDraft = () => { clearTimeout(timer); if (current?.sending) return; current?.thread?.dispose(); current = undefined; };
   if (controller) {
-    controller.options = { prompt: 'Send your question and selected code to Yamori chat.', placeHolder: 'Ask about this code…' };
+    controller.options = { prompt: answerQuestion ? 'Use your selected local agent. Ask cloud to send this selection for review.' : 'Send your question and selected code to Yamori chat.', placeHolder: 'Ask about this code…' };
     controller.commentingRangeProvider = { provideCommentingRanges: () => [] };
     subscriptions.push(controller);
   }
@@ -181,9 +182,9 @@ function createSelectionQuestions(context, api, sendQuestion) {
     const range = new api.Range(selection.start.line, selection.start.character, selection.end.line, selection.end.character);
     return { uri: doc.uri, range, text, language: doc.languageId, version: doc.version, unsaved: !!doc.isDirty, startLine: selection.start.line + 1, endLine: selection.end.line + (selection.end.character === 0 ? 0 : 1) };
   }
-  async function open(editor = api.window.activeTextEditor, automatic = false) {
+  async function open(editor = api.window.activeTextEditor, automatic = false, supplied) {
     if (closed || current?.sending) return;
-    const selected = snapshot(editor);
+    const selected = supplied || snapshot(editor);
     if (!selected) { if (!automatic && current?.thread) { current.thread.collapsibleState = api.CommentThreadCollapsibleState?.Expanded ?? 1; return; } if (!automatic) api.window.showInformationMessage?.('Select up to 12,000 characters of code to ask Yamori.'); return; }
     const key = JSON.stringify([selected.uri.toString(), selected.version, selected.range.start, selected.range.end, selected.text]);
     if (current?.key === key) { if (current.thread) current.thread.collapsibleState = api.CommentThreadCollapsibleState?.Expanded ?? 1; return; }
@@ -191,7 +192,17 @@ function createSelectionQuestions(context, api, sendQuestion) {
     if (!controller) {
       if (automatic) return;
       const question = await api.window.showInputBox?.({ title: 'Ask Yamori about selected code', placeHolder: 'What would you like to understand?', prompt: selected.startLine === selected.endLine ? 'Selected line ' + selected.startLine : 'Selected lines ' + selected.startLine + '–' + selected.endLine });
-      if (question?.trim()) await sendQuestion(selected, question.trim());
+      if (question?.trim()) {
+        if (!answerQuestion) return sendQuestion(selected, question.trim());
+        try {
+          const result = await answerQuestion(selected, question.trim());
+          const action = await api.window.showInformationMessage?.(result.answer, { modal: true }, 'Ask cloud');
+          if (action === 'Ask cloud') await sendQuestion(selected, question.trim());
+        } catch (error) {
+          const action = await api.window.showWarningMessage?.(error.message, 'Ask cloud');
+          if (action === 'Ask cloud') await sendQuestion(selected, question.trim());
+        }
+      }
       return;
     }
     const thread = controller.createCommentThread(selected.uri, selected.range, []);
@@ -199,23 +210,42 @@ function createSelectionQuestions(context, api, sendQuestion) {
     thread.contextValue = 'yamori-selection'; thread.canReply = true; thread.collapsibleState = api.CommentThreadCollapsibleState?.Expanded ?? 1;
     current = { key, thread, selected, sending: false }; drafts.set(thread, current);
   }
-  async function submit(reply) {
+  async function submit(reply, cloud = false) {
     const thread = reply?.thread || reply, draft = thread && drafts.get(thread), question = typeof reply?.text === 'string' ? reply.text.trim() : draft?.pendingText;
     if (!draft || draft !== current || draft.sending || !question) return;
     draft.pendingText = question; draft.sending = true; thread.canReply = false;
     try {
+      if (answerQuestion && !cloud) {
+        const controller = new AbortController();
+        draft.abort = controller;
+        thread.comments = [{ body: question, author: { name: 'You' }, mode: api.CommentMode?.Preview ?? 0 },
+          { body: 'Preparing a local answer…', author: { name: 'Yamori' }, mode: api.CommentMode?.Preview ?? 0 }];
+        const result = await answerQuestion(draft.selected, question, controller.signal);
+        if (closed || current !== draft) return;
+        const references = result.lines.length ? '\n\nSource: ' + result.lines.map(line => 'L' + line).join(', ') : '';
+        const limit = result.needsContext ? '\n\nThis answer may need more context. Use Ask cloud for a broader review.' : '';
+        thread.comments = [thread.comments[0], { body: result.answer + references + limit,
+          author: { name: result.agent ? result.agent + ' · local' : 'Yamori · local' }, mode: api.CommentMode?.Preview ?? 0 }];
+        thread.contextValue = 'yamori-selection-answered';
+        return;
+      }
       await sendQuestion(draft.selected, question);
       thread.dispose(); drafts.delete(thread); if (current === draft) current = undefined;
     } catch (error) {
-      draft.sending = false; thread.canReply = true; thread.contextValue = 'yamori-selection-retry';
+      if (closed || current !== draft) return;
+      thread.contextValue = 'yamori-selection-retry';
       thread.comments = [{ body: question, author: { name: 'Your question · not sent' }, mode: api.CommentMode?.Preview ?? 0 }];
       api.window.showErrorMessage?.(error.message || 'Could not send this question. Use Retry to keep your question and selection.');
+    } finally {
+      draft.sending = false; draft.abort = undefined;
+      if (current === draft) thread.canReply = true;
     }
   }
   const command = (id, fn) => subscriptions.push(api.commands.registerCommand(id, fn));
   command('yamori.askSelection', () => open());
   command('yamori.sendSelectionQuestion', submit);
   command('yamori.retrySelectionQuestion', submit);
+  if (answerQuestion) command('yamori.cloudSelectionQuestion', thread => submit(thread, true));
   command('yamori.cancelSelectionQuestion', thread => { if (!thread || current?.thread === (thread?.thread || thread)) disposeDraft(); });
   if (api.window.onDidChangeTextEditorSelection) subscriptions.push(api.window.onDidChangeTextEditorSelection(event => {
     if (event.textEditor?.document?.uri?.scheme !== 'file') return;
@@ -225,7 +255,7 @@ function createSelectionQuestions(context, api, sendQuestion) {
     timer = setTimeout(() => { void open(event.textEditor, true).catch(() => {}); }, 350);
   }));
   if (api.window.onDidChangeActiveTextEditor) subscriptions.push(api.window.onDidChangeActiveTextEditor(editor => { if (editor?.document?.uri?.scheme === 'file' && current && editor.document.uri.toString() !== current.selected.uri.toString()) disposeDraft(); }));
-  const result = { dispose() { closed = true; clearTimeout(timer); if (current) { current.sending = false; disposeDraft(); } subscriptions.forEach(item => item?.dispose?.()); } };
+  const result = { openSelection: selected => open(undefined, false, selected), dispose() { closed = true; clearTimeout(timer); if (current) { current.abort?.abort(); current.sending = false; disposeDraft(); } subscriptions.forEach(item => item?.dispose?.()); } };
   context.subscriptions?.push(result); return result;
 }
 
@@ -1767,6 +1797,7 @@ async function activate(context) {
       const reader = createReader(local, {
         uri: key, column: () => readingColumn || vscode.ViewColumn.Beside,
         open, browse, switchFile, setup: () => setup.show(),
+        askCard: selected => selectionQuestions.openSelection(selected),
         projectContext: snapshot => projectMap.contextFor(snapshot),
         openMap: uri => projectMap.show(undefined, uri, 'map'),
         openPlan: uri => projectMap.show(undefined, uri, 'plan'),
@@ -1877,7 +1908,37 @@ async function activate(context) {
   const command = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, async (...args) => {
     try { return await fn(...args); } catch (e) { vscode.window.showErrorMessage(e.message); }
   }));
-  createSelectionQuestions(context, vscode, (selected, question) => projectMap.askSelection(selected, question));
+  const localAgents = () => discoverLocalAgents({
+    executable: setting(vscode, 'localQuestionExecutable'), model: setting(vscode, 'localQuestionModel'),
+    modelDirectory: setting(vscode, 'localQuestionModelDirectory'), endpoints: setting(vscode, 'localQuestionEndpoints', [])
+  });
+  const questionAgentKey = 'localQuestionAgent';
+  async function chooseLocalAgent(agents) {
+    agents ||= await localAgents();
+    if (!agents.length) {
+      vscode.window.showInformationMessage?.('No local agents found. Start Ollama or a local chat server, or add a GGUF model in ~/.yamori/models.');
+      return;
+    }
+    const choices = agents.map(agent => ({ label: agent.name, description: agent.label, agent }));
+    const current = context.globalState.get(questionAgentKey);
+    const picked = await vscode.window.showQuickPick(choices, {
+      title: 'Yamori · Local question agent',
+      placeHolder: choices.find(item => item.agent.id === current)?.label || 'Pick a model for answering code questions'
+    });
+    if (picked) await context.globalState.update(questionAgentKey, picked.agent.id);
+    return picked?.agent;
+  }
+  command('yamori.chooseLocalAgent', () => chooseLocalAgent());
+  const selectionQuestions = createSelectionQuestions(context, vscode,
+    (selected, question) => projectMap.askSelection(selected, question),
+    async (selected, question, signal) => {
+      const agents = await localAgents();
+      const saved = context.globalState.get(questionAgentKey);
+      const agent = agents.find(item => item.id === saved) ||
+        (!saved && agents.length === 1 ? agents[0] : await chooseLocalAgent(agents));
+      if (!agent) throw new Error('No local agent selected. Choose one or use Ask cloud.');
+      return answerLocalQuestion(selected, question, { agent, signal });
+    });
   command('yamori.read', open); command('yamori.browse', browse); command('yamori.project', prepareFolder); command('yamori.switchFile', switchFile);
   command('yamori.setup', () => setup.show());
   command('yamori.connectAgents', () => connectAgents(context));
@@ -2187,6 +2248,7 @@ function createReader(context, navigation) {
   }
   const view = () => ({ readingPalette: context.globalState.get('readingPalette', 'auto'), name: source?.name, providerLabel: PROVIDERS[provider], requestedModel: options().model, requestedEffort: options().effort, refinementSteps: options().refinementSteps, checks: currentChecks(), writtenBy: result?.author?.kind === 'agent' ? result.author.name || 'an agent' : undefined, review: reviewState && source && reviewState.key === keyFor(source, options()) ? { state: reviewState.state, text: reviewState.text } : undefined, modelNotice, setupHint: !!error && isSetupProblem(error), level, result: preview?.sections?.length ? preview : result, busy, stale, error, progress, startedAt, partial: !!preview?.sections?.length, model: selectedModel, effort: busy ? options().effort : result?.effort, activity, staleBlocks: [...staleBlocks], removedBlocks: [...removedBlocks], changedAt, checkedAt, changeReason, sharedChange, sourceMissing, cacheWarning, cacheSavedAt, draftScope: scopeFor(), draftKeys: result?.sections.map((section, index) => hash(JSON.stringify([section.title, index]))), drafts: [...(draftScopes.get(scopeFor())?.values() || [])], documentKey: source ? keyFor(source, options()) : undefined, run, tour, focusLine, runs: currentRuns(),
     canRunTests: vscode.workspace.isTrusted !== false && !stale,
+    notebook: !!source?.notebook,
     blockTests: stale ? {} : Object.fromEntries(Object.entries(blockTests).map(([index, tests]) => [index, tests.map(({ id, name, function: fn, file, language }) => ({ id, name, function: fn, file, language }))])),
     symbols: symbols.map(({ name, file, line, kind, block, purpose, explained }) => ({ name, file, line, kind, block, purpose, explained })),
     glossary: (source?.projectContext?.glossary || []).map(term => ({ term: term.term, aliases: term.aliases || [], meaning: term.meaning || '', kind: term.kind || '', defined: term.defined || '' })) });
@@ -2280,6 +2342,7 @@ function createReader(context, navigation) {
             break;
           }
           case 'setup': await navigation.setup(); break;
+          case 'chooseLocalAgent': await vscode.commands.executeCommand('yamori.chooseLocalAgent'); break;
           case 'provider': await chooseProvider(); break;
           case 'model': await chooseModel(); break;
           case 'effort': await chooseEffort(); break;
@@ -2312,6 +2375,23 @@ function createReader(context, navigation) {
           case 'copyBlock':
             if (result?.sections[message.index] && message.documentKey === view().documentKey) await vscode.env.clipboard.writeText(result.sections[message.index].pseudocode);
             break;
+          case 'askCard': {
+            const index = message.index;
+            if (!source || source.notebook || sourceMissing || !Number.isInteger(index) ||
+                staleBlocks.has(index) || message.documentKey !== view().documentKey) break;
+            const section = result?.sections[index];
+            if (!section) break;
+            const snapshot = source;
+            const uri = vscode.Uri.parse(source.uri);
+            const doc = await vscode.workspace.openTextDocument(uri);
+            if (source !== snapshot || hash(doc.getText()) !== snapshot.fullHash) break;
+            const { startLine, endLine } = section;
+            const range = new vscode.Range(startLine - 1, 0, endLine - 1, doc.lineAt(endLine - 1).text.length);
+            await vscode.window.showTextDocument(doc, { viewColumn: sourceColumn, preserveFocus: false });
+            await navigation.askCard?.({ uri, range, startLine, endLine, text: doc.getText(range),
+              language: doc.languageId, version: doc.version, unsaved: doc.isDirty, card: section.pseudocode });
+            break;
+          }
           case 'updateBlock': await updateBlock(message); break;
           case 'copy':
             if (result) {

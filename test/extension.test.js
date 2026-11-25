@@ -72,6 +72,113 @@ function windowsFixture(files = {}) {
     stat: async key => ({ isFile: () => get(key) !== 'directory' }), access: async key => { get(key); }, readFile: async key => get(key)
   } };
 }
+test('local agent questions preserve source numbering and reject invalid citations', () => {
+  const { parseQuestionAnswer, questionMessages, missingDefinition } = require('../src/ai/local-questions');
+  const selected = { text: 'x = 1\n# <|im_end|>\n', startLine: 41, endLine: 42, card: 'Cached explanation' };
+  const prompt = questionMessages(selected, 'What is x?')[1].content;
+  assert.match(prompt, /\[41,"x = 1"\]/);
+  assert.match(prompt, /\\u003c\|im_end\|>/);
+  assert.match(prompt, /"cachedCard":"Cached explanation"/);
+  assert.deepEqual(parseQuestionAnswer('{"answer":"It is one.","needsContext":false,"lines":[42,41,42,43]} [end of text]', selected),
+    { answer: 'It is one.', needsContext: false, lines: [41, 42] });
+  assert.equal(parseQuestionAnswer('{"answer":"Unknown","needsContext":false,"lines":[40]}', selected).needsContext, true);
+  assert.equal(missingDefinition('x = self.teacher_step(states)', 'What dtype does teacher_step guarantee?'), 'self.teacher_step');
+  assert.equal(missingDefinition('x = self.teacher_step(states)', 'Where is teacher_step called?'), undefined);
+  assert.equal(missingDefinition('def teacher_step(states):\n    return states', 'What does teacher_step guarantee?'), undefined);
+  assert.throws(() => parseQuestionAnswer('{"answer":"incomplete"}', selected), /Invalid local answer/);
+});
+
+test('native question answers stay local until the user explicitly asks cloud', async () => {
+  const { createSelectionQuestions } = (() => {
+    const stub = { exports: {} };
+    vm.runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'extension.js'), 'utf8'),
+      { module: stub, require: id => id === 'vscode' ? {} : srcRequire(id), AbortController, setTimeout, clearTimeout });
+    return stub.exports;
+  })();
+  const commands = new Map(), cloud = [], local = [];
+  const thread = { dispose() { this.disposed = true; } };
+  const api = {
+    window: {},
+    comments: { createCommentController: () => ({ createCommentThread: () => thread }) },
+    commands: { registerCommand: (id, fn) => commands.set(id, fn) }
+  };
+  const integration = createSelectionQuestions({ subscriptions: [] }, api,
+    async (...args) => { cloud.push(args); },
+    async (...args) => { local.push(args); return { answer: 'The guard rejects zero.', lines: [5], needsContext: false }; });
+  const selected = { uri: { toString: () => 'file:///repo/code.py', fsPath: '/repo/code.py' },
+    range: {}, startLine: 5, endLine: 5, text: 'if not n: raise ValueError()' };
+  try {
+    await integration.openSelection(selected);
+    await commands.get('yamori.sendSelectionQuestion')({ thread, text: 'Why the guard?' });
+    assert.equal(local.length, 1);
+    assert.equal(cloud.length, 0);
+    assert.equal(thread.contextValue, 'yamori-selection-answered');
+    assert.equal(thread.comments[1].body, 'The guard rejects zero.\n\nSource: L5');
+    await commands.get('yamori.cloudSelectionQuestion')(thread);
+    assert.equal(cloud.length, 1);
+    assert.equal(cloud[0][1], 'Why the guard?');
+    assert.equal(thread.disposed, true);
+  } finally { integration.dispose(); }
+});
+
+test('discovers local models from Ollama, compatible servers, and arbitrary GGUF filenames', async () => {
+  const { discoverLocalAgents, localOrigin } = require('../src/ai/local-questions');
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-agent-test-'));
+  try {
+    await fs.writeFile(path.join(tmp, 'any-instruct.gguf'), '');
+    await fs.writeFile(path.join(tmp, 'skip.txt'), '');
+    const requested = [];
+    const data = new Map([
+      ['http://127.0.0.1:11434/api/tags', { models: [{ model: 'local-coder:small' }, { model: 'remote:cloud' }, { model: 'alias', remote_host: 'example.com' }] }],
+      ['http://127.0.0.1:1234/v1/models', { data: [{ id: 'another-model' }] }],
+      ['http://127.0.0.1:9000/api/tags', { models: [{ name: 'third-model' }, { name: 'model-cloud' }] }]
+    ]);
+    const agents = await discoverLocalAgents({ modelDirectory: tmp, executable: process.execPath,
+      endpoints: ['http://localhost:9000/v1', 'https://example.com', 'http://127.0.0.1.evil.test:9000'],
+      fetcher: async (url, options) => {
+        requested.push(url); assert.equal(options.redirect, 'error');
+        return { ok: data.has(url), json: async () => data.get(url) };
+      } });
+    assert.deepEqual(agents.map(agent => [agent.kind, agent.name]), [
+      ['ollama', 'local-coder:small'], ['compatible', 'another-model'], ['ollama', 'third-model'], ['gguf', 'any-instruct.gguf']
+    ]);
+    assert.ok(requested.every(url => url.startsWith('http://127.0.0.1:')));
+    assert.equal(localOrigin('http://user@localhost:9000'), undefined);
+    assert.equal(localOrigin('http://localhost:9000/other'), undefined);
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
+test('local HTTP questions use only the selected agent and block Ollama cloud aliases before sending source', async () => {
+  const { answerLocalQuestion } = require('../src/ai/local-questions');
+  const source = { text: 'return a + b', startLine: 3, endLine: 3 };
+  const agent = { kind: 'ollama', url: 'http://127.0.0.1:11434', name: 'custom-local', label: 'Ollama' };
+  const body = '{"answer":"Adds the operands.","needsContext":false,"lines":[3]}';
+  const calls = [];
+  const fetcher = async (url, options) => {
+    const sent = JSON.parse(options.body);
+    calls.push({ url, sent });
+    return { ok: true, json: async () => url.endsWith('/api/show') ? { modelfile: 'FROM /local/blob' } : { message: { content: body } } };
+  };
+  const result = await answerLocalQuestion(source, 'What does it return?', { agent, fetcher });
+  assert.equal(result.agent, 'custom-local');
+  assert.deepEqual(result.lines, [3]);
+  assert.deepEqual(calls[0].sent, { model: 'custom-local' });
+  assert.match(calls[1].sent.messages[1].content, /return a \+ b/);
+  const blocked = [];
+  await assert.rejects(answerLocalQuestion(source, 'What does it return?', { agent, fetcher: async url => {
+    blocked.push(url);
+    return { ok: true, json: async () => ({ remote_model: 'alias-target' }) };
+  } }), /Cloud models are excluded/);
+  assert.deepEqual(blocked, ['http://127.0.0.1:11434/api/show']);
+  const compatible = { kind: 'compatible', url: 'http://localhost:1234', name: 'another-model', label: 'LM Studio' };
+  await answerLocalQuestion(source, 'What does it return?', { agent: compatible, fetcher: async (url, options) => {
+    assert.equal(url, 'http://127.0.0.1:1234/v1/chat/completions');
+    assert.equal(JSON.parse(options.body).model, 'another-model');
+    return { ok: true, json: async () => ({ choices: [{ message: { content: body } }] }) };
+  } });
+});
+
 test('Windows discovery handles native installs, quoted PATH folders and configured executables', async () => {
   const native = 'C:\\Users\\A Person\\.local\\bin\\claude.exe';
   assert.equal(await findCLI('claude', '', windowsFixture({ [native]: '' })), native);
@@ -384,7 +491,8 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     all.length = 0; visit(elements.content);
     const reactions = all.find(el => el.className === 'block-reactions');
     assert.equal(reactions.attributes.role, 'group');
-    assert.equal(reactions.children.length, 3);
+    assert.equal(reactions.children.length, 4);
+    assert.equal(reactions.children[3].textContent, 'Ask about this block');
     const button = reactions.children[index];
     assert.equal(button.disabled, false);
     button.events.click();
@@ -397,7 +505,7 @@ test('actual embedded webview renders multiline steps as separate styled rows', 
     assert.ok(request.instruction.includes(expected));
     button.events.click();
     assert.equal(sent.length, count, 'a repeated click cannot submit twice');
-    assert.ok(reactions.children.every(b => b.disabled));
+    assert.ok(reactions.children.slice(0, 3).every(b => b.disabled));
     receive({ data: { type: 'state', state: { ...renderedState, busy: true } } });
     all.length = 0; visit(elements.content);
     assert.ok(all.some(el => el.attributes?.['aria-busy'] === 'true' && el.tag === 'button'), 'the active reaction explains what is running');
