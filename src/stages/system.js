@@ -151,13 +151,14 @@ function parseSystem(raw, found) {
 }
 
 // What mapping the whole system costs, before anything is sent.
-function estimateSystem({ graph, notes, explanations, texts, provider, model, project }) {
+function estimateSystem({ graph, notes, explanations, texts, provider, model, project, deep = false }) {
   const found = candidates(graph, texts);
   const system = estimatePrompt(systemPrompt({ graph, notes, found, project }), provider, model);
   // Roughly one part per area: its best candidate's steps call.
   const best = new Map();
   for (const item of found) if (!best.has(item.folder)) best.set(item.folder, item);
-  const partTokens = [...best.values()].reduce((sum, item) => sum + stages.estimateWorkflow({ graph, notes, explanations, entryFile: item.file, entrySymbol: item.symbol, provider, model }).tokens, 0);
+  // A deep map per part reads its call tree and code; estimate with the texts read so far.
+  const partTokens = [...best.values()].reduce((sum, item) => sum + (deep ? stages.estimateDeep({ graph, explanations, entryFile: item.file, entrySymbol: item.symbol, texts, scope: areasOf(graph).find(area => area.folder === item.folder)?.files, provider, model }) : stages.estimateWorkflow({ graph, notes, explanations, entryFile: item.file, entrySymbol: item.symbol, provider, model }).tokens), 0);
   const missingNotes = sourceFiles(graph).filter(file => !notes?.files?.[file]?.purpose || notes.files[file].hash !== graph.files[file].hash);
   return { tokens: system + partTokens, calls: 1 + best.size, areas: best.size, candidates: found.length, missingNotes };
 }
@@ -172,12 +173,13 @@ async function pool(items, size, work) {
  * Existing parts are matched by where they start, so their ids, notes and
  * pinned steps survive. Returns { parts, calls, failed }.
  */
-async function buildSystem({ db, graph, notes, explanations, texts, request, run, provider, model, headSha, project, signal, onProgress = () => {}, concurrency = 3, force = false }) {
+async function buildSystem({ db, graph, notes, explanations, texts, request, run, provider, model, headSha, project, signal, onProgress = () => {}, concurrency = 3, force = false, readText }) {
+  const scopeOf = folder => areasOf(graph).find(area => area.folder === folder)?.files || [];
   const sig = signature(graph), version = SYSTEM_PROMPT_VERSION + '|' + (model || '');
   if (!force && db.meta('system_sig') === sig && db.meta('system_version') === version && db.workflows().length) {
     // Same files as last time: only parts whose code changed get updated.
     let calls = 0;
-    for (const workflow of db.workflows()) calls += (await stages.generateWorkflow({ db, graph, notes, explanations, entryFile: workflow.entry_file, entrySymbol: workflow.entry_symbol, id: workflow.id, request, run, provider, model, headSha, signal })).calls;
+    for (const workflow of db.workflows()) calls += (await stages.generateWorkflow({ db, graph, notes, explanations, entryFile: workflow.entry_file, entrySymbol: workflow.entry_symbol, id: workflow.id, request, run, provider, model, headSha, signal, ...(force ? { readText, scope: scopeOf(workflow.folder), part: { name: workflow.name, does: workflow.summary } } : {}) })).calls;
     return { parts: db.workflows(), calls, reused: true, failed: [] };
   }
   onProgress('Finding the parts of your system…');
@@ -200,7 +202,9 @@ async function buildSystem({ db, graph, notes, explanations, texts, request, run
   await pool(system.parts, concurrency, async part => {
     if (signal?.aborted) return;
     try {
-      const result = await stages.generateWorkflow({ db, graph, notes, explanations, entryFile: part.entryFile, entrySymbol: part.entrySymbol, id: part.id, request, run, provider, model, headSha, signal });
+      // A deep map: the part's call tree, docs and code (when files can be read).
+      const result = await stages.generateWorkflow({ db, graph, notes, explanations, entryFile: part.entryFile, entrySymbol: part.entrySymbol, id: part.id, request, run, provider, model, headSha, signal, force: force && !!readText,
+        ...(readText ? { readText, scope: scopeOf(part.folder), part: { name: part.name, does: part.summary } } : {}) });
       calls += result.calls;
     } catch (error) { failed.push({ part: part.name, reason: error.message }); }
     onProgress('Mapping steps ' + (++done) + '/' + system.parts.length + '…');

@@ -139,7 +139,7 @@ class StageDb {
     this.db.exec(SCHEMA);
     // v2: a workflow is a named part of the system; a step says in plain words what it does.
     this.addColumns('workflows', { name: 'TEXT', summary: 'TEXT', folder: 'TEXT', position: 'INTEGER' });
-    this.addColumns('steps', { what: 'TEXT' });
+    this.addColumns('steps', { what: 'TEXT', details: 'TEXT' });
     this.setMeta('schema_version', String(SCHEMA_VERSION));
   }
   addColumns(table, columns) {
@@ -206,9 +206,10 @@ class StageDb {
   stages(workflowId) { return this.all('SELECT * FROM stages WHERE workflow_id = ? ORDER BY position, id', workflowId).map(fromStageRow); }
   stage(workflowId, id) { const value = this.get('SELECT * FROM stages WHERE workflow_id = ? AND id = ?', workflowId, id); return value && fromStageRow(value); }
   steps(workflowId, stageId) {
-    return stageId === undefined
+    const rows = stageId === undefined
       ? this.all('SELECT * FROM steps WHERE workflow_id = ? ORDER BY stage_id, position', workflowId)
       : this.all('SELECT * FROM steps WHERE workflow_id = ? AND stage_id = ? ORDER BY position', workflowId, stageId);
+    return rows.map(row => ({ ...row, details: safeJson(row.details, []) }));
   }
   // Replace every unpinned stage with fresh output, keeping pinned stages and
   // their steps exactly. `stages` come in display order.
@@ -239,8 +240,8 @@ class StageDb {
   }
   setSteps(workflowId, stageId, steps) {
     this.run('DELETE FROM steps WHERE workflow_id = ? AND stage_id = ?', workflowId, stageId);
-    steps.forEach((step, position) => this.run('INSERT INTO steps (workflow_id, stage_id, position, file, symbol, line_start, line_end, what) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      workflowId, stageId, position, step.file, step.symbol, step.line_start ?? null, step.line_end ?? null, step.what ?? null));
+    steps.forEach((step, position) => this.run('INSERT INTO steps (workflow_id, stage_id, position, file, symbol, line_start, line_end, what, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      workflowId, stageId, position, step.file, step.symbol, step.line_start ?? null, step.line_end ?? null, step.what ?? null, Array.isArray(step.details) && step.details.length ? JSON.stringify(step.details) : typeof step.details === 'string' ? step.details : null));
   }
   updateStage(workflowId, id, fields) {
     const allowed = ['name', 'gist', 'input', 'output', 'pinned', 'stale', 'position'];

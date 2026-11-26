@@ -108,7 +108,10 @@ body.vscode-light:not([data-palette="slate"]) #stages-view, body[data-palette="p
 #stages-view .st-links { list-style: none; margin: 10px 0 0; padding: 8px 0 0; border-top: 1px solid var(--read-border); font-size: 12px; color: var(--read-muted); }
 #stages-view .st-step-card { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--read-border); }
 #stages-view .st-how { margin: 0; padding-left: 20px; }
-#stages-view .st-how li { margin: 2px 0; }
+#stages-view .st-how > li { margin: 6px 0; }
+#stages-view .st-how-what { font-weight: 600; }
+#stages-view .st-how-details { margin: 2px 0 0; padding-left: 18px; color: var(--read-muted); font-size: 12px; }
+#stages-view .st-how-details li { margin: 1px 0; }
 #stages-view .st-foot { margin-top: 18px; }
 #stages-view { --st-c0: oklch(70% .13 250); --st-c1: oklch(72% .14 150); --st-c2: oklch(75% .14 75); --st-c3: oklch(68% .15 20); --st-c4: oklch(70% .13 300); --st-c5: oklch(74% .11 200); --st-c6: oklch(72% .13 110); }
 #stages-view .st-canvas { position: relative; margin: 10px 0 6px; border: 1px solid var(--read-border); background: var(--read-page); background-image: radial-gradient(color-mix(in srgb, var(--read-ink) 12%, transparent) 1px, transparent 1px); background-size: 18px 18px; overflow: hidden; cursor: grab; touch-action: none; }
@@ -485,7 +488,9 @@ function mountStages(root, post) {
     return h('div', { class: 'st-detail' },
       h('h2', {}, h('span', { class: 'st-swatch', style: 'background:' + stepColor(part, stage.id) }), stage.name, stage.stale ? h('span', { class: 'st-badge stale' }, 'changed') : undefined, spacer(), link('openStage', { part, id: '' }, 'Close')),
       h('div', { class: 'st-story' }, h('b', {}, 'Does'), h('span', {}, stage.gist || '—'), h('b', {}, 'Takes'), h('span', {}, stage.input || '—'), h('b', {}, 'Gives'), h('span', {}, stage.output || '—')),
-      stage.steps.some(step => step.what) ? section('How', h('ol', { class: 'st-how' }, stage.steps.map(step => h('li', {}, step.what || step.symbol, ' ', link('openFile', { file: step.file }, fileName(step.file), { title: 'Show this file' }))))) : undefined,
+      stage.steps.some(step => step.what) ? section('How it works', h('ol', { class: 'st-how' }, stage.steps.map(step => h('li', {},
+        h('span', { class: 'st-how-what' }, step.what || step.symbol), ' ', link('openFile', { file: step.file }, fileName(step.file), { title: 'Show this file' }),
+        step.details?.length ? h('ul', { class: 'st-how-details' }, step.details.map(detail => h('li', {}, detail))) : undefined)))) : undefined,
       h('div', { class: 'st-tools' }, state.terminalChat ? go('agentSession', { prefill: 'About ' + partName(part) + ' › ' + stage.name + ': ' }, 'Ask in terminal…', { title: 'Opens your agent session with this step on the prompt' }) : go('changeHere', { kind: 'step', part, stage: stage.id }, 'Change this step…'), link('rename', id, 'Rename'), others.length ? link('merge', id, 'Merge with…') : undefined, link('pin', id, stage.pinned ? 'Let Yamori update it' : 'Keep as is'),
         stage.stale ? link('refreshStage', id, 'Update this step') : undefined, link('toggleCode', { key: part + '/' + stage.id }, showCode ? 'Hide functions' : 'Show functions')),
       showCode ? section('Functions', h('ol', { class: 'st-steps' }, stage.steps.map(step => {

@@ -22,11 +22,11 @@ function fakeModel() {
     if (/Code behind one stage changed/.test(prompt)) return { name: 'Answer', gist: 'Writes and sends replies, twice if needed.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email' }], behaviorChanged: true, summary: 'Replies are now sent twice when the first try fails.' };
     if (/Yamori's router/.test(prompt)) return { targets: ['email-helper/answer'], explanation: 'Retrying belongs where replies are sent, in the Email helper.' };
     if (/steer writer/.test(prompt)) return { summary: 'Replies are retried once.', edits: [{ file: 'agents/email/inbox.py', startLine: 6, endLine: 6, replacement: '    print(message, answer) or print(message, answer)', why: 'Retry once.' }] };
-    if (/stage mapper/.test(prompt)) {
-      const entry = /WORKFLOW ENTRY: (\{.*\})/.exec(prompt)[1];
+    if (/stage mapper|Yamori's mapper/.test(prompt)) {
+      const entry = (/WORKFLOW ENTRY: (\{.*\})/.exec(prompt) || /CALL TREE \(from (.*)\):/.exec(prompt))[1];
       if (/email/.test(entry)) return { stages: [
         { id: 'read', name: 'Read inbox', gist: 'Gets unread email.', input: 'mailbox', output: 'unread email', steps: [{ file: 'agents/email/inbox.py', symbol: 'fetch_unread', what: 'Gets the unread email' }] },
-        { id: 'answer', name: 'Answer', gist: 'Writes and sends replies.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email' }, { file: 'agents/email/inbox.py', symbol: 'reply', what: 'Sends the reply' }] },
+        { id: 'answer', name: 'Answer', gist: 'Writes and sends replies.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email', details: ['Asks the AI once per email', 'Replies even when the AI answer is empty'] }, { file: 'agents/email/inbox.py', symbol: 'reply', what: 'Sends the reply' }] },
         { id: 'write', name: 'Write text', gist: 'Asks AI for the words.', input: 'prompt', output: 'text', steps: [{ file: 'shared/llm.py', symbol: 'complete', what: 'Asks the AI to write' }] }] };
       if (/sales/.test(entry)) return { stages: [
         { id: 'load', name: 'Load leads', gist: 'Reads leads.', input: 'CRM', output: 'leads', steps: [{ file: 'agents/sales/crm.py', symbol: 'load_leads', what: 'Reads the leads' }] },
@@ -107,6 +107,11 @@ test('one click maps the whole system: every part, its steps in plain words, and
     await ctx.send({ type: 'openStage', part: 'email-helper', id: 'answer' });
     const card = ctx.last().card;
     assert.deepEqual(card.steps.map(step => step.what), ['Answers each unread email', 'Sends the reply']);
+    assert.deepEqual(card.steps[0].details, ['Asks the AI once per email', 'Replies even when the AI answer is empty']);
+    // The deep map read the part's call tree and code, not only file notes.
+    const deep = ctx.calls.find(prompt => /CALL TREE \(from "triage_loop"/.test(prompt));
+    assert.match(deep, /- triage_loop \(agents\/email\/run\.py:5\)\n {2}- fetch_unread \(agents\/email\/inbox\.py:1\)/);
+    assert.match(deep, /### triage_loop \(agents\/email\/run\.py:5\)\ndef triage_loop\(\):/);
     assert.equal(ctx.calls.length, 4, 'opening a step calls no AI');
     // Readable notes: a system note, a note per part, a note per step.
     const notes = path.join(ctx.root, '.yamori', 'notes');
@@ -114,7 +119,8 @@ test('one click maps the whole system: every part, its steps in plain words, and
     assert.match(systemNote, /# How .* works/); assert.match(systemNote, /\[\[Web server\/Web server\|Web server\]\] starts \[\[Email helper\/Email helper\|Email helper\]\]/);
     const stepNote = fs.readFileSync(path.join(notes, 'Email helper', 'Answer.md'), 'utf8');
     assert.match(stepNote, /Step 2 of 3 in \[\[Email helper\/Email helper\|Email helper\]\]/);
-    assert.match(stepNote, /\*\*How:\*\*\n1\. Answers each unread email\n2\. Sends the reply/);
+    assert.match(stepNote, /\*\*How:\*\*\n1\. Answers each unread email\n {4}- Asks the AI once per email\n {4}- Replies even when the AI answer is empty\n2\. Sends the reply/);
+    assert.match(stepNote, /# Answer\n\nStep 2 of 3/, 'sections keep their blank lines');
     assert.match(stepNote, /> \[!note\]- Where this is in the code/);
     // Mapping again with the same files: no AI.
     await ctx.send({ type: 'buildSystem' });

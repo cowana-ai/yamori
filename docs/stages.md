@@ -8,7 +8,9 @@ Open the System tab and click **Map my system**. The tab says up front about how
 
 1. Without AI, Yamori looks in every folder (two levels deep, so `agents/email` and `agents/sales` count separately) for functions that could start something: a function nothing else in its file calls, that reaches the most of the project, runs at startup, or is named like a starter (`main`, `run_*`, `*_loop`, handlers).
 2. One cheap AI call reads those candidates with the files' AI notes, decides which are real parts, names them, and says how they connect ("the web server starts the email helper"). It can only choose among the candidates, so it cannot invent code.
-3. One cheap AI call per part splits it into 3–7 steps, each with a sentence on what it does, and says in a few words what each function behind it does.
+3. For each part, Yamori builds its call tree without AI: from where the part starts, what each function calls and defines inside itself (tools registered in a function, handlers), across files, with each function's docstring. One cheap AI call then reads the part's README, that call tree and the code of the functions it reaches (saved pseudocode where Yamori has it, otherwise the source, bounded), and splits the part into 3–8 stages in the order the work happens. Each step says what it does and lists up to four details that matter when steering: decisions and limits ("keeps at most 5 sources"), fallbacks ("if the AI call fails, keeps every source"), which AI or prompt it uses, what it reads and writes. A part that is driven from outside (an MCP server's tools, a CLI's commands) is ordered by the workflow its docs and tool descriptions describe.
+
+On a 49-file research agent this took one call, about 2 minutes and $0.016, for 8 stages and 62 steps.
 
 Mapping again with the same files makes no AI call. When files are added or removed, the tab offers **Update the map**; parts whose code did not change are reused. **Map the system again** at the bottom redoes the parts.
 

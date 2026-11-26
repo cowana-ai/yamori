@@ -162,8 +162,9 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (item.estimateKey !== key && !item.estimating) {
       item.estimating = true;
       void (async () => {
-        const texts = await readTexts(item, system.readFiles(graph));
-        const estimate = system.estimateSystem({ graph, notes: item.entry.notes, explanations: item.entry.explanations, texts });
+        // The deep map reads each part's code: estimate from all source files (local reads, no AI).
+        const texts = await readTexts(item, Object.keys(graph.files).filter(file => !graph.files[file].test && !graph.files[file].contextFile).slice(0, 800));
+        const estimate = system.estimateSystem({ graph, notes: item.entry.notes, explanations: item.entry.explanations, texts, deep: true });
         item.estimate = { ...estimate, missingNotes: estimate.missingNotes.length };
         item.estimateKey = key;
       })().catch(error => { item.estimate = { error: error.message }; item.estimateKey = key; }).finally(() => { item.estimating = false; post(item); });
@@ -413,8 +414,8 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const entry = item.entry = await map.ensureGraph(item.entry);
     const db = dbFor(item);
     if (confirm && !db.workflows().length) {
-      const texts = await readTexts(item, system.readFiles(entry.graph));
-      const estimate = system.estimateSystem({ graph: entry.graph, notes: entry.notes, explanations: entry.explanations, texts });
+      const texts = await readTexts(item, Object.keys(entry.graph.files).filter(file => !entry.graph.files[file].test && !entry.graph.files[file].contextFile).slice(0, 800));
+      const estimate = system.estimateSystem({ graph: entry.graph, notes: entry.notes, explanations: entry.explanations, texts, deep: true });
       const pick = await api.window.showInformationMessage(`Map how ${path.basename(item.root)} works? Yamori finds its parts and their steps: about ${estimate.calls} AI calls, ${estimate.tokens.toLocaleString()} tokens.`, { modal: true }, 'Map it');
       if (pick !== 'Map it') return;
     }
@@ -424,6 +425,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       // You asked for the whole map after seeing its estimate: only the daily budget applies.
       const run = createRun(db, { budget: { ...budget(), perRun: 0 }, trigger: 'system.map' });
       const result = await system.buildSystem({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, texts, request: send, run, provider, model, headSha: await head(item), project: path.basename(item.root), force,
+        readText: file => map.readSource(entry, file),
         onProgress: text => { item.busy = text; post(item); } });
       item.notice = result.failed.length ? 'Some parts could not be mapped: ' + result.failed.map(entry => entry.part + ' (' + entry.reason + ')').join('; ') : result.calls ? '' : 'Nothing changed since the map was made: no AI call.';
       vaultFor(item); sync(item);
