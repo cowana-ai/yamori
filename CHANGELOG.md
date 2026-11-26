@@ -1,5 +1,9 @@
 # Changelog
 
+### Unreleased
+
+- **Stages.** Map a workflow from its entry point into 3–7 named stages (for example Plan → Act → Evaluate), each with its steps across files, line links and cached pseudocode. Opening stages and cards never calls a model. Saving a file updates only the unpinned stages that use it, with one cheap-model call per stage after saves settle. Renamed, merged, split and pinned stages survive regeneration. `yamori.tokenBudget` caps each run and each day, and Activity lists every call with its tokens and cost. See [docs/stages.md](docs/stages.md).
+
 ### 0.27.1 · 2026-11-26
 
 - **Saving updates changed pseudocode.** About two seconds after you save, Yamori rewrites only the blocks whose code changed and reuses the rest from the cache. You see removed steps in red and new steps in green without clicking **Update all**.

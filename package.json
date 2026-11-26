@@ -15,7 +15,8 @@
   ],
   "main": "./src/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onUri"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -33,7 +34,9 @@
         "yamori.pseudocodeMirror",
         "yamori.planBudget",
         "yamori.tokenBudgetPerFilePerDay",
-        "yamori.planModel"
+        "yamori.planModel",
+        "yamori.tokenBudget",
+        "yamori.stages.autoUpdate"
       ]
     }
   },
@@ -139,6 +142,18 @@
         "command": "yamori.cancelSelectionQuestion",
         "title": "Dismiss",
         "icon": "$(close)"
+      },
+      {
+        "command": "yamori.stages.open",
+        "title": "Yamori: Open Stages"
+      },
+      {
+        "command": "yamori.stages.fromEntry",
+        "title": "Yamori: Map Stages from Entry Point"
+      },
+      {
+        "command": "yamori.stages.regenerate",
+        "title": "Yamori: Regenerate Stages"
       }
     ],
     "menus": {
@@ -392,6 +407,32 @@
           "type": "boolean",
           "default": true,
           "description": "Show a native inline question field after highlighting code. Sends the question and exact selected snapshot to read-only Yamori chat only when you press Ask Yamori. Disable to use the selection context-menu action or keyboard shortcut instead."
+        },
+        "yamori.tokenBudget": {
+          "type": "object",
+          "default": {
+            "perRun": 60000,
+            "perDay": 400000
+          },
+          "properties": {
+            "perRun": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Most tokens (input, cached and output) one stage run may use. 0 means no limit."
+            },
+            "perDay": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Most tokens stage work may use per day. 0 means no limit."
+            }
+          },
+          "additionalProperties": false,
+          "markdownDescription": "Token budgets for stage work (mapping, updates, review summaries, agent requests). A run that would go over stops and shows **Needs update** instead of spending. Every call is listed in the stage screen's Activity."
+        },
+        "yamori.stages.autoUpdate": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "After saves settle (about 2 seconds, longer while an agent edits many files), update only the stages whose code changed: one cheap-model call per affected stage. Off: mark them **Needs update** and wait for **Update changed**."
         }
       }
     },
@@ -407,7 +448,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js",
+    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js && node --check src/stages/db.js && node --check src/stages/budget.js && node --check src/stages/generate.js && node --check src/stages/scheduler.js && node --check src/stages/controller.js && node --check src/views/stages.js",
     "build:validation": "node src/ai/schemas.js",
     "build:parser": "node src/project/graph.js",
     "package": "npx --yes @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/cowana-ai/yamori/blob/main --baseImagesUrl https://raw.githubusercontent.com/cowana-ai/yamori/main"

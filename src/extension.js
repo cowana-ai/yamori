@@ -1329,7 +1329,41 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     const accepted = await projectRun(entry, message, mode, true, { selection: { file, startLine: selected.startLine, endLine: selected.endLine, version: selected.version, unsaved: !!selected.unsaved } });
     if (accepted === false) throw new Error(busyError);
   }
+  // What the stage screen needs from the project map: the same graph, notes
+  // and pseudocode cache, without another scan or store.
+  const stageSupport = {
+    entryFor, entryForFile,
+    relative: (entry, uri) => relative(entry.root.fsPath, uri.fsPath),
+    async ensureGraph(entry) { if (!entry.graph) await scan(entry); if (!entry.graph) throw new Error('This folder could not be mapped.'); return entry; },
+    async writeNotes(entry) { await runNotes(entry); },
+    async rescanFiles(entry, files) {
+      const rootReal = await fs.realpath(entry.root.fsPath);
+      entry.graph = await project.includeSourceFiles(entry.root.fsPath, entry.graph, files, indexer, rel => readSource(entry, rootReal, fileUri(entry, rel), true));
+      await entry.store.save('graph', entry.graph).catch(() => {});
+      return entry;
+    },
+    async readSource(entry, rel) { return readSource(entry, await fs.realpath(entry.root.fsPath), fileUri(entry, rel), true); },
+    reveal: (entry, rel, line) => entry.graph?.files[rel] ? reveal(entry, rel, line) : undefined,
+    openFlow: (entry, rel, line) => entry.graph?.files[rel] ? api.commands.executeCommand('yamori.openAt', fileUri(entry, rel).toString(), line) : undefined,
+    async gitHead(entry) {
+      const info = entry.git || await project.gitInfo(entry.root.fsPath);
+      if (!info?.gitDir) return undefined;
+      const head = (await fs.readFile(path.join(info.gitDir, 'HEAD'), 'utf8')).trim();
+      if (!head.startsWith('ref:')) return head;
+      const ref = head.slice(4).trim();
+      try { return (await fs.readFile(path.join(info.gitDir, ...ref.split('/')), 'utf8')).trim(); }
+      catch { return ((await fs.readFile(path.join(info.gitDir, 'packed-refs'), 'utf8').catch(() => '')).split('\n').find(line => line.endsWith(' ' + ref)) || '').split(' ')[0] || undefined; }
+    },
+    async connection(tier) {
+      const provider = context.globalState.get('provider');
+      if (!PROVIDERS[provider]) throw new Error('Set up Claude Code or Codex first (Yamori: Set Up AI).');
+      const main = connectionOptions(context.globalState, provider, api);
+      return tier === 'main' ? main : { ...main, ...(await quickModel(provider, main.cliPath, api) || {}) };
+    },
+    requestStructured
+  };
   return {
+    stageSupport,
     askSelection: (selected, question) => runSelection(selected, question, 'chat'),
     async show(folderUri, focusUri, view = 'start') {
       const root = folderUri || (focusUri && api.workspace.getWorkspaceFolder?.(focusUri)?.uri) || api.workspace.workspaceFolders?.[0]?.uri;
@@ -2006,6 +2040,43 @@ async function activate(context) {
   // Hidden commands behind hovers, CodeLens and links: open a file's explanation
   // at a line, or show the source line itself. Local files only.
   const fileTarget = uri => { const target = typeof uri === 'string' ? vscode.Uri.parse(uri) : uri; return target?.scheme === 'file' ? target : undefined; };
+  // Stages: the shared map between the founder and their agents.
+  const stageScreen = require('./stages/controller').createStages({
+    api: vscode, context, map: projectMap.stageSupport, setting: (name, fallback) => setting(vscode, name, fallback),
+    gitOperationInProgress: autoRefreshing.gitOperationInProgress
+  });
+  context.subscriptions.push({ dispose: () => stageScreen.dispose() });
+  const stageEntry = async () => {
+    const uri = (vscode.window.activeTextEditor || lastEditor)?.document?.uri;
+    const entry = uri?.scheme === 'file' ? await projectMap.stageSupport.entryForFile(uri) : undefined;
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!entry && !root) throw new Error('Open a folder or workspace to map its stages.');
+    return entry || projectMap.stageSupport.entryFor(root);
+  };
+  command('yamori.stages.open', async () => stageScreen.show(await stageEntry()));
+  command('yamori.stages.fromEntry', async () => stageScreen.fromEntry(await stageEntry()));
+  command('yamori.stages.regenerate', async () => stageScreen.regenerate(await stageEntry()));
+  if (vscode.workspace.onDidSaveTextDocument) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => { void stageScreen.saved(doc.uri).catch(() => {}); }));
+  // Deep links from Obsidian notes: vscode://cowana-ai.yamori/open?file=<repo-relative>&line=N[&root=<abs>]
+  if (vscode.window.registerUriHandler) context.subscriptions.push(vscode.window.registerUriHandler({
+    async handleUri(uri) {
+      if (uri.path !== '/open') return;
+      const query = new URLSearchParams(uri.query), file = query.get('file') || '', line = Math.max(1, Number(query.get('line')) || 1);
+      if (!file || file.includes('\0')) return;
+      const folders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+      const roots = query.get('root') ? [query.get('root'), ...folders] : folders;
+      for (const root of roots) {
+        const target = path.resolve(root, file), rel = path.relative(root, target);
+        if (rel.startsWith('..') || path.isAbsolute(rel) || !folders.some(folder => !path.relative(folder, target).startsWith('..'))) continue;
+        try { await fs.access(target); } catch { continue; }
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
+        const position = new vscode.Range(line - 1, 0, line - 1, 0);
+        await vscode.window.showTextDocument(doc, { selection: position, preview: true });
+        return;
+      }
+      vscode.window.showWarningMessage('Yamori: ' + file + ' is not in an open workspace folder.');
+    }
+  }));
   command('yamori.openAt', async (uri, line) => { const target = fileTarget(uri); if (target) await open(target, Number.isInteger(line) ? { line } : {}); });
   command('yamori.showSource', async (uri, line) => {
     const target = fileTarget(uri); if (!target) return;

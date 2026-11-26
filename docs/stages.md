@@ -1,0 +1,33 @@
+# Stages
+
+Stages show a workflow as a few named boxes (for example **Plan → Act → Evaluate**) instead of files. Each stage lists the functions that implement it, across files, with a link to each line and the cached pseudocode.
+
+## Start
+
+Run **Yamori: Map Stages from Entry Point** and pick the function where the workflow starts (the one at your cursor is suggested first). Yamori shows how many files the workflow reaches and about how many tokens one mapping call uses. Choose **Only these files…** to narrow it. Files without AI notes get notes first, and Yamori asks before writing them.
+
+**Yamori: Open Stages** opens the stage screen again. The graph stays on top; a stage card opens below it.
+
+## What a stage card shows
+
+- **In / Then / Out:** what goes in, what the stage does, and what comes out.
+- **Steps across files:** each function, a chip that opens the source line, **File Flow** (the file in Read, at that step), and its cached pseudocode.
+- **Rename, Pin, Merge, Move to…:** your changes pin the stage. Regeneration keeps pinned stages exactly as you left them. **Move to… → New stage** splits a stage.
+
+## Updates and cost
+
+Opening the screen, a card or pseudocode never calls a model: it reads `.yamori/yamori.db` and the pseudocode cache.
+
+After you save a file, Yamori compares its content hash. Only unpinned stages with a step in that file are marked **Needs update**. About two seconds after saves stop (longer while an agent edits several files), each affected stage gets one cheap-model call. The call sends the stage, its steps, and the before/after pseudocode of the changed steps, never the whole workflow. A source excerpt of one function is sent only when that file has neither current pseudocode nor a current AI note. Nothing runs during a git rebase or merge.
+
+- `yamori.stages.autoUpdate` (default on): turn off to wait for **Update changed**.
+- `yamori.tokenBudget` (`{ "perRun": 60000, "perDay": 400000 }`): a call that would go over is not made; the stage stays **Needs update**.
+- **Activity** (top right) lists every call today: trigger, model, input, cached and output tokens, and cost.
+
+**Regenerate all** re-clusters every unpinned stage with one call. Rerunning with no code change makes no call. Changing the model or the prompt marks the stages as made by an older version, but does not regenerate them.
+
+## Storage
+
+`.yamori/yamori.db` (SQLite, git-ignored) holds workflows, stages, steps, file hashes, the review queue and the token ledger. It is derived from code and can be deleted; pinned stages are the only founder edits it keeps. Stages need the editor's built-in SQLite (VS Code 1.101 or newer).
+
+Deep links into the code use `vscode://cowana-ai.yamori/open?file=<path>&line=<n>`.

@@ -1,0 +1,181 @@
+'use strict';
+const test = require('node:test'), assert = require('node:assert/strict');
+const path = require('node:path');
+const project = require('../src/project/graph');
+const { StageDb, available } = require('../src/stages/db');
+const { createRun, normalizeBudget } = require('../src/stages/budget');
+const stages = require('../src/stages/generate');
+const { createStageScheduler, timing } = require('../src/stages/scheduler');
+
+const FIXTURE = path.join(__dirname, 'fixtures', 'agent-repo');
+const skip = !available() && 'node:sqlite is not available in this runtime';
+
+let cachedGraph;
+async function fixtureGraph() {
+  cachedGraph ||= await project.scanFolder(FIXTURE, undefined, new project.Indexer());
+  return structuredClone(cachedGraph);
+}
+function notesFor(graph) {
+  const purposes = { 'main.py': 'Runs the agent loop: plan, act, evaluate.', 'agent/planner.py': 'Turns a goal into steps.', 'agent/actor.py': 'Runs each step with a tool.', 'agent/evaluator.py': 'Scores the results.', 'agent/tools.py': 'Tool calls.', 'agent/prompts.py': 'Prompt templates.' };
+  return { files: Object.fromEntries(Object.entries(graph.files).map(([rel, file]) => [rel, { hash: file.hash, purpose: purposes[rel] || '', role: 'core', terms: [] }])) };
+}
+function explanationsFor(graph) {
+  const out = {};
+  for (const [rel, file] of Object.entries(graph.files)) out[rel] = { logic: { hash: file.hash, sections: stages.symbolsOf(file).map(def => ({ title: def.name, startLine: def.start || def.line, endLine: def.end || def.line, pseudocode: 'do ' + def.name + ' v1', lineMap: [] })) } };
+  return out;
+}
+const STAGES = { stages: [
+  { id: 'plan', name: 'Plan', gist: 'Turn the goal into steps.', input: 'user goal', output: 'list of steps', steps: [{ file: 'agent/planner.py', symbol: 'plan' }, { file: 'agent/planner.py', symbol: 'build_prompt' }, { file: 'agent/planner.py', symbol: 'split_steps' }] },
+  { id: 'act', name: 'Act', gist: 'Run each step with a tool.', input: 'list of steps', output: 'tool results', steps: [{ file: 'agent/actor.py', symbol: 'act' }, { file: 'agent/actor.py', symbol: 'run_step' }, { file: 'agent/tools.py', symbol: 'call_tool' }] },
+  { id: 'evaluate', name: 'Evaluate result', gist: 'Score the results.', input: 'tool results', output: 'verdict', steps: [{ file: 'agent/evaluator.py', symbol: 'evaluate' }, { file: 'agent/evaluator.py', symbol: 'grade' }, { file: 'agent/prompts.py', symbol: 'EVAL_PROMPT' }, { file: 'nowhere.py', symbol: 'ghost' }] }
+] };
+function fakeModel(responses) {
+  const calls = [];
+  const request = async ({ prompt, schema, tier }) => {
+    calls.push({ prompt, schema, tier });
+    const next = typeof responses === 'function' ? responses(prompt, calls.length) : responses.shift();
+    return { raw: JSON.stringify(next), usage: { input: 1000, cacheRead: 200, cacheWrite: 0, output: 150, costUsd: 0.001 }, model: 'cheap-model' };
+  };
+  return { request, calls };
+}
+async function setup() {
+  const db = new StageDb(':memory:'), graph = await fixtureGraph();
+  const ctx = { db, graph, notes: notesFor(graph), explanations: explanationsFor(graph), provider: 'claude', model: 'cheap-model' };
+  return ctx;
+}
+const runFor = (db, budget) => createRun(db, { budget: budget || { perRun: 0, perDay: 0 }, trigger: 'test' });
+// Simulate an edit: new hash in the graph and fresh pseudocode for the edited symbol.
+function edit(ctx, file, symbol, text) {
+  const hash = 'edited-' + Math.random().toString(36).slice(2);
+  ctx.graph.files[file].hash = hash;
+  ctx.explanations[file].logic.hash = hash;
+  if (symbol) ctx.explanations[file].logic.sections.find(section => section.title === symbol).pseudocode = text;
+  return hash;
+}
+
+test('stage generation reads AI notes, stores 3–7 ordered stages with line-linked steps, and logs the call', { skip }, async () => {
+  const ctx = await setup(), model = fakeModel([STAGES]);
+  const result = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  assert.equal(result.calls, 1); assert.equal(model.calls.length, 1); assert.equal(model.calls[0].tier, 'cheap');
+  assert.equal(result.workflowId, 'run_agent'.replace('_', '-'));
+  const list = ctx.db.stages(result.workflowId);
+  assert.deepEqual(list.map(stage => stage.name), ['Plan', 'Act', 'Evaluate result']);
+  assert.deepEqual(list.map(stage => stage.position), [0, 1, 2]);
+  const evaluate = ctx.db.steps(result.workflowId, 'evaluate');
+  assert.equal(evaluate.length, 3, 'the invented step is dropped');
+  const grade = evaluate.find(step => step.symbol === 'grade'), def = ctx.graph.files['agent/evaluator.py'].defs.find(item => item.name === 'grade');
+  assert.equal(grade.line_start, def.line); assert.equal(grade.line_end, def.end);
+  // The prompt carries notes, not raw source, and is sorted by path.
+  const prompt = model.calls[0].prompt;
+  assert.match(prompt, /Turns a goal into steps/); assert.doesNotMatch(prompt, /return \[line for line/);
+  assert.ok(prompt.indexOf('"agent/actor.py"') < prompt.indexOf('"main.py"'));
+  const usage = ctx.db.usage({});
+  assert.deepEqual([usage.calls, usage.input, usage.cached, usage.output], [1, 1000, 200, 150]);
+});
+
+test('zero-call reads and zero-call reruns', { skip }, async () => {
+  const ctx = await setup(), model = fakeModel([STAGES]);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  const again = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  assert.equal(again.calls, 0); assert.ok(again.reused);
+  const view = stages.stageView(ctx.db, ctx.graph, ctx.explanations, workflowId, 'plan');
+  assert.equal(view.steps[0].pseudocode, '## plan\ndo plan v1'); assert.ok(view.steps[0].pseudocodeCurrent);
+  assert.equal(stages.workflowView(ctx.db, ctx.graph, workflowId).stages.length, 3);
+  assert.equal(model.calls.length, 1);
+});
+
+test('editing one file used by one stage makes exactly one cheap call for that stage and logs a plain-sentence change', { skip }, async () => {
+  const ctx = await setup(), model = fakeModel(prompt => /REFRESH|Code behind one stage changed/.test(prompt)
+    ? { name: 'Evaluate result', gist: 'Score the results; retry twice before failing.', input: 'tool results', output: 'verdict', steps: [{ file: 'agent/evaluator.py', symbol: 'evaluate' }, { file: 'agent/evaluator.py', symbol: 'grade' }], behaviorChanged: true, summary: 'Evaluate now retries twice before failing.' }
+    : STAGES);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  const hash = edit(ctx, 'agent/evaluator.py', 'grade', 'do grade with two retries');
+  const affected = stages.fileChanged(ctx.db, 'agent/evaluator.py', hash);
+  assert.deepEqual(affected.map(stage => stage.id), ['evaluate']);
+  assert.deepEqual(ctx.db.stages(workflowId).map(stage => stage.stale), [false, false, true]);
+  const result = await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db) });
+  assert.equal(result.calls, 1); assert.equal(model.calls.length, 2);
+  assert.match(model.calls[1].prompt, /do grade v1/); assert.match(model.calls[1].prompt, /do grade with two retries/);
+  assert.doesNotMatch(model.calls[1].prompt, /Turn the goal into steps/, 'other stages are not re-sent');
+  const [change] = ctx.db.changes(workflowId, { status: 'pending' });
+  assert.equal(change.stage_id, 'evaluate'); assert.equal(change.summary, 'Evaluate now retries twice before failing.');
+  assert.deepEqual(change.detail.steps.find(step => step.symbol === 'grade'), { file: 'agent/evaluator.py', symbol: 'grade', before: '## grade\ndo grade v1', after: '## grade\ndo grade with two retries' });
+  assert.equal(ctx.db.stages(workflowId).some(stage => stage.stale), false);
+  // Rerun with nothing new: no calls.
+  assert.equal((await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) })).calls, 0);
+});
+
+test('a shared file marks every stage that uses it, and each gets at most one call after the burst settles', { skip }, async () => {
+  const ctx = await setup();
+  const shared = { stages: STAGES.stages.map(stage => stage.id === 'act' ? { ...stage, steps: [...stage.steps, { file: 'agent/prompts.py', symbol: 'PLAN_PROMPT' }] } : stage) };
+  const model = fakeModel(prompt => /Code behind one stage changed/.test(prompt) ? { name: 'Same', gist: 'Same.', input: 'a', output: 'b', steps: [{ file: 'agent/prompts.py', symbol: 'PLAN_PROMPT' }], behaviorChanged: false, summary: '' } : shared);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  for (const file of ['agent/prompts.py', 'agent/tools.py', 'agent/actor.py']) stages.fileChanged(ctx.db, file, edit(ctx, file));
+  assert.deepEqual(ctx.db.staleStages(workflowId).map(row => row.id), ['act', 'evaluate']);
+  const result = await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db) });
+  assert.equal(result.calls, 2, 'one call per affected stage, not per file');
+  assert.equal(ctx.db.changes(workflowId).length, 0, 'no behavior change, no review item');
+  assert.equal(stages.workflowStatus(ctx.db, ctx.graph, workflowId).changedFiles.length, 0);
+});
+
+test('pinned and renamed stages survive regeneration and never go stale', { skip }, async () => {
+  const ctx = await setup(), model = fakeModel(() => STAGES);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  stages.renameStage(ctx.db, workflowId, 'act', 'Use tools');
+  stages.fileChanged(ctx.db, 'agent/actor.py', edit(ctx, 'agent/actor.py'));
+  assert.equal(ctx.db.stage(workflowId, 'act').stale, false);
+  await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db), force: true });
+  const act = ctx.db.stage(workflowId, 'act');
+  assert.equal(act.name, 'Use tools'); assert.ok(act.pinned);
+  assert.equal(ctx.db.stages(workflowId).length, 3);
+  assert.match(model.calls.at(-1).prompt, /"pinned":true/);
+  // Move a step into a new stage (split) and merge it back.
+  const created = stages.moveStep(ctx.db, workflowId, { from: 'plan', position: 2, newName: 'Split steps' });
+  assert.deepEqual(ctx.db.stages(workflowId).map(stage => stage.id), ['plan', created, 'act', 'evaluate']);
+  stages.mergeStages(ctx.db, workflowId, 'plan', created);
+  assert.deepEqual(ctx.db.steps(workflowId, 'plan').map(step => step.symbol), ['plan', 'build_prompt', 'split_steps']);
+});
+
+test('budgets stop a call before it is made and leave the stage as needs update', { skip }, async () => {
+  const ctx = await setup(), model = fakeModel(() => STAGES);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  stages.fileChanged(ctx.db, 'agent/planner.py', edit(ctx, 'agent/planner.py'));
+  const result = await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db, { perRun: 0, perDay: 1500 }) });
+  assert.equal(result.calls, 0); assert.equal(model.calls.length, 1);
+  assert.match(result.skipped[0].reason, /daily budget/);
+  assert.ok(ctx.db.stage(workflowId, 'plan').stale);
+  await assert.rejects(stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', id: 'other', request: model.request, run: runFor(ctx.db, { perRun: 10, perDay: 0 }) }), /per-run budget/);
+  assert.deepEqual(normalizeBudget(5000), { perRun: 60000, perDay: 5000 });
+});
+
+test('the estimate lists files without notes and the "only these files" option limits the input', { skip }, async () => {
+  const ctx = await setup();
+  delete ctx.notes.files['agent/tools.py'];
+  const estimate = stages.estimateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent' });
+  assert.deepEqual(estimate.missingNotes, ['agent/tools.py']);
+  assert.ok(estimate.tokens > 0); assert.equal(estimate.escalated, 1, 'a coarse note falls back to the pseudocode outline');
+  const model = fakeModel(() => STAGES);
+  await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', files: ['main.py', 'agent/planner.py'], request: model.request, run: runFor(ctx.db) }).catch(() => {});
+  assert.doesNotMatch(model.calls[0].prompt, /agent\/actor\.py/);
+});
+
+test('the scheduler coalesces an agent burst into one run and runs at once on done', async () => {
+  const saved = { ...timing };
+  Object.assign(timing, { delay: 20, idle: 80, burstFiles: 3, pauseRetry: 20 });
+  try {
+    const runs = [];
+    const scheduler = createStageScheduler(async files => { runs.push(files); });
+    for (const file of ['a', 'b', 'c', 'd', 'a']) scheduler.saved(file);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.equal(runs.length, 0, 'a burst waits for idle');
+    scheduler.done(); await new Promise(resolve => setTimeout(resolve, 10)); await scheduler.running;
+    assert.deepEqual(runs, [['a', 'b', 'c', 'd']]);
+    let busy = true;
+    const paused = createStageScheduler(async files => { runs.push(files); }, { paused: async () => busy });
+    paused.saved('x'); await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(runs.length, 1, 'nothing runs during a rebase');
+    busy = false; await new Promise(resolve => setTimeout(resolve, 40));
+    assert.deepEqual(runs[1], ['x']);
+    scheduler.dispose(); paused.dispose();
+  } finally { Object.assign(timing, saved); }
+});
