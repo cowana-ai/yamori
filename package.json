@@ -150,7 +150,7 @@
       },
       {
         "command": "yamori.stages.fromEntry",
-        "title": "Yamori: Map Stages from Entry Point"
+        "title": "Yamori: Map My Workflow as Stages"
       },
       {
         "command": "yamori.stages.regenerate",

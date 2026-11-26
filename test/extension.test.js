@@ -1622,7 +1622,7 @@ test('project guide lists folder reading steps and a folder-box map; drag, fold,
   assert.equal(edgePath({ x: 0, y: 0, w: 100, h: 36 }, { x: 0, y: 104, w: 100, h: 36 }), 'M50 36 C50 70 50 70 50 104');
   assert.ok(fitTransform([{ x: 0, y: 0, w: 100, h: 40 }, { x: 300, y: 200, w: 100, h: 40 }], 800, 600).k <= 1.4);
   assert.deepEqual(byFolder(['b/x.py', 'main.py', 'a/y.py', 'a/z.py']), [['a', ['a/y.py', 'a/z.py']], ['b', ['b/x.py']], ['', ['main.py']]]);
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch', 'tab-stages', 'stages-view'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = [], sent = { at: i => messages.at(i), get length() { return messages.length; } }; let receive;
   vm.runInNewContext(pageScript(html), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON });
@@ -3301,7 +3301,7 @@ test('guide search: a visible header box highlights every file that mentions a n
     assert.ok(h.panels.some(panel => panel.type === 'yamoriSetup')); assert.equal(flows.length, 1);
   } finally { delete testStatus.codex; await h.close(); }
   // The page: hits glow and carry counts; the side panel lists them and the flow.
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch', 'tab-stages', 'stages-view'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = []; let receive;
   vm.runInNewContext(pageScript(require('../src/views/guide').mapHTML()), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON, setTimeout, clearTimeout });
@@ -3719,7 +3719,7 @@ test('planning: narrow and broad goals use one selected-model draft; explicit fa
 });
 
 test('the Plan tab: the same map with numbered steps, ripples and suggestions, and every part of the plan editable, draggable and undoable', async () => {
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch', 'tab-stages', 'stages-view'];
   const { document, elements, all } = fakeDocument(ids);
   const documentEvents = {}; document.addEventListener = (type, fn) => { documentEvents[type] = fn; };
   const messages = [], savedView = {}; let receive;
@@ -3746,6 +3746,12 @@ test('the Plan tab: the same map with numbered steps, ripples and suggestions, a
   assert.ok(vm.runInNewContext('view.k', sandbox) >= 0.75, 'planning refits at a readable zoom instead of inheriting the full-project zoom');
   assert.deepEqual([panel.hidden, elements['map-view'].hidden, elements['start-view'].hidden, elements['tab-plan'].attributes['aria-selected'], elements['tab-map'].attributes['aria-selected']], [false, false, true, 'true', 'false']);
   assert.ok(button('Approve & implement'), 'approval is directly above the canvas');
+  // Stages is a tab of the same panel: it hides the map and asks for stage state.
+  elements['tab-stages'].events.click();
+  assert.deepEqual([elements['stages-view'].hidden, elements['map-view'].hidden, elements['start-view'].hidden, elements['tab-stages'].attributes['aria-selected'], elements['tab-plan'].attributes['aria-selected']], [false, true, true, 'true', 'false']);
+  assert.deepEqual(messages.at(-1), { type: 'stages', message: { type: 'ready' } });
+  elements['tab-plan'].events.click();
+  assert.equal(elements['stages-view'].hidden, true);
   button('Approve & implement').events.click(); assert.deepEqual(messages.at(-1), { type: 'planExecute', id: 'p1' });
   // The map: numbered steps, ripple, suggestions, everything else fades.
   const badge = id => all(node(id)).find(el => el.attributes?.class === 'plan-badge');

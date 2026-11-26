@@ -4,9 +4,9 @@ Stages show a workflow as a few named boxes (for example **Plan → Act → Eval
 
 ## Start
 
-Run **Yamori: Map Stages from Entry Point** and pick the function where the workflow starts (the one at your cursor is suggested first). Yamori shows how many files the workflow reaches and about how many tokens one mapping call uses. Choose **Only these files…** to narrow it. Files without AI notes get notes first, and Yamori asks before writing them.
+Open the **Stages** tab in Yamori (next to Files, Map and Chat & plan; in Read it is the **Stages** button in the top bar). Yamori finds where your main workflow starts on its own, without AI: the function in an entry-point file that no other function calls and that reaches the most of the project (for example `run_agent()` in `main.py`). It shows that function, what it calls, how many files it reaches, and about how many tokens mapping it takes. Click **Map stages**. **Choose files…** narrows the files; **Other places a workflow starts** lists separate workflows (for example a server and a CLI). If Yamori finds nothing, or picks the wrong one, **Pick the starting function yourself**.
 
-**Yamori: Open Stages** opens the stage screen again. The graph stays on top; a stage card opens below it.
+**Yamori: Map My Workflow as Stages** does the same from the Command Palette, with one confirmation. Files without AI notes get notes first, and Yamori asks before writing them.
 
 ## What a stage card shows
 
@@ -46,7 +46,13 @@ Renames, formatting and refactors that keep behavior do not enter the queue.
 
 Each stage card has a note box (**Save note**). Write why a stage works the way it does, constraints ("never store PII") and decisions. Agents read these notes before they edit the stage.
 
-Set `yamori.obsidian.vaultPath` to your vault folder to keep the notes in Obsidian under `Yamori/<repo>/`; without it they go to `.yamori/notes/` in the project.
+Notes need no setup:
+
+- If the project folder is inside an Obsidian vault, notes go to `<vault>/Yamori/<repo>/`.
+- Otherwise they start in `.yamori/notes/`. If you use Obsidian, the notes section of a stage card offers your most recently opened vault (from Obsidian's own vault list): one click on **Use <vault>** moves the notes there and keeps them there for every project. **No thanks** hides the offer.
+- `yamori.obsidian.vaultPath` sets the vault by hand.
+
+**Open Obsidian** on a card opens the stage note in Obsidian; without a vault it opens beside the code.
 
 - `Stages/<workflow>/<Stage>.md`: front matter (`type`, `workflow`, `stage_id`, `name`, `files`, `updated`), then a managed section with the gist, In/Out and the ordered steps. Each step links to its file note (`[[Files/<file>#^step]]`) and back to the code (`vscode://…` and `cursor://…`).
 - `Files/<path>.md`: the file's AI note, the stages that use it, and backlinks.

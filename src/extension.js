@@ -1181,7 +1181,8 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'media', 'yamori.png');
     panel.webview.html = mapHTML(context.globalState.get('readingPalette', 'auto'));
     entry.panel = panel; watch(entry); void refreshGit(entry);
-    panel.onDidDispose(() => { entry.panel = undefined; unwatch(entry); entry.notesController?.abort(); entry.flowController?.abort(); entry.planController?.abort(); entry.search = undefined; entry.flow = undefined; });
+    stagesHost?.attach(entry, panel.webview);
+    panel.onDidDispose(() => { stagesHost?.detach(entry); entry.panel = undefined; unwatch(entry); entry.notesController?.abort(); entry.flowController?.abort(); entry.planController?.abort(); entry.search = undefined; entry.flow = undefined; });
     panel.webview.onDidReceiveMessage(async message => {
       try { await receive(entry, message); } catch (e) { entry.error = e.message; post(entry); }
     });
@@ -1192,6 +1193,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     const file = typeof message.id === 'string' && entry.graph?.files[message.id] ? message.id : undefined;
     switch (message.type) {
       case 'ready': post(entry); break;
+      case 'stages': await stagesHost?.message(entry, message.message); break;
       case 'readCurrent': await api.commands.executeCommand?.('yamori.read'); break;
       case 'openFile': if (file) await openFile(fileUri(entry, file)); break;
       case 'revealSource': if (file) await reveal(entry, file, message.line); break;
@@ -1331,9 +1333,11 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   }
   // What the stage screen needs from the project map: the same graph, notes
   // and pseudocode cache, without another scan or store.
-  let stageBaseProvider, stageProposals;
+  let stageBaseProvider, stageProposals, stagesHost;
   const stageSupport = {
     entryFor, entryForFile,
+    // The Stages tab of this panel.
+    async showStages(entry) { entry.viewRequest = { view: 'stages', token: Date.now() }; ensurePanel(entry); post(entry); },
     rootFor: uri => api.workspace.getWorkspaceFolder?.(uri)?.uri?.fsPath,
     relative: (entry, uri) => relative(entry.root.fsPath, uri.fsPath),
     async ensureGraph(entry) { if (!entry.graph) await scan(entry); if (!entry.graph) throw new Error('This folder could not be mapped.'); return entry; },
@@ -1404,7 +1408,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     requestStructured
   };
   return {
-    stageSupport,
+    stageSupport, setStages(host) { stagesHost = host; for (const entry of maps.values()) if (entry.panel) host.attach(entry, entry.panel.webview); },
     askSelection: (selected, question) => runSelection(selected, question, 'chat'),
     async show(folderUri, focusUri, view = 'start') {
       const root = folderUri || (focusUri && api.workspace.getWorkspaceFolder?.(focusUri)?.uri) || api.workspace.workspaceFolders?.[0]?.uri;
@@ -1418,7 +1422,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
         entry.guideFolder = parts.slice(0, 4).join('/');
         entry.focus = { id: rel, token: Date.now() };
       }
-      entry.viewRequest = { view: ['start', 'map', 'plan'].includes(view) ? view : 'start', token: Date.now() };
+      entry.viewRequest = { view: ['start', 'map', 'plan', 'stages'].includes(view) ? view : 'start', token: Date.now() };
       ensurePanel(entry); post(entry);
       await scan(entry);
       return entry;
@@ -1965,6 +1969,7 @@ async function activate(context) {
         projectContext: snapshot => projectMap.contextFor(snapshot),
         openMap: uri => projectMap.show(undefined, uri, 'map'),
         openPlan: uri => projectMap.show(undefined, uri, 'plan'),
+        openStages: uri => projectMap.show(undefined, uri, 'stages'),
         revealDefinition: (uri, defined, column) => projectMap.revealDefinition(uri, defined, column),
         agentTools: snapshot => projectMap.toolsFor(snapshot),
         openReaderTerminal,
@@ -2100,6 +2105,7 @@ async function activate(context) {
     gitOperationInProgress: autoRefreshing.gitOperationInProgress
   });
   context.subscriptions.push({ dispose: () => stageScreen.dispose() });
+  projectMap.setStages(stageScreen);
   const stageEntry = async () => {
     const uri = (vscode.window.activeTextEditor || lastEditor)?.document?.uri;
     const entry = uri?.scheme === 'file' ? await projectMap.stageSupport.entryForFile(uri) : undefined;
@@ -2912,6 +2918,7 @@ function createReader(context, navigation) {
           case 'showSource': if (source) { await showSource(); const doc = vscode.window.visibleTextEditors.find(editor => editor.document.uri.toString() === source.uri); if (doc) await vscode.window.showTextDocument(doc.document, { viewColumn: doc.viewColumn, preserveFocus: false }); } break;
           case 'plan': await navigation.openPlan?.(source ? vscode.Uri.parse(source.uri) : undefined); break;
           case 'map': await navigation.openMap?.(source ? vscode.Uri.parse(source.uri) : undefined); break;
+          case 'stages': await navigation.openStages?.(source ? vscode.Uri.parse(source.uri) : undefined); break;
           case 'runTest': await runBlockTest(message); break;
           case 'closeRun': if (Number.isInteger(message.index)) { runControllers.get(message.index)?.abort(); const next = { ...runs }; delete next[message.index]; runs = next; post(); } break;
           case 'openSymbol': {

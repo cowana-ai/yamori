@@ -237,6 +237,57 @@ async function generateWorkflow({ db, graph, notes, explanations, entryFile, ent
   return { workflowId, stages: db.stages(workflowId), calls: 1, escalated: input.escalated, lowConfidence: parsed.lowConfidence };
 }
 
+// --- finding where workflows start (no model call) ---
+const ORCHESTRATOR = /^(main|run|start|serve|app|cli|handler|handle|execute|loop|pipeline|workflow|agent|orchestrate|activate|lambda_handler|create_app)$|(^run_|_loop$|agent|pipeline|workflow|orchestrat)/i;
+// Rank functions that start a workflow: in entry files (and the most central
+// files), the function that calls the most names from other project files,
+// is called from module-level code, or is named like an orchestrator.
+function suggestEntries(graph, { texts = new Map(), limit = 5 } = {}) {
+  const outgoing = new Map();
+  for (const edge of graph.edges || []) { if (!outgoing.has(edge.from)) outgoing.set(edge.from, new Set()); for (const name of edge.names || []) outgoing.get(edge.from).add(name); }
+  const ranked = Object.entries(graph.files).filter(([, file]) => !file.test && !file.contextFile).sort(([a, fa], [b, fb]) => (fb.rank || 0) - (fa.rank || 0) || byPath(a, b));
+  const candidates = [...new Set([...(graph.entries || []), ...Object.entries(graph.files).filter(([, file]) => file.entry && !file.test).map(([rel]) => rel), ...(graph.readingPath || []).slice(0, 4).map(step => step.id), ...ranked.slice(0, 4).map(([rel]) => rel)])]
+    .filter(rel => graph.files[rel] && !graph.files[rel].test);
+  const out = [];
+  for (const file of candidates) {
+    const defs = symbolsOf(graph.files[file]).filter(def => ['function', 'method'].includes(def.kind));
+    if (!defs.length) continue;
+    const lines = texts.get(file)?.split('\n'), imported = outgoing.get(file) || new Set();
+    const reach = workflowFiles(graph, file).length;
+    const inside = line => defs.some(def => line >= (def.start || def.line) && line <= (def.end || def.line));
+    const moduleText = lines ? lines.filter((_, index) => !inside(index + 1)).join('\n') : '';
+    const bodies = new Map(defs.map(def => [def, lines ? lines.slice((def.start || def.line) - 1, def.end || def.line).join('\n') : '']));
+    const uses = name => new RegExp('\\b' + name.replace(/[$]/g, '\\$') + '\\b');
+    const direct = new Map(defs.map(def => [def, [...imported].filter(name => uses(name).test(bodies.get(def)))]));
+    const callees = new Map(defs.map(def => [def, defs.filter(other => other !== def && new RegExp('\\b' + other.name + '\\s*\\(').test(bodies.get(def)))]));
+    const called = new Set([...callees.values()].flat());
+    let best;
+    for (const def of defs) {
+      // Everything this function reaches through the file's own functions.
+      const seen = new Set([def]), queue = [def], calls = new Set();
+      while (queue.length) { const current = queue.shift(); direct.get(current).forEach(name => calls.add(name)); for (const next of callees.get(current)) if (!seen.has(next)) { seen.add(next); queue.push(next); } }
+      const fromModule = !!moduleText && new RegExp('\\b' + def.name + '\\s*\\(').test(moduleText);
+      const root = !called.has(def);
+      const score = Math.min(calls.size, 12) * 3 + Math.min(seen.size - 1, 6) + (root ? 5 : 0) + (fromModule ? 4 : 0) + (ORCHESTRATOR.test(def.name) ? 4 : 0) + (graph.files[file].entry || (graph.entries || []).includes(file) ? 2 : 0);
+      if (!best || score > best.score) best = { file, symbol: def.name, line: def.start || def.line, score, calls: direct.get(def).length ? direct.get(def) : [...calls], fromModule };
+    }
+    if (!best) continue;
+    const why = [graph.files[file].entry || (graph.entries || []).includes(file) ? 'entry point' : 'central file', best.calls.length ? 'calls ' + best.calls.slice(0, 4).join(', ') + (best.calls.length > 4 ? '…' : '') : '', 'reaches ' + reach + ' file' + (reach === 1 ? '' : 's')].filter(Boolean).join(' · ');
+    out.push({ file, symbol: best.symbol, line: best.line, files: reach, score: best.score + Math.min(reach, 40) * 0.75, why });
+  }
+  out.sort((a, b) => b.score - a.score || b.files - a.files || byPath(a.file, b.file));
+  // Weak candidates (a leaf helper file) are noise next to a real entry point.
+  const kept = [];
+  for (const item of out) {
+    if (kept.length && (item.files < 2 || item.score < out[0].score * 0.35)) continue;
+    // A helper file inside a better workflow is a part of it, not a separate start.
+    const isEntry = graph.files[item.file].entry || (graph.entries || []).includes(item.file);
+    if (!isEntry && kept.some(better => workflowFiles(graph, better.file).includes(item.file))) continue;
+    kept.push(item);
+  }
+  return kept.slice(0, limit);
+}
+
 // --- incremental updates ---
 
 // A saved file: compare hashes and mark only the stages that use it. Pure IO.
@@ -404,7 +455,7 @@ function workflowView(db, graph, workflowId) {
 }
 
 module.exports = {
-  STAGE_PROMPT_VERSION, LIMITS, STAGES_SCHEMA, REFRESH_SCHEMA, slug, symbolsOf, pseudocodeFor, workflowFiles, coarse, stageInput, stagesPrompt, refreshPrompt,
+  suggestEntries, STAGE_PROMPT_VERSION, LIMITS, STAGES_SCHEMA, REFRESH_SCHEMA, slug, symbolsOf, pseudocodeFor, workflowFiles, coarse, stageInput, stagesPrompt, refreshPrompt,
   parseStages, estimateWorkflow, workflowStatus, generateWorkflow, fileChanged, refreshStage, refreshStale,
   renameStage, pinStage, moveStep, mergeStages, stageView, workflowView, versionKey, currentVersion
 };

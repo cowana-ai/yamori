@@ -542,11 +542,11 @@ body.vscode-light:not([data-palette="slate"]), body[data-palette="paper"] { --di
 .code-line .diff-sign, .block-diff .diff-sign { color: var(--diff-ink); font-weight: 700; }
 .block-diff { display: inline-flex; gap: .35em; margin-inline-end: .55em; }
 .comparison-label { margin: 0 0 14px; color: var(--read-muted); font-size: 12px; overflow-wrap: anywhere; }
-body[data-comparison] .ai-settings, body[data-comparison] #colors, body[data-comparison] #map, body[data-comparison] #plan { display: none; }
+body[data-comparison] .ai-settings, body[data-comparison] #colors, body[data-comparison] #map, body[data-comparison] #stages, body[data-comparison] #plan { display: none; }
 
 ${LOGIC_STYLE}</style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
-<nav class="workspace-nav" aria-label="Yamori navigation"><button aria-current="page" class="current-view" disabled>Read</button><button id="map" title="Explore project files and connections">Map</button><button id="plan" title="Plan changes with Codex or Claude">Plan</button></nav>
+<nav class="workspace-nav" aria-label="Yamori navigation"><button aria-current="page" class="current-view" disabled>Read</button><button id="map" title="Explore project files and connections">Map</button><button id="stages" title="Your workflow as a few stages: what each does, what changed, your notes">Stages</button><button id="plan" title="Plan changes with Codex or Claude">Plan</button></nav>
 <button id="source" class="crumb" title="Show this file in the editor">No file yet</button>
 <details class="ai-settings"><summary id="ai-summary" title="Which AI writes explanations, and how hard it thinks">AI ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 1 ▾</button><button id="setup-ai" title="Install, sign in to or switch between Claude and ChatGPT">Set up AI…</button></div></details>
 <button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
@@ -1266,6 +1266,7 @@ document.getElementById('colors').addEventListener('click', () => send('palette'
 document.getElementById('source').addEventListener('click', () => send('showSource'));
 document.getElementById('files').addEventListener('click', () => send('switchFile'));
 document.getElementById('map').addEventListener('click', () => send('map'));
+document.getElementById('stages')?.addEventListener('click', () => send('stages'));
 document.getElementById('plan')?.addEventListener('click', () => send('plan'));
 refresh.addEventListener('click', () => { flushDrafts(); send(state.busy ? 'stop' : 'refresh'); });
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => send('level', { level: b.dataset.level })));

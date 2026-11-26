@@ -1,5 +1,6 @@
 'use strict';
-// Stages in VS Code: one panel and one SQLite store per project folder.
+// Stages in VS Code: the Stages tab of Yamori's project panel, and one SQLite
+// store per project folder.
 // Everything a founder opens here is served from SQLite and the existing
 // caches. Model calls happen only on an explicit action or after saves have
 // settled, and each one is budgeted and logged.
@@ -13,9 +14,9 @@ const review = require('./review');
 const { Vault } = require('./vault');
 const steer = require('./steer');
 const { lineDiff } = require('../views/stages');
-const { stagesHTML } = require('../views/stages');
+const os = require('node:os');
 
-function createStages({ api, context, map, setting, gitOperationInProgress, extensions = {} }) {
+function createStages({ api, context, map, setting, gitOperationInProgress, extensions = {}, obsidianConfig = defaultObsidianConfig() }) {
   const projects = new Map();
   const budget = () => normalizeBudget(setting('tokenBudget', undefined));
   const autoUpdate = () => setting('stages.autoUpdate', true) !== false;
@@ -48,7 +49,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   }
   // The vault (or .yamori/notes/) follows the setting; agents find it through the db.
   function vaultFor(item) {
-    const vaultPath = String(setting('obsidian.vaultPath', '') || '').trim();
+    const vaultPath = vaultPathFor(item);
     if (item.vault && item.vault.vaultPath === vaultPath) return item.vault;
     item.vault = new Vault({ vaultPath, root: item.root });
     item.vaultWatch?.close(); item.vaultWatch = undefined;
@@ -62,6 +63,34 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       });
     } catch { /* Watching is best effort; the card re-reads notes when opened. */ }
     return item.vault;
+  }
+  // Where notes go, with no setup: the setting if set; else the Obsidian vault
+  // the project lives in; else .yamori/notes/ (and a one-click offer of the
+  // vault you use most in Obsidian).
+  function vaultPathFor(item) {
+    const configured = String(setting('obsidian.vaultPath', '') || '').trim();
+    if (configured) return configured;
+    for (let dir = item.root; ; dir = path.dirname(dir)) {
+      if (fs.existsSync(path.join(dir, '.obsidian'))) return dir;
+      if (path.dirname(dir) === dir) break;
+    }
+    return '';
+  }
+  function obsidianOffer(item) {
+    if (vaultFor(item).obsidian || context.globalState?.get('stagesVaultDismissed')) return undefined;
+    const vaults = knownVaults(obsidianConfig);
+    return vaults[0] && { name: path.basename(vaults[0].path), path: vaults[0].path };
+  }
+  async function useVault(item, vaultPath) {
+    if (!vaultPath || !fs.existsSync(path.join(vaultPath, '.obsidian'))) throw new Error('That Obsidian vault is no longer there.');
+    const before = vaultFor(item).dir;
+    await api.workspace.getConfiguration('yamori').update('obsidian.vaultPath', vaultPath, api.ConfigurationTarget?.Global ?? true);
+    item.vault = undefined;
+    // Notes already written here come along; nothing in the vault is overwritten.
+    const after = vaultFor(item).dir;
+    if (before !== after && fs.existsSync(before)) { fs.cpSync(before, after, { recursive: true, force: false, errorOnExist: false }); fs.rmSync(before, { recursive: true, force: true }); }
+    for (const workflow of dbFor(item, false)?.workflows() || []) sync(item, workflow.id);
+    item.notice = 'Stage notes now live in Obsidian: ' + path.basename(vaultPath) + '/Yamori/' + path.basename(item.root) + '.';
   }
   // Note edits never call a model. A rename in front matter becomes a pinned override.
   function vaultChanged(item) {
@@ -97,7 +126,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   function state(item) {
     if (!available()) return { unavailable: new StageDbUnavailable().message };
     const db = dbFor(item, false);
-    const base = { busy: item.busy, error: item.error, notice: item.notice, budget: budget() };
+    const base = { busy: item.busy, error: item.error, notice: item.notice, budget: budget(), suggestions: suggestionsFor(item, db), suggesting: !!item.suggesting };
     if (!db) return { ...base, workflows: [] };
     const graph = item.entry.graph || { files: {} };
     const workflows = db.workflows();
@@ -107,17 +136,47 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const card = workflow && item.open ? stages.stageView(db, graph, item.entry.explanations, item.workflowId, item.open) : undefined;
     if (card) { const notes = vaultFor(item).stageNotes(item.workflowId, card.id); card.notes = notes.text; card.noteFile = !!notes.file; }
     const extra = extensions.state?.(item, { db, graph, workflow, card }) || {};
-    extra.vault = { dir: vaultFor(item).dir, obsidian: vaultFor(item).obsidian };
+    extra.vault = { dir: vaultFor(item).dir, obsidian: vaultFor(item).obsidian, offer: obsidianOffer(item), repo: path.basename(item.root) };
     if (item.steer && card && item.steer.stageId === card.id) extra.steer = steerState(item.steer);
     const lineOf = (file, symbol) => { const def = stages.symbolsOf(graph.files[file]).find(item => item.name === symbol); return def ? def.start || def.line : 1; };
     const queue = workflow ? review.reviewQueue(db, item.workflowId).map(change => ({ ...change, detail: change.detail && { ...change.detail, steps: (change.detail.steps || []).map(step => ({ ...step, line: lineOf(step.file, step.symbol) })) } })) : [];
     return { ...base, workflows, workflow, card, queue, outdated: !!status.outdated, activity: activity(db), ...extra };
   }
   function post(item) {
-    if (!item.panel) return;
-    try { void item.panel.webview.postMessage({ type: 'state', state: state(item) }); }
-    catch (error) { void item.panel.webview.postMessage({ type: 'state', state: { error: error.message, workflows: [] } }); }
+    if (!item.host) return;
+    try { void item.host.postMessage({ type: 'stages', state: state(item) }); }
+    catch (error) { void item.host.postMessage({ type: 'stages', state: { error: error.message, workflows: [] } }); }
   }
+  // Where workflows start, found without AI; refreshed when the map changes.
+  function suggestionsFor(item, db) {
+    const graph = item.entry.graph;
+    if (!graph) return [];
+    const signature = Object.keys(graph.files).length + ':' + (graph.scannedAt || '') + ':' + (graph.entries || []).join(',');
+    if (item.suggestionKey !== signature && !item.suggesting) {
+      item.suggesting = true;
+      void computeSuggestions(item, signature).finally(() => { item.suggesting = false; post(item); });
+    }
+    return (item.suggestions || []).map(entry => ({ ...entry, mapped: !!db?.workflow(stages.slug(entry.symbol)) }));
+  }
+  async function computeSuggestions(item, signature) {
+    const graph = item.entry.graph, texts = new Map();
+    const candidates = [...new Set([...(graph.entries || []), ...Object.entries(graph.files).filter(([, file]) => file.entry && !file.test).map(([rel]) => rel), ...(graph.readingPath || []).slice(0, 4).map(step => step.id),
+      ...Object.entries(graph.files).filter(([, file]) => !file.test).sort(([, a], [, b]) => (b.rank || 0) - (a.rank || 0)).slice(0, 4).map(([rel]) => rel)])].slice(0, 16);
+    for (const file of candidates) { try { texts.set(file, await map.readSource(item.entry, file)); } catch { /* Unreadable: ranked by structure only. */ } }
+    item.suggestions = stages.suggestEntries(graph, { texts }).map(entry => {
+      const estimate = stages.estimateWorkflow({ graph, notes: item.entry.notes, explanations: item.entry.explanations, entryFile: entry.file, entrySymbol: entry.symbol });
+      return { ...entry, tokens: estimate.tokens, missingNotes: estimate.missingNotes.length };
+    });
+    item.suggestionKey = signature;
+  }
+  // The project panel hosts the Stages tab.
+  function attach(entry, host) {
+    const item = projectFor(entry);
+    item.host = host; item.entry = entry;
+    try { markChanged(item); } catch { /* Shown on the next post. */ }
+    return item;
+  }
+  function detach(entry) { const item = projects.get(entry.root.toString()); if (item) item.host = undefined; }
 
   // Code that changed while Yamori was closed: hash comparison only.
   function markChanged(item) {
@@ -125,23 +184,21 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (!db || !graph) return;
     for (const workflow of db.workflows()) for (const file of stages.workflowStatus(db, graph, workflow.id).changedFiles) db.markStaleForFile(file);
   }
+  // Open the project panel on its Stages tab.
   async function show(entry, { workflowId, stageId } = {}) {
     const item = projectFor(entry);
-    try { markChanged(item); } catch { /* The panel shows the error state. */ }
     if (workflowId) item.workflowId = workflowId;
     if (stageId) item.open = stageId;
-    if (item.panel) { item.panel.reveal(item.panel.viewColumn); post(item); return item; }
-    const panel = api.window.createWebviewPanel('yamoriStages', 'Stages · ' + path.basename(item.root), { viewColumn: api.ViewColumn.Active ?? api.ViewColumn.One, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
-    if (context.extensionUri && api.Uri.joinPath) panel.iconPath = api.Uri.joinPath(context.extensionUri, 'media', 'yamori.png');
-    panel.webview.html = stagesHTML();
-    item.panel = panel;
-    panel.onDidDispose(() => { item.panel = undefined; });
-    panel.webview.onDidReceiveMessage(async message => {
-      try { item.error = ''; await receive(item, message); }
-      catch (error) { item.error = error.message; }
-      post(item);
-    });
+    await map.showStages(entry);
+    post(item);
     return item;
+  }
+  // A message from the Stages tab: errors show in the tab.
+  async function message(entry, value) {
+    const item = projectFor(entry);
+    try { item.error = ''; await receive(item, value); }
+    catch (error) { item.error = error.message; }
+    post(item);
   }
   // Compact hunks for the preview: changed lines with two lines of context.
   function hunks(before, after) {
@@ -203,7 +260,10 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       case 'ready': if (typeof message.open === 'string') item.open = message.open; break;
       case 'workflow': item.workflowId = message.id; item.open = undefined; db().setMeta('last_workflow', message.id); break;
       case 'openStage': item.open = typeof message.id === 'string' ? message.id : undefined; break;
-      case 'fromEntry': await fromEntry(item.entry); break;
+      case 'map': await fromEntry(item.entry, { file: message.file, symbol: message.symbol }, { choose: !!message.choose }); break;
+      case 'pick': case 'fromEntry': await fromEntry(item.entry); break;
+      case 'useVault': await useVault(item, obsidianOffer(item)?.path); break;
+      case 'dismissVault': await context.globalState?.update('stagesVaultDismissed', true); break;
       case 'refresh': await updateChanged(item, { trigger: 'stages.update' }); break;
       case 'refreshStage': await updateChanged(item, { trigger: 'stages.update', stageId: message.stage }); break;
       case 'regenerate': await regenerate(item); break;
@@ -239,7 +299,10 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       case 'addNote': vaultFor(item).addNote(db(), wf, message.stage, message.text, { author: 'You' }); break;
       case 'openNote': {
         const file = vaultFor(item).findStageNote(wf, message.stage) || (sync(item), vaultFor(item).findStageNote(wf, message.stage));
-        if (file) await api.window.showTextDocument(await api.workspace.openTextDocument(api.Uri.file(file)), { preview: true, viewColumn: api.ViewColumn.Beside });
+        if (!file) break;
+        // In Obsidian when the notes live in a vault; otherwise beside the code.
+        if (vaultFor(item).obsidian && api.env?.openExternal && await api.env.openExternal(api.Uri.parse('obsidian://open?path=' + encodeURIComponent(file)))) break;
+        await api.window.showTextDocument(await api.workspace.openTextDocument(api.Uri.file(file)), { preview: true, viewColumn: api.ViewColumn.Beside });
         break;
       }
       case 'steerPreview': await steerPreview(item, message.stage, typeof message.intent === 'string' ? message.intent : ''); break;
@@ -266,7 +329,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   }
 
   // --- generation ---
-  async function suggestEntries(entry) {
+  async function pickList(entry) {
     const graph = entry.graph, out = [];
     const editor = api.window.activeTextEditor, doc = editor?.document;
     const rel = doc?.uri?.scheme === 'file' ? map.relative(entry, doc.uri) : undefined;
@@ -279,11 +342,22 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     for (const file of graph.entries || []) for (const def of stages.symbolsOf(graph.files[file]).slice(0, 8)) if (!out.some(item => item.file === file && item.symbol === def.name)) out.push({ label: def.name, description: file + ':' + def.line, detail: 'Entry point file', file, symbol: def.name });
     return out;
   }
-  async function fromEntry(entry, picked) {
+  // picked: chosen in the Stages tab, which already showed the cost. Without
+  // it (command palette), Yamori picks the workflow it found and asks once.
+  async function fromEntry(entry, picked, { choose = false, auto = false } = {}) {
     entry = await map.ensureGraph(entry);
     const item = projectFor(entry);
-    if (!item.panel) await show(entry);
-    const choice = picked || await api.window.showQuickPick(await suggestEntries(entry), { title: 'Where does the workflow start?', placeHolder: 'For example the function that runs your agent loop', matchOnDescription: true });
+    if (!item.host) await show(entry);
+    let choice = picked;
+    if (!choice && auto) {
+      if (!item.suggestions) await computeSuggestions(item, 'command');
+      choice = item.suggestions?.[0];
+    }
+    if (!choice) {
+      const found = (item.suggestions || []).map(entry => ({ label: entry.symbol, description: entry.file + ':' + entry.line, detail: 'Found by Yamori · ' + entry.why, file: entry.file, symbol: entry.symbol }));
+      const rest = (await pickList(entry)).filter(row => !found.some(item => item.file === row.file && item.symbol === row.symbol));
+      choice = await api.window.showQuickPick([...found, ...rest], { title: 'Where does the workflow start?', placeHolder: 'Type a function name', matchOnDescription: true });
+    }
     if (!choice) return;
     const db = dbFor(item);
     const { provider, model, request: send } = await request('cheap');
@@ -292,9 +366,9 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     let files = estimate.files;
     const existing = db.workflow(stages.slug(choice.symbol || choice.file));
     if (!existing) {
-      // The first run is the expensive one: say what it costs and allow a narrower set.
+      // The first run is the expensive one: say what it costs (the tab already did, unless this came from elsewhere) and allow a narrower set.
       const notesLine = estimate.missingNotes.length ? ` ${estimate.missingNotes.length} of them need AI notes first (Yamori asks before writing them).` : '';
-      const pick = await api.window.showInformationMessage(`Map stages from ${choice.symbol} across ${files.length} file${files.length === 1 ? '' : 's'}? About ${estimate.tokens.toLocaleString()} tokens, one ${model || provider} call.${notesLine}`, { modal: true }, 'Generate', 'Only these files…');
+      const pick = choose ? 'Only these files…' : picked && !auto ? 'Generate' : await api.window.showInformationMessage(`Map stages from ${choice.symbol}() in ${choice.file} across ${files.length} file${files.length === 1 ? '' : 's'}? About ${estimate.tokens.toLocaleString()} tokens, one ${model || provider} call.${notesLine}`, { modal: true }, 'Generate', 'Only these files…');
       if (!pick) return;
       if (pick === 'Only these files…') {
         const chosen = await api.window.showQuickPick(files.map(file => ({ label: file, picked: true, description: estimate.missingNotes.includes(file) ? 'no AI notes yet' : '' })), { canPickMany: true, title: 'Files to include' });
@@ -395,12 +469,27 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
 
   return {
     show: async (entry, options) => show(await map.ensureGraph(entry), options),
-    fromEntry, regenerate: async entry => { const item = projectFor(entry); await show(entry); await regenerate(item); },
+    attach, detach, message,
+    fromEntry: entry => fromEntry(entry, undefined, { auto: true }), regenerate: async entry => { const item = projectFor(entry); await show(entry); await regenerate(item); },
     saved, updateChanged, post, state, projectFor, dbFor, vaultFor, sync, vaultChanged, request, budget, busy,
     // An agent finished a run (MCP `done`): summarize once, now.
     agentDone(entry) { projectFor(entry).scheduler.done(); },
-    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.steerController?.abort(); item.doneWatch?.close(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); item.panel?.dispose(); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
+    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.steerController?.abort(); item.doneWatch?.close(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
   };
 }
 
-module.exports = { createStages };
+// Obsidian keeps its vault list in obsidian.json; most recently opened first.
+function defaultObsidianConfig() {
+  const home = os.homedir();
+  return process.platform === 'darwin' ? path.join(home, 'Library', 'Application Support', 'obsidian', 'obsidian.json')
+    : process.platform === 'win32' ? path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'obsidian', 'obsidian.json')
+      : path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'obsidian', 'obsidian.json');
+}
+function knownVaults(file) {
+  try {
+    const vaults = Object.values(JSON.parse(fs.readFileSync(file, 'utf8')).vaults || {});
+    return vaults.filter(vault => typeof vault?.path === 'string' && fs.existsSync(path.join(vault.path, '.obsidian'))).sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0) || (b.ts || 0) - (a.ts || 0));
+  } catch { return []; }
+}
+
+module.exports = { createStages, knownVaults };

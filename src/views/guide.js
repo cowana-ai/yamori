@@ -5,6 +5,7 @@
 // details, double-click to explain it. Text is always inserted with textContent.
 const { randomBytes } = require('node:crypto');
 const { BASE_STYLES, LOGO, READING_STYLES, pseudocodeLines, emphasisParts, mathParts, tokenize } = require('./reader');
+const { STAGES_STYLE, stagesClient } = require('./stages');
 
 // Pure helpers run in Node tests and are inserted into the webview script.
 function edgePath(a, b) {
@@ -711,10 +712,12 @@ body[data-chat-focused="true"] #canvas, body[data-chat-focused="true"] #drawer, 
 .plan-terminal[data-focused="true"] .terminal-resizer { display:none; }
 .conversation-project { display:flex; align-items:center; flex-shrink:0; gap:12px; padding:3px 0 12px; color:var(--read-ink); font:13px/1.4 ui-monospace,monospace; }
 .conversation-project .conversation-branch { color:var(--read-muted); font:11px ui-monospace,monospace; background:transparent; border:1px solid var(--read-border); padding:4px 7px; max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+ ${STAGES_STYLE}
+body[data-view="stages"] .search, body[data-view="stages"] #rescan { display:none; }
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${LOGO}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
 <button id="project-branch" class="project-branch" title="Current Git branch. Local metadata, no AI." hidden></button>
-<span class="tabs" role="tablist" aria-label="Yamori navigation"><button id="read-current" title="Read the current script as pseudocode">Read</button><button id="tab-start" role="tab" aria-selected="true" aria-controls="start-view" title="Which files to read first, folder by folder">Files</button><button id="tab-map" role="tab" aria-selected="false" aria-controls="map-view" title="How files connect, grouped by folder">Map</button><button id="tab-plan" role="tab" aria-selected="false" aria-controls="map-view" title="Chat about your project, plan changes and work with your agent">Chat &amp; plan</button></span>
+<span class="tabs" role="tablist" aria-label="Yamori navigation"><button id="read-current" title="Read the current script as pseudocode">Read</button><button id="tab-start" role="tab" aria-selected="true" aria-controls="start-view" title="Which files to read first, folder by folder">Files</button><button id="tab-map" role="tab" aria-selected="false" aria-controls="map-view" title="How files connect, grouped by folder">Map</button><button id="tab-stages" role="tab" aria-selected="false" aria-controls="stages-view" title="Your workflow as a few stages: what each does, what changed since you looked, your notes for agents">Stages</button><button id="tab-plan" role="tab" aria-selected="false" aria-controls="map-view" title="Chat about your project, plan changes and work with your agent">Chat &amp; plan</button></span>
 <form class="search" id="search-form" role="search"><input id="search" type="search" placeholder="Search a name: variable, function, term…" aria-label="Search the project for a variable, function or term" autocomplete="off" spellcheck="false"><button id="search-go" type="submit" title="Highlight every file that mentions it (local, no AI)">Search</button></form>
 <span class="spacer"></span>
 <button id="rescan" title="Re-read changed files. Local and free; no AI.">Rescan</button><button id="notes" title="Ask your selected AI for a one-line purpose per file, project terms and a reading order">Write AI notes</button></div>
@@ -722,6 +725,7 @@ body[data-chat-focused="true"] #canvas, body[data-chat-focused="true"] #drawer, 
 <p id="status" class="status" role="status">Scanning project…</p><p id="agents" class="status agents"></p></header>
 <section id="start-view" class="view" role="tabpanel" aria-labelledby="tab-start"><div class="start-head" id="start-head"></div>
 <div class="start-body"><nav id="folders" aria-label="Choose a folder"></nav><div><h1 class="steps-title" id="steps-title">Start here</h1><p class="steps-hint" id="steps-hint"></p><ol id="steps"></ol></div></div></section>
+<section id="stages-view" class="view" role="tabpanel" aria-labelledby="tab-stages" hidden></section>
 <section id="map-view" class="view" role="tabpanel" aria-labelledby="tab-map" hidden><div class="tools">
 <button id="expand-all" title="Show the files inside every folder">Expand all</button><button id="collapse-all" title="Show folders only">Collapse all</button>
 <button id="zoom-out" title="Zoom out" aria-label="Zoom out">−</button><button id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button><button id="fit" title="Fit the map to the window">Fit</button><button id="reset" title="Put folders back where Yamori placed them">Reset layout</button><button id="drawer-toggle" aria-expanded="false" aria-controls="drawer" title="Show details: the selected file's purpose, terms, what it uses and what uses it, and all project terms">Details</button>
@@ -757,6 +761,8 @@ const mathParts = ${mathParts.toString()};
 const tokenize = ${tokenize.toString()};
 const vscode = acquireVsCodeApi();
 const send = (type, extra = {}) => vscode.postMessage({ type, ...extra });
+${stagesClient()}
+const stagesView = mountStages(document.getElementById('stages-view'), message => send('stages', { message }));
 const SVG = 'http://www.w3.org/2000/svg';
 const svgNode = (tag, attrs = {}, text) => { const el = document.createElementNS(SVG, tag); for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value)); if (text !== undefined) el.textContent = text; return el; };
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el; };
@@ -767,6 +773,17 @@ let positions = new Map(), byId = new Map(), boxes = new Map(), nodeElements = n
 const size = () => ({ width: canvas.clientWidth || 800, height: canvas.clientHeight || 600 });
 const fileName = id => id.split('/').at(-1);
 function show(name) {
+  const stagesNow = name === 'stages';
+  $('tab-stages').setAttribute('aria-selected', String(stagesNow)); $('stages-view').hidden = !stagesNow; document.body.setAttribute('data-view', stagesNow ? 'stages' : '');
+  if (stagesNow) {
+    if (planMode) { planMode = false; document.body.setAttribute('data-planning', 'false'); needsFit = true; }
+    current = 'stages';
+    $('tab-start').setAttribute('aria-selected', 'false'); $('tab-map').setAttribute('aria-selected', 'false'); $('tab-plan').setAttribute('aria-selected', 'false');
+    if ($('plan-actions')) $('plan-actions').hidden = true;
+    $('start-view').hidden = true; $('map-view').hidden = true;
+    stagesView.shown();
+    return;
+  }
   // Plan is the same map with the plan panel beside it.
   const changedMode = planMode !== (name === 'plan');
   planMode = name === 'plan'; if (changedMode) needsFit = true; document.body.setAttribute('data-planning', String(planMode)); current = planMode ? 'map' : name;
@@ -1917,7 +1934,7 @@ function render(s) {
     const found = [...hits.keys()].filter(id => byId.has(id) && positions.has(id)).map(box);
     if (found.length) { const { width, height } = size(); view = fitTransform(found, width, height, 140); needsFit = false; applyView(); }
   }
-  if (s.viewToken && s.viewToken !== viewToken) { viewToken = s.viewToken; show(['map', 'plan'].includes(s.view) ? s.view : 'start'); }
+  if (s.viewToken && s.viewToken !== viewToken) { viewToken = s.viewToken; show(['map', 'plan', 'stages'].includes(s.view) ? s.view : 'start'); }
   if (s.focusToken && s.focusToken !== focusToken && byId.has(s.focus)) { focusToken = s.focusToken; if (current === 'map' && !planMode) select(s.focus, true); }
 }
 // Typing searches after a short pause; Enter searches at once. Results show on the map.
@@ -1930,6 +1947,7 @@ document.addEventListener('keydown', event => { if ((event.metaKey || event.ctrl
 $('tab-start').addEventListener('click', () => { closePlanFiles(); show('start'); });
 $('tab-map').addEventListener('click', () => { closePlanFiles(); show('map'); });
 $('tab-plan').addEventListener('click', () => show('plan'));
+$('tab-stages').addEventListener('click', () => { closePlanFiles(); show('stages'); });
 $('read-current')?.addEventListener('click', () => send('readCurrent'));
 document.addEventListener('keydown', event => {
   if (!planMode || !(event.metaKey || event.ctrlKey) || event.key !== 'z') return;
@@ -1950,6 +1968,7 @@ $('drawer-close').addEventListener('click', () => showDetails(false));
 window.addEventListener('focus', () => send('conversationSync'));
 window.addEventListener('message', event => {
   if (event.data?.type === 'map') render(event.data.state);
+  else if (event.data?.type === 'stages') stagesView.update(event.data.state);
   else if (event.data?.type === 'agentStream' && state.plan?.busy && typeof event.data.reply === 'string') {
     state.plan.busy.reply = event.data.reply;
     const live = $('plan-panel').querySelector?.('.terminal-stream');
