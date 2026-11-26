@@ -37,7 +37,7 @@ function fakeModel() {
     {
       if (kind === 'email') return [
         { id: 'read', name: 'Read inbox', gist: 'Gets unread email.', input: 'mailbox', output: 'unread email', steps: [{ file: 'agents/email/inbox.py', symbol: 'fetch_unread', what: 'Gets the unread email' }] },
-        { id: 'answer', name: 'Answer', gist: 'Writes and sends replies.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email', details: ['Asks the AI once per email', 'Replies even when the AI answer is empty'] }, { file: 'agents/email/inbox.py', symbol: 'reply', what: 'Sends the reply' }] },
+        { id: 'answer', name: 'Answer', gist: 'Writes and sends replies.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email', details: [{ kind: 'ai', text: 'Asks the AI once per email' }, { kind: 'fallback', text: 'Replies even when the AI answer is empty' }] }, { file: 'agents/email/inbox.py', symbol: 'reply', what: 'Sends the reply' }] },
         { id: 'write', name: 'Write text', gist: 'Asks AI for the words.', input: 'prompt', output: 'text', steps: [{ file: 'shared/llm.py', symbol: 'complete', what: 'Asks the AI to write' }] }];
       if (kind === 'sales') return [
         { id: 'load', name: 'Load leads', gist: 'Reads leads.', input: 'CRM', output: 'leads', steps: [{ file: 'agents/sales/crm.py', symbol: 'load_leads', what: 'Reads the leads' }] },
@@ -123,7 +123,8 @@ test('one click maps the whole system: every part, its steps in plain words, and
     await ctx.send({ type: 'openStage', part: 'email-helper', id: 'answer' });
     const card = ctx.last().card;
     assert.deepEqual(card.steps.map(step => step.what), ['Answers each unread email', 'Sends the reply']);
-    assert.deepEqual(card.steps[0].details, ['Asks the AI once per email', 'Replies even when the AI answer is empty']);
+    assert.deepEqual(card.steps[0].details, [{ kind: 'ai', text: 'Asks the AI once per email' }, { kind: 'fallback', text: 'Replies even when the AI answer is empty' }]);
+    assert.deepEqual(state.system.parts.find(part => part.id === 'email-helper').behaviors, { ai: 1, fallback: 1 }, 'part boxes count key behaviors');
     // The deep map read the part's call tree and code, not only file notes.
     const planner = ctx.calls.find(prompt => /CALL TREE \(from "triage_loop"/.test(prompt));
     assert.match(planner, /- triage_loop \(agents\/email\/run\.py:5\)\n {2}- fetch_unread \(agents\/email\/inbox\.py:1\)/);
@@ -138,7 +139,7 @@ test('one click maps the whole system: every part, its steps in plain words, and
     assert.match(systemNote, /# How .* works/); assert.match(systemNote, /\[\[Web server\/Web server\|Web server\]\] starts \[\[Email helper\/Email helper\|Email helper\]\]/);
     const stepNote = fs.readFileSync(path.join(notes, 'Email helper', 'Answer.md'), 'utf8');
     assert.match(stepNote, /Step 2 of 3 in \[\[Email helper\/Email helper\|Email helper\]\]/);
-    assert.match(stepNote, /\*\*How:\*\*\n1\. Answers each unread email\n {4}- Asks the AI once per email\n {4}- Replies even when the AI answer is empty\n2\. Sends the reply/);
+    assert.match(stepNote, /\*\*How:\*\*\n1\. Answers each unread email\n {4}- \*\*AI:\*\* Asks the AI once per email\n {4}- \*\*Fallback:\*\* Replies even when the AI answer is empty\n2\. Sends the reply/);
     assert.match(stepNote, /# Answer\n\nStep 2 of 3/, 'sections keep their blank lines');
     assert.match(stepNote, /> \[!note\]- Where this is in the code/);
     // Mapping again with the same files: no AI.

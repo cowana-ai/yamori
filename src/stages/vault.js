@@ -96,6 +96,16 @@ function codeLinks(file, line, root) {
   return '[open](vscode://cowana-ai.yamori/open?' + query + ') · [cursor](cursor://cowana-ai.yamori/open?' + query + ')';
 }
 const mermaidText = text => String(text || '').replace(/["\[\]{}()<>|#]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+const KIND_LABEL = { decides: 'Decides', ai: 'AI', asks: 'Asks you', writes: 'Writes', reads: 'Reads', loops: 'Loops', fallback: 'Fallback', stops: 'Stops on error', limit: 'Limit', other: '' };
+// Steps with what they call nested under them, and each key behavior labelled.
+function howList(steps) {
+  let top = 0;
+  return steps.filter(step => step.what).map(step => {
+    const pad = '    '.repeat(step.depth || 0), marker = step.depth ? '- ' : (++top) + '. ';
+    const details = (step.details || []).map(detail => pad + '    - ' + (typeof detail === 'string' ? detail : (KIND_LABEL[detail.kind] ? '**' + KIND_LABEL[detail.kind] + ':** ' : '') + detail.text));
+    return [pad + marker + step.what, ...details].join('\n');
+  }).join('\n');
+}
 const linkTo = (dir, file, label) => '[[' + posix(path.relative(dir, file)).replace(/\.md$/, '') + (label ? '|' + label : '') + ']]';
 const GENERATED = new Set(['system', 'part', 'step', 'stage', 'file', 'index']);
 
@@ -172,7 +182,7 @@ class Vault {
           stage.gist ? '**What it does:** ' + stage.gist : '',
           '**Takes:** ' + (stage.input || '—') + ' → **Gives:** ' + (stage.output || '—'),
           [prev ? '**Before:** ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, prev), prev.name) : '', next ? '**Next:** ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, next), next.name) : ''].filter(Boolean).join(' · '), '',
-          steps.some(step => step.what) ? '**How:**\n' + steps.filter(step => step.what).map((step, n) => (n + 1) + '. ' + step.what + (step.details?.length ? '\n' + step.details.map(detail => '    - ' + detail).join('\n') : '')).join('\n') + '\n' : '',
+          steps.some(step => step.what) ? '**How:**\n' + howList(steps) + '\n' : '',
           '**Files:** ' + [...new Set(steps.map(step => step.file))].map(codeLink).join(' · '), '',
           history.length ? '## History\n\n' + history.map(item => '- ' + day(item.at) + ' · ' + item.text).join('\n') + '\n' : '',
           '> [!note]- Where this is in the code', code || '> (no code linked)', '',

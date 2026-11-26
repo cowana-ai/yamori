@@ -148,7 +148,7 @@ class StageDb {
     this.db.exec(SCHEMA);
     // v2: a workflow is a named part of the system; a step says in plain words what it does.
     this.addColumns('workflows', { name: 'TEXT', summary: 'TEXT', folder: 'TEXT', position: 'INTEGER' });
-    this.addColumns('steps', { what: 'TEXT', details: 'TEXT' });
+    this.addColumns('steps', { what: 'TEXT', details: 'TEXT', depth: 'INTEGER', parent: 'TEXT' });
     this.setMeta('schema_version', String(SCHEMA_VERSION));
   }
   addColumns(table, columns) {
@@ -218,7 +218,7 @@ class StageDb {
     const rows = stageId === undefined
       ? this.all('SELECT * FROM steps WHERE workflow_id = ? ORDER BY stage_id, position', workflowId)
       : this.all('SELECT * FROM steps WHERE workflow_id = ? AND stage_id = ? ORDER BY position', workflowId, stageId);
-    return rows.map(row => ({ ...row, details: safeJson(row.details, []) }));
+    return rows.map(row => ({ ...row, depth: row.depth || 0, details: behaviors(safeJson(row.details, [])) }));
   }
   // Replace every unpinned stage with fresh output, keeping pinned stages and
   // their steps exactly. `stages` come in display order.
@@ -249,8 +249,8 @@ class StageDb {
   }
   setSteps(workflowId, stageId, steps) {
     this.run('DELETE FROM steps WHERE workflow_id = ? AND stage_id = ?', workflowId, stageId);
-    steps.forEach((step, position) => this.run('INSERT INTO steps (workflow_id, stage_id, position, file, symbol, line_start, line_end, what, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      workflowId, stageId, position, step.file, step.symbol, step.line_start ?? null, step.line_end ?? null, step.what ?? null, Array.isArray(step.details) && step.details.length ? JSON.stringify(step.details) : typeof step.details === 'string' ? step.details : null));
+    steps.forEach((step, position) => this.run('INSERT INTO steps (workflow_id, stage_id, position, file, symbol, line_start, line_end, what, details, depth, parent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      workflowId, stageId, position, step.file, step.symbol, step.line_start ?? null, step.line_end ?? null, step.what ?? null, Array.isArray(step.details) && step.details.length ? JSON.stringify(step.details) : typeof step.details === 'string' ? step.details : null, step.depth || 0, step.parent || null));
   }
   updateStage(workflowId, id, fields) {
     const allowed = ['name', 'gist', 'input', 'output', 'pinned', 'stale', 'position'];
@@ -317,7 +317,7 @@ class StageDb {
   // --- what each function does, keyed by its code: reused until the code changes ---
   functionNote(file, symbol, hash) {
     const row = this.get('SELECT what, details FROM function_notes WHERE file = ? AND symbol = ? AND hash = ?', file, symbol, hash);
-    return row && { what: row.what, details: safeJson(row.details, []) };
+    return row && { what: row.what, details: behaviors(safeJson(row.details, [])) };
   }
   setFunctionNote(file, symbol, hash, { what, details = [] }) {
     this.run('INSERT INTO function_notes (file, symbol, hash, what, details, at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(file, symbol, hash) DO UPDATE SET what = excluded.what, details = excluded.details, at = excluded.at', file, symbol, hash, what ?? null, JSON.stringify(details || []), now());
@@ -349,6 +349,11 @@ class StageDb {
   }
 }
 
+// Key behaviors of a step, each with a kind the map can draw. Older maps stored plain text.
+const KINDS = ['decides', 'ai', 'asks', 'writes', 'reads', 'loops', 'fallback', 'stops', 'limit', 'other'];
+function behaviors(list) {
+  return (Array.isArray(list) ? list : []).map(item => typeof item === 'string' ? { kind: 'other', text: item } : item && typeof item.text === 'string' ? { kind: KINDS.includes(item.kind) ? item.kind : 'other', text: item.text } : undefined).filter(Boolean);
+}
 function safeJson(text, fallback) { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } }
 function fromStageRow(value) { return { ...value, pinned: !!value.pinned, stale: !!value.stale }; }
 function fromChangeRow(value) {
@@ -366,4 +371,4 @@ function openStageDb(file) {
 }
 function closeStageDb(file) { open.get(file)?.close(); open.delete(file); }
 
-module.exports = { StageDb, StageDbUnavailable, openStageDb, closeStageDb, dbPath, available, dayOf, now, SCHEMA_VERSION };
+module.exports = { behaviors, KINDS, StageDb, StageDbUnavailable, openStageDb, closeStageDb, dbPath, available, dayOf, now, SCHEMA_VERSION };

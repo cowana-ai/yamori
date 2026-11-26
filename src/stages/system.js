@@ -242,6 +242,8 @@ function systemView(db, graph, notes) {
     return { id: workflow.id, name: workflow.name || workflow.entry_symbol || workflow.id, summary: workflow.summary || '', folder: workflow.folder || '', entry: { file: workflow.entry_file, symbol: workflow.entry_symbol },
       files: own.length, reviewed_at: workflow.reviewed_at, pending: view.pending, stale: view.stages.filter(stage => stage.stale).length,
       stages: view.stages.map(stage => ({ id: stage.id, name: stage.name, gist: stage.gist, stale: stage.stale, pending: stage.pending, plus: stage.plus, pinned: stage.pinned, files: stage.files.length })),
+      // How many key behaviors the part has: AI calls, decisions, points where it waits for you.
+      behaviors: db.steps(workflow.id).reduce((counts, step) => { for (const item of step.details || []) counts[item.kind] = (counts[item.kind] || 0) + 1; return counts; }, {}),
       uses: links.filter(link => link.from === workflow.id).map(link => ({ to: link.to, label: link.label })),
       usedBy: links.filter(link => link.to === workflow.id).map(link => ({ from: link.from, label: link.label })) };
   });

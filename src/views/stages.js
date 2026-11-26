@@ -112,6 +112,22 @@ body.vscode-light:not([data-palette="slate"]) #stages-view, body[data-palette="p
 #stages-view .st-how-what { font-weight: 600; }
 #stages-view .st-how-details { margin: 2px 0 0; padding-left: 18px; color: var(--read-muted); font-size: 12px; }
 #stages-view .st-how-details li { margin: 1px 0; }
+#stages-view .st-kind { display: inline-block; font: 600 10px/16px ui-monospace, monospace; padding: 0 5px; border: 1px solid var(--read-border); color: var(--read-ink); white-space: nowrap; }
+#stages-view .st-kind.k-decides { border-color: oklch(75% .14 75); color: oklch(75% .14 75); }
+#stages-view .st-kind.k-ai { border-color: oklch(70% .13 250); color: oklch(72% .13 250); }
+#stages-view .st-kind.k-asks { border-color: oklch(72% .14 150); color: oklch(72% .14 150); }
+#stages-view .st-kind.k-writes, #stages-view .st-kind.k-reads { border-color: oklch(70% .13 300); color: oklch(72% .12 300); }
+#stages-view .st-kind.k-stops, #stages-view .st-kind.k-fallback { border-color: oklch(68% .15 25); color: oklch(70% .15 25); }
+body.vscode-light:not([data-palette="slate"]) #stages-view .st-kind, body[data-palette="paper"] #stages-view .st-kind { filter: brightness(.7) saturate(1.3); }
+#stages-view .st-node-kinds { display: flex; flex-wrap: wrap; gap: 3px; }
+#stages-view .st-node.flowstep { gap: 4px; }
+#stages-view .st-node.flowstep.sub { background: var(--read-page); }
+#stages-view .st-decision { font-size: 11.5px; line-height: 15px; color: oklch(80% .12 75); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#stages-view .st-decision.stops { color: oklch(72% .15 25); }
+#stages-view .st-behaviors { list-style: none; margin: 8px 0 0; padding: 0; }
+#stages-view .st-behaviors li { padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--read-border) 50%, transparent); }
+#stages-view .st-flow-detail { border-color: var(--read-ink); }
+body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[data-palette="paper"] #stages-view .st-decision { color: oklch(45% .12 75); }
 #stages-view .st-foot { margin-top: 18px; }
 #stages-view { --st-c0: oklch(70% .13 250); --st-c1: oklch(72% .14 150); --st-c2: oklch(75% .14 75); --st-c3: oklch(68% .15 20); --st-c4: oklch(70% .13 300); --st-c5: oklch(74% .11 200); --st-c6: oklch(72% .13 110); }
 #stages-view .st-canvas { position: relative; margin: 10px 0 6px; border: 1px solid var(--read-border); background: var(--read-page); background-image: radial-gradient(color-mix(in srgb, var(--read-ink) 12%, transparent) 1px, transparent 1px); background-size: 18px 18px; overflow: hidden; cursor: grab; touch-action: none; }
@@ -258,6 +274,10 @@ function mountStages(root, post) {
   const stageOf = (part, id) => partOf(part)?.stages.find(stage => stage.id === id);
   const stepColor = (part, stageId) => { const index = (partOf(part)?.stages || []).findIndex(stage => stage.id === stageId); return index < 0 ? undefined : 'var(--st-c' + (index % 7) + ')'; };
   const fileName = file => file.split('/').at(-1);
+  // Key behaviors, drawn the same way everywhere.
+  const KIND = { decides: 'Decides', ai: 'AI', asks: 'Asks you', writes: 'Writes', reads: 'Reads', loops: 'Loops', fallback: 'Fallback', stops: 'Stops on error', limit: 'Limit', other: 'Note' };
+  const behaviorChip = (kind, text) => h('span', { class: 'st-kind k-' + kind, title: text || KIND[kind] }, KIND[kind] || kind);
+  const chips = details => [...new Set((details || []).map(item => item.kind).filter(kind => kind !== 'other'))].slice(0, 4).map(kind => behaviorChip(kind, (details || []).filter(item => item.kind === kind).map(item => item.text).join('\n')));
 
   // --- an interactive graph: drag to pan, scroll to zoom, Fit to see it all ---
   function graphView(key, { nodes, edges, width, height, minHeight = 260, maxHeight = 560, label, minZoom = 0.5 }) {
@@ -396,6 +416,7 @@ function mountStages(root, post) {
         part.stale ? h('span', { class: 'st-badge stale', title: 'Code changed; Update refreshes it' }, 'changed') : undefined),
       h('div', { class: 'st-node-text' }, part.summary),
       h('div', { class: 'st-node-flow' }, part.stages.map((stage, index) => [index ? '→' : '', h('span', { style: 'border-color:' + stepColor(part.id, stage.id) }, stage.name)])),
+      h('div', { class: 'st-node-kinds' }, ['ai', 'decides', 'asks', 'writes'].filter(kind => part.behaviors?.[kind]).map(kind => h('span', { class: 'st-kind k-' + kind, title: { ai: 'AI calls', decides: 'Decisions and rules', asks: 'Points where it waits for you', writes: 'Places it writes files' }[kind] }, part.behaviors[kind] + ' ' + { ai: 'AI calls', decides: 'decisions', asks: 'asks you', writes: 'writes' }[kind]))),
       h('div', { class: 'st-node-meta' }, plural(part.stages.length, 'step') + ' · ' + plural(part.files, 'file') + (part.folder ? ' · ' + part.folder : '')));
   }
   function sharedNode(box, selected, dim) {
@@ -416,7 +437,7 @@ function mountStages(root, post) {
       part.usedBy.length || part.uses.length ? h('p', { class: 'st-muted' }, [...part.usedBy.map(entry => partName(entry.from) + ' ' + entry.label + ' it'), ...part.uses.map(entry => 'it ' + entry.label + ' ' + partName(entry.to))].join(' · ')) : undefined,
       filesGraph(part, detail),
       detail.hidden ? h('p', { class: 'st-muted' }, plural(detail.hidden, 'more file') + ' in ' + detail.folder + ' are not shown.') : undefined,
-      h('div', { class: 'st-split' }, stepCard(), fileCard()));
+      stepCard(), fileCard());
   }
   // Files arranged by the part's steps, left to right in the order the work happens:
   // each step's files, then the supporting files they use, then code from other folders.
@@ -488,9 +509,11 @@ function mountStages(root, post) {
     return h('div', { class: 'st-detail' },
       h('h2', {}, h('span', { class: 'st-swatch', style: 'background:' + stepColor(part, stage.id) }), stage.name, stage.stale ? h('span', { class: 'st-badge stale' }, 'changed') : undefined, spacer(), link('openStage', { part, id: '' }, 'Close')),
       h('div', { class: 'st-story' }, h('b', {}, 'Does'), h('span', {}, stage.gist || '—'), h('b', {}, 'Takes'), h('span', {}, stage.input || '—'), h('b', {}, 'Gives'), h('span', {}, stage.output || '—')),
-      stage.steps.some(step => step.what) ? section('How it works', h('ol', { class: 'st-how' }, stage.steps.map(step => h('li', {},
-        h('span', { class: 'st-how-what' }, step.what || step.symbol), ' ', link('openFile', { file: step.file }, fileName(step.file), { title: 'Show this file' }),
-        step.details?.length ? h('ul', { class: 'st-how-details' }, step.details.map(detail => h('li', {}, detail))) : undefined)))) : undefined,
+      stage.steps.length ? section('How it works', h('p', { class: 'st-muted st-hint' }, 'Each box is a step; boxes under it are what it calls. Badges are key behaviors. Click a box for its file.'), stageFlow(part, stage)) : undefined,
+      stage.steps.length ? h('details', { open: !!ui.expanded['list:' + stage.id], data: { expand: 'list:' + stage.id } }, h('summary', {}, 'All steps and behaviors as a list'),
+        h('ul', { class: 'st-how' }, stage.steps.map(step => h('li', { style: 'margin-left:' + (step.depth || 0) * 22 + 'px' },
+          h('span', { class: 'st-how-what' }, step.what || step.symbol), ' ', muted(step.symbol), ' ', link('openFile', { file: step.file }, fileName(step.file), { title: 'Show this file' }),
+          step.details?.length ? h('ul', { class: 'st-how-details' }, step.details.map(detail => h('li', {}, behaviorChip(detail.kind), ' ', detail.text))) : undefined)))) : undefined,
       h('div', { class: 'st-tools' }, state.terminalChat ? go('agentSession', { prefill: 'About ' + partName(part) + ' › ' + stage.name + ': ' }, 'Ask in terminal…', { title: 'Opens your agent session with this step on the prompt' }) : go('changeHere', { kind: 'step', part, stage: stage.id }, 'Change this step…'), link('rename', id, 'Rename'), others.length ? link('merge', id, 'Merge with…') : undefined, link('pin', id, stage.pinned ? 'Let Yamori update it' : 'Keep as is'),
         stage.stale ? link('refreshStage', id, 'Update this step') : undefined, link('toggleCode', { key: part + '/' + stage.id }, showCode ? 'Hide functions' : 'Show functions')),
       showCode ? section('Functions', h('ol', { class: 'st-steps' }, stage.steps.map(step => {
@@ -504,6 +527,45 @@ function mountStages(root, post) {
       section('Notes on this step', stage.notes ? h('pre', {}, stage.notes) : h('p', { class: 'st-muted' }, 'Yamori adds what you change and decide here. Add a rule of your own if you like; your agents read these before they touch this code.'),
         h('div', { class: 'st-tools' }, h('textarea', { id: 'st-note', 'aria-label': 'Add a note', placeholder: 'Optional: a rule or reason…', value: ui.noteDraft || '' }), act('addNote', id, 'Add'), link('openNote', id, state.vault?.obsidian ? 'Open in Obsidian' : 'Open notes file'))));
   }
+  // A stage as a diagram: its steps left to right, what each calls stacked under it,
+  // and key behaviors (decisions, AI calls, waiting for you, files written) on every box.
+  function stageFlow(part, stage) {
+    const W = 236, GX = 54, GY = 12, out = [], edges = [];
+    let column = -1, y = 0, lastTop;
+    // Boxes grow with their text: the step, up to three decisions, its badges.
+    const lines = (text, per) => Math.min(3, Math.ceil(String(text || '').length / per));
+    const decisionsOf = step => (step.details || []).filter(item => item.kind === 'decides' || item.kind === 'stops').slice(0, 3);
+    const height = step => 38 + 17 * lines(step.what || step.symbol, 26) + decisionsOf(step).reduce((sum, item) => sum + 4 + 15 * Math.min(2, lines(item.text, 30)), 0) + (step.details?.length ? 24 : 0);
+    stage.steps.forEach((step, index) => {
+      const id = 'step:' + index + ':' + step.symbol;
+      if (!step.depth) { column++; y = 0; if (lastTop) edges.push({ from: lastTop, to: id }); lastTop = id; }
+      const h2 = height(step), indent = (step.depth || 0) * 14;
+      const content = h('div', { class: 'st-node flowstep' + (step.depth ? ' sub' : '') + (ui.flowStep === stage.id + ':' + index ? ' selected' : ''), data: { act: 'flowStep', key: stage.id + ':' + index }, role: 'button', tabindex: 0,
+        title: step.symbol + ' · ' + step.file + ':' + (step.line_start || '') + (step.details?.length ? '\n\n' + step.details.map(item => (KIND[item.kind] || item.kind) + ': ' + item.text).join('\n') : '') },
+        h('b', {}, step.what || step.symbol),
+        decisionsOf(step).map(item => h('div', { class: 'st-decision' + (item.kind === 'stops' ? ' stops' : '') }, (item.kind === 'stops' ? '⚠ ' : '◆ ') + item.text)),
+        step.details?.length ? h('div', { class: 'st-node-kinds' }, chips(step.details)) : undefined,
+        h('div', { class: 'st-node-meta' }, step.symbol + ' · ' + fileName(step.file)));
+      out.push({ id, x: column * (W + GX) + indent, y, w: W - indent, h: h2, content, step });
+      if (step.depth) { const parent = [...out].reverse().find(item => item.step.depth === step.depth - 1 && item !== out.at(-1)); if (parent) edges.push({ from: parent.id, to: id, soft: true }); }
+      y += h2 + GY;
+    });
+    const width = (column + 1) * (W + GX) - GX, tall = Math.max(...out.map(item => item.y + item.h));
+    const picked = ui.flowStep?.startsWith(stage.id + ':') ? stage.steps[Number(ui.flowStep.slice(stage.id.length + 1))] : undefined;
+    return [graphView('flow:' + part + '/' + stage.id, { nodes: out, edges, width, height: tall, minHeight: 240, maxHeight: 640, minZoom: 0.75, label: 'How ' + stage.name + ' works' }), picked ? flowStepDetail(picked) : undefined];
+  }
+  // Everything about one step: what it does, every key behavior, and where it is.
+  function flowStepDetail(step) {
+    const caller = step.parent ? stagesStep(step.parent) : undefined;
+    return h('div', { class: 'st-detail st-flow-detail' },
+      h('h2', {}, step.what || step.symbol, spacer(), link('flowStep', { key: '' }, 'Close')),
+      h('div', { class: 'st-row' }, act('jump', { file: step.file, line: step.line_start || 1 }, step.symbol + ' · ' + step.file + ':' + (step.line_start || '?'), { class: 'st-chip', title: 'Open the source line' }),
+        link('flow', { file: step.file, line: step.line_start || 1 }, 'Read it beside the code'), link('openFile', { file: step.file }, 'About this file'),
+        state.terminalChat ? link('agentSession', { prefill: 'About ' + step.symbol + ' in ' + step.file + ': ' }, 'Ask in terminal') : undefined),
+      caller ? h('p', { class: 'st-muted' }, 'Called by: ' + (caller.what || caller.symbol)) : undefined,
+      step.details?.length ? h('ul', { class: 'st-behaviors' }, step.details.map(item => h('li', {}, behaviorChip(item.kind), ' ', item.text))) : h('p', { class: 'st-muted' }, 'No key behaviors recorded for this step.'));
+  }
+  const stagesStep = key => state.card?.steps.find(step => step.file + '#' + step.symbol === key);
   function fileCard() {
     const file = state.file;
     if (!file) return undefined;
@@ -684,6 +746,7 @@ function mountStages(root, post) {
       case 'zoom': { const v = ui.views[data.key]; const canvas = target.closest('.st-canvas'); if (!v || !canvas) return; const w = canvas.clientWidth / 2, hh = canvas.clientHeight / 2, k = Math.max(0.15, Math.min(2.5, v.k * Number(data.by))); ui.views[data.key] = { ...v, k, x: w - (w - v.x) * k / v.k, y: hh - (hh - v.y) * k / v.k }; canvas.querySelector('.st-world')?.setAttribute('transform', 'translate(' + ui.views[data.key].x + ' ' + ui.views[data.key].y + ') scale(' + k + ')'); return; }
       case 'fit': target.closest('.st-canvas')?.fit?.(); return;
       case 'allSupport': ui.allSupport = !ui.allSupport; render(); return;
+      case 'flowStep': ui.flowStep = ui.flowStep === data.key || !data.key ? undefined : data.key; render(); return;
       case 'resetLayout': if (state.layouts) delete state.layouts[data.key]; delete ui.views[data.key]; send('layout', { key: data.key, reset: true }); render(); return;
       case 'fullGraph': ui.full = ui.full === data.key ? undefined : data.key; render(); return;
       case 'hideGraph': ui.hidden[data.key] = true; if (ui.full === data.key) ui.full = undefined; render(); return;

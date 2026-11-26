@@ -385,3 +385,16 @@ test('a Python package that lives elsewhere in a monorepo (src layout) resolves,
   assert.deepEqual(project.resolveImport('orchestrator/src/cli.py', { kind: 'module', spec: 'mla_contracts', names: ['pitch'] }, ctx), ['packages/contracts/src/mla_contracts/__init__.py', 'packages/contracts/src/mla_contracts/pitch.py']);
   assert.deepEqual(project.resolveImport('orchestrator/src/cli.py', { kind: 'module', spec: 'util', names: [] }, ctx), [], 'two packages named util: no guess');
 });
+
+test('sub-steps come from the call tree: what a step calls is nested under it, plumbing is skipped, nothing is listed twice', () => {
+  const node = (symbol, calls = [], lines = 10, file = 'a.py') => ({ id: file + '#' + symbol + ':1', file, symbol, kind: 'function', line: 1, end: 1 + lines, calls: calls.map(name => 'a.py#' + name + ':1') });
+  const tree = { nodes: [
+    node('propose', ['rank', 'log_event', 'save']), node('rank', ['ask_judge', 'Score']), node('ask_judge', ['build_request']), node('build_request', ['deep_helper']), node('deep_helper'),
+    node('log_event'), node('save'), { ...node('Score'), kind: 'class' } ] };
+  const list = [{ id: 'plan', steps: [{ file: 'a.py', symbol: 'propose' }] }, { id: 'store', steps: [{ file: 'a.py', symbol: 'save' }] }];
+  stages.addSubSteps(list, tree);
+  assert.deepEqual(list[0].steps.map(step => [step.symbol, step.depth, step.parent || null]), [['propose', 0, null], ['rank', 1, 'a.py#propose'], ['ask_judge', 2, 'a.py#rank']],
+    'rank and its judge sit under propose; logging, a data class, the step another stage owns, and anything deeper than two levels stay out');
+  assert.deepEqual(list[1].steps.map(step => step.symbol), ['save']);
+  assert.deepEqual(stages.typedDetails(['plain text', { kind: 'decides', text: 'Eligible only if demand >= 0.5' }, { kind: 'weird', text: 'x' }]), [{ kind: 'other', text: 'plain text' }, { kind: 'decides', text: 'Eligible only if demand >= 0.5' }, { kind: 'other', text: 'x' }]);
+});

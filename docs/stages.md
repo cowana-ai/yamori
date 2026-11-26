@@ -12,6 +12,10 @@ Open the System tab and click **Map my system**. The tab says up front about how
    - a **planner** reads the part's README and call tree (no code) and splits the part into 3–8 stages in the order the work happens, with the functions that do each one. A part driven from outside (an MCP server's tools, a CLI's commands) is ordered by the workflow its docs and tool descriptions describe;
    - **step writers**, one per stage and in parallel, read only that stage's code (saved pseudocode where Yamori has it) and say what each function does, with up to four details that matter when steering: decisions and limits ("keeps at most 5 sources"), fallbacks ("if the AI call fails, keeps every source"), which AI or prompt it uses, what it reads and writes.
 
+   - **sub-steps**, built from the call tree without AI: under each step, the functions it calls (two levels deep), so inner logic such as a ranking or a judge is on the map even when the planner lists only the function that calls it. Plumbing (logging, tracing, settings, helper folders such as `utils` and `config`) is left out.
+
+   Every key behavior has a kind: **Decides** (a rule or threshold), **AI** (asks a model, and what for), **Asks you** (waits for a person), **Writes** and **Reads** (files, folders, services), **Loops**, **Fallback**, **Stops on error**, **Limit**.
+
    What each function does is saved against a hash of its code, so mapping again or updating reuses every unchanged function without a call. At most 4 AI calls run at once (`yamori.parallelRequests`).
 
    On a 49-file research agent (153 functions, 62 steps): 36 seconds and $0.017 to map, against 114 seconds and $0.016 for one big call; mapping it again reused 51 functions' descriptions and cost $0.014.
@@ -30,7 +34,9 @@ Click a part to open it below the map, which stays in view:
 
 - **Its files, step by step**: one column per step in the order the work happens, then the code it uses from other folders. The helper files the steps use are folded into one box; click it to show them. Colors are steps. Click a file and its links light up.
 - **A file** shows what it is for, which steps of which parts use it, its pseudocode block by block when Yamori already wrote it (no AI call; each block's line range opens Read there), what it uses and what uses it, and its functions.
-- **A step** shows what it does, takes and gives, and how; **Show functions** lists the code behind it, with **Move to…** another step. **Rename**, **Merge with…** and **Keep as is** fix the grouping; updates keep your changes.
+- **A step** shows **How it works** as a diagram: its steps left to right, what each calls stacked under it, every box with its behavior badges and up to three decisions or stop conditions written on it. Click a box for all of that step's behaviors, with links to the line, Read and your terminal agent. The same steps are also listed in full under **All steps and behaviors as a list**.
+- Part boxes on the map count their key behaviors, for example "14 AI calls · 49 decisions · 19 writes".
+- **A step card** also shows what the stage does, takes and gives, and how; **Show functions** lists the code behind it, with **Move to…** another step. **Rename**, **Merge with…** and **Keep as is** fix the grouping; updates keep your changes.
 
 ## Chat, plan and change things in the terminal
 
