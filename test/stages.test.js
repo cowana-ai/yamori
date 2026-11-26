@@ -326,3 +326,20 @@ test('the stage screen script parses', () => {
   const script = /<script nonce="[^"]+">([\s\S]*)<\/script>/.exec(html)[1];
   assert.doesNotThrow(() => new Function(script));
 });
+
+test('without cached pseudocode a refresh compares the function at the base commit with the current one', { skip }, async () => {
+  const ctx = await setup();
+  ctx.explanations = {};
+  const model = fakeModel(prompt => /Code behind one stage changed/.test(prompt) ? { name: 'Evaluate result', gist: 'g', input: 'a', output: 'b', steps: [{ file: 'agent/evaluator.py', symbol: 'grade' }], behaviorChanged: true, summary: 'Evaluate now scores zero when there are no results.' } : STAGES);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  ctx.graph.files['agent/evaluator.py'].hash = 'edited';
+  stages.fileChanged(ctx.db, 'agent/evaluator.py', 'edited');
+  await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db),
+    readExcerpt: async () => '9: def grade(results):\n10:     if not results: return 0.0', readBefore: async (file, symbol) => symbol === 'grade' ? '9: def grade(results):\n10:     return len(results)' : undefined });
+  const prompt = model.calls.at(-1).prompt;
+  assert.match(prompt, /"before":"SOURCE EXCERPT:\\n9: def grade\(results\):\\n10:     return len\(results\)"/);
+  assert.match(prompt, /if not results: return 0\.0/);
+  assert.match(prompt, /"before":"\(not recorded\)"/, 'a step without any baseline says so');
+  const [change] = ctx.db.changes(workflowId);
+  assert.ok(change.detail.steps.every(step => step.before === '' && step.after === ''), 'source is never stored in the change log');
+});

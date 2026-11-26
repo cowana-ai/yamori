@@ -338,11 +338,20 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const { provider, model, request: send } = await request('cheap');
     item.lastModel = model;
     const readExcerpt = async (file, from, to) => { try { return (await map.readSource(entry, file)).split('\n').slice(from - 1, to).map((line, index) => (from + index) + ': ' + line).join('\n'); } catch { return undefined; } };
+    // A function's text at the map's base commit (git, no model call).
+    const readBefore = async (file, symbol) => {
+      const base = db.workflow(targets[0])?.base_sha;
+      if (!base || !map.readAtCommit) return undefined;
+      const text = await map.readAtCommit(entry, base, file);
+      if (!text) return undefined;
+      const def = await map.findDefinition(file, text, symbol);
+      return def && text.split('\n').slice(def.from - 1, Math.min(def.to, def.from + 60)).map((line, index) => (def.from + index) + ': ' + line).join('\n');
+    };
     const run = createRun(db, { budget: budget(), trigger });
     let calls = 0; const skipped = [];
     await busy(item, 'Updating changed stages…', async () => {
       for (const workflowId of targets) {
-        const common = { db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, workflowId, request: send, run, provider, model, headSha: await head(item), readExcerpt, signal };
+        const common = { db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, workflowId, request: send, run, provider, model, headSha: await head(item), readExcerpt, readBefore, signal };
         if (stageId) { calls += (await stages.refreshStage({ ...common, stageId })).calls; continue; }
         const result = await stages.refreshStale(common);
         calls += result.calls; skipped.push(...result.skipped);

@@ -1379,6 +1379,8 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       await api.commands.executeCommand('vscode.diff', left, target, path.basename(rel) + ' · ' + base.slice(0, 7) + ' → working tree', { preview: true, selection: new api.Range(at, 0, at, 0) });
     },
     fileUri: (entry, rel) => fileUri(entry, rel),
+    readAtCommit: (entry, sha, rel) => require('./project/diff-review').readBlob(entry.root.fsPath, sha, rel).catch(() => undefined),
+    async findDefinition(rel, text, name) { const def = (await indexer.extract(rel, text)).defs.find(item => item.name === name); return def && { from: def.start || def.line, to: def.end || def.line }; },
     isDirty: (entry, rel) => !!(api.workspace.textDocuments || []).find(doc => doc.uri.scheme === 'file' && doc.isDirty && relative(entry.root.fsPath, doc.uri.fsPath) === rel),
     // Steer writes only mapped files, through a real path inside the project.
     async writeSource(entry, rel, text) {

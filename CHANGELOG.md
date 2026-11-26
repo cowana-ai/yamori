@@ -7,6 +7,15 @@
 - **Stage notes in Obsidian.** Each card has a note box. Notes sync to `yamori.obsidian.vaultPath` (or `.yamori/notes/`) as stage notes, file notes, an index and a dated change log. Yamori rewrites only its managed section; renaming a stage in front matter pins it.
 - **Stages for agents.** The MCP server adds `list_stages`, `get_stage`, `what_changed` (no model calls), `add_note`, `done`, and a rate-limited, budgeted `propose_change`. Connect also registers Yamori with Cursor when it is installed.
 - **Steer a stage.** State an intent on a stage card to preview a multi-file change (main model, the stage's own code only, your notes as constraints), apply it to every file or none, and undo it. Or leave the intent in the stage's notes for your next agent run.
+- **Stage token benchmark.** On the sample agentic repo in `test/fixtures/agent-repo` (6 files, Plan → Act → Evaluate), with Claude Code and Haiku for stage work, measured 2026-11-26:
+
+  | Run | Model calls | Input | Cached | Output | Reported cost |
+  |---|---|---|---|---|---|
+  | First run: AI notes + stage generation | 2 | 2,873 | 8,808 | 4,288 | $0.0028 |
+  | Rerun, no code change | 0 | 0 | 0 | 0 | $0 |
+  | Incremental: 1 file used by 1 stage | 1 | 2,642 | 8,522 | 894 | $0.0011 |
+
+  The incremental update cost 61% less than the first run. On a repo this small, most input tokens are the Claude Code CLI's own fixed, cached prompt, so total tokens fell only 25%; the gap grows with the number of files a workflow covers, because an update sends one stage and its changed functions, not the workflow.
 
 ### 0.27.1 · 2026-11-26
 
