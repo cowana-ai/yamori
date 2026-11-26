@@ -79,6 +79,8 @@ const LOGIC_STYLE = [
   '.logic-flow-canvas.isolating .logic-flow-node:not(.connected) { opacity:.35; } .logic-flow-canvas.isolating .logic-flow-svg path:not(.connected) { opacity:.1; } .logic-flow-canvas.isolating .logic-flow-svg path.connected { opacity:.95; }',
   '.logic-flow-node[data-behavior],.logic-flow-mode .logic-row[data-behavior],.logic-flow-mode .logic-card[data-behavior] { border-inline-start:3px solid var(--diff-add); } .logic-flow-node[data-behavior="removed"],.logic-flow-mode .logic-row[data-behavior="removed"],.logic-flow-mode .logic-card[data-behavior="removed"] { border-inline-start-color:var(--diff-remove); } .logic-flow-node[data-behavior="touched"],.logic-flow-mode .logic-row[data-behavior="touched"],.logic-flow-mode .logic-card[data-behavior="touched"] { border-image:linear-gradient(var(--diff-add) 50%,var(--diff-remove) 50%) 1; border-image-width:0 0 0 3px; } .logic-flow-node[data-behavior] { background:color-mix(in srgb,var(--diff-add) 8%,var(--read-surface)); }',
   '.logic-flow-number { font:10px/1.5 var(--logic-mono); color:var(--read-muted); } .logic-flow-risk { margin-inline-start:auto; color:var(--logic-warning); }',
+  '.logic-updating { display:inline-block; flex:none; width:8px; height:8px; margin-inline-start:auto; border:1.5px solid var(--read-muted); border-top-color:transparent; border-radius:50%; animation:logic-spin .8s linear infinite; } .logic-flow-risk + .logic-updating { margin-inline-start:3px; } .logic-badge .logic-updating { margin-inline:0 4px; vertical-align:-1px; } @keyframes logic-spin { to { transform:rotate(360deg); } } @media (prefers-reduced-motion:reduce) { .logic-updating { animation:none; border-top-color:var(--read-muted); opacity:.6; } }',
+  '.logic-flow-mode.card-inline .logic-flow-graph { max-height:min(230px,34vh); } .logic-auto-notice { font-size:11px; }',
   '.logic-flow-mode .logic-file p { white-space:normal; overflow-wrap:anywhere; } .logic-story { margin:3px 0 0; } .logic-story div { display:grid; grid-template-columns:38px minmax(0,1fr); gap:5px; } .logic-story dd { margin:0; overflow-wrap:anywhere; }',
   '.logic-flow-mode .logic-row-main { grid-template-columns:2ch minmax(0,1fr) fit-content(38%); align-items:start; } .logic-flow-mode .logic-row-main>.logic-index { display:block; padding-top:4px; } .logic-flow-mode .logic-row-main>.logic-disclosure,.logic-flow-mode .logic-row-main>input { display:none; }',
   '.logic-flow-stage { margin:7px 5px 3px; display:flex; align-items:center; gap:8px; } .logic-flow-stage::after { content:""; flex:1; border-top:1px solid var(--read-border); } .logic-gist-step,.logic-behavior-summary { margin:1px 0 4px 3px; overflow-wrap:anywhere; color:var(--read-muted); } .logic-behavior-summary { font-size:11px; } .logic-behavior-summary s { color:var(--diff-remove); } .logic-behavior-summary ins { color:var(--diff-add); text-decoration:none; }',
@@ -94,7 +96,7 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
   const reviewFilters = ['all', 'changed', 'risk', 'unreviewed'];
   let state, shell, toolbar, filters, log, fileHeader, scroll, list, topSpacer, bottomSpacer, shortcuts, command, prompt, scopeChip, sendButton, proposal, composerSelect, terminalStatus;
   let terminalRequest, terminalError;
-  let filter = 'all', selected, full, auto, cursor, activeStep, rangeStart, draft, activityOpen = false, clearedScope = false;
+  let filter = 'all', selected, full, inlineCard = false, auto, cursor, activeStep, rangeStart, draft, activityOpen = false, clearedScope = false;
   let visible = [], rowWindow = [], rendered = new Map(), heights = new Map(), scrollTop = 0, resize, windowFrame, commandId = 0;
   let activityView, graph, flowOutline, flowFull, flowBack, graphView, graphResize, edgeFrame, demandSignature = '';
   let lastVisible = '', lastDoc, lastFocus, cursorChanged, needsMeasure, wasRunning = false, composerProvider;
@@ -109,6 +111,7 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
   const rows = () => state.workspace.rows;
   const section = row => state.workspace.sections[row.index];
   const record = id => rows().find(row => row.identity === id);
+  const updating = row => !!(row.generating || row.queued);
   const documentKey = () => state.documentKey;
   const canAsk = () => state.workspace.editable && !state.sourceMissing;
   const canEdit = row => canAsk() && !state.workspace.undo?.busy && !state.busy && !row.changed && !row.missing;
@@ -164,7 +167,7 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
     if (!row) return;
     selected = row.identity; activeStep = rangeStart = undefined; clearedScope = false;
     if (reveal) sendRow('reveal', row);
-    if (flowMode() && full && !draft) { full = row.identity; scroll.scrollTop = 0; }
+    if (flowMode() && full && !draft) { full = row.identity; inlineCard = !!(row.changed || row.behavior || updating(row)); scroll.scrollTop = 0; }
     if (!full && !rendered.has(selected)) {
       scroll.scrollTop = offsetAt(outlineRows().indexOf(row));
       scrollTop = scroll.scrollTop;
@@ -199,6 +202,8 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
     if (!full) scrollTop = scroll.scrollTop;
     if (selected !== row.identity) activeStep = rangeStart = undefined;
     full = row.identity; selected = row.identity;
+    // A changed block opens under the graph, so its ± and neighbours stay in view.
+    inlineCard = flowMode() && !!(row.changed || row.behavior || updating(row));
     if (flowMode()) {
       clearedScope = false;
       sendRow('reveal', row); scroll.scrollTop = 0;
@@ -210,7 +215,7 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
   function back() {
     if (draft) return;
     const outlineTop = scrollTop;
-    full = undefined;
+    full = undefined; inlineCard = false;
     paint();
     scroll.scrollTop = outlineTop;
     if (flowMode()) {
@@ -423,6 +428,7 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
       if (behavior) toolbar.append(node('span', behavior + ' behavior change' + (behavior === 1 ? '' : 's'), 'logic-muted'));
       if (filter !== 'all') toolbar.append(button('Clear filter', () => setFilter('all')));
     } else toolbar.append(ticks);
+    if (state.workspace.autoRefresh?.notice) toolbar.append(node('span', state.workspace.autoRefresh.notice, 'logic-muted logic-auto-notice'));
     if (!state.workspace.online) toolbar.append(button('Cached · offline', () => send('setup'), 'Connect a provider to update'));
     const activity = button('Activity', () => { activityOpen = !activityOpen; logState(); activity.setAttribute('aria-expanded', String(activityOpen)); }, undefined, 'activity-toggle');
     activity.setAttribute('aria-expanded', String(activityOpen));
@@ -703,7 +709,15 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
     });
     removedSteps(steps, diff, 'end');
     if (card && fields.children.length) body.append(fields);
-    if (row.changed && !diff) body.append(hint(state.busy ? 'Updating pseudocode…' : 'Refresh this block to compare with its cached steps.'));
+    if (row.changed && !diff) {
+      const status = hint(updating(row) || state.busy ? 'Updating pseudocode…' : 'Refresh this block to compare with its cached steps.');
+      if (updating(row)) { status.prepend(node('span', '', 'logic-updating'), document.createTextNode(' ')); status.setAttribute('role', 'status'); }
+      body.append(status);
+    } else if (updating(row)) {
+      const status = hint('Updating pseudocode…');
+      status.prepend(node('span', '', 'logic-updating'), document.createTextNode(' ')); status.setAttribute('role', 'status');
+      body.append(status);
+    }
     if (flowMode() && card) body.append(node('div', 'Steps', 'logic-field-label'));
     body.append(steps);
     if (effects.children.length) body.append(effects);
@@ -805,10 +819,14 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
       expanded.add(row.identity); choose(row, false); rendered.get(row.identity)?.el.querySelector?.('.logic-edges')?.scrollIntoView?.({ block: 'nearest' });
     }, 'Show Worth checking', 'logic-badge logic-warning'));
     if (row.failed) flags.append(node('span', 'Couldn’t generate', 'logic-badge logic-warning'));
-    if (row.changed) flags.append(button(flowMode() ? 'Needs update' : 'Changed', () => {
-      if (flowMode()) zoom(row);
-      else { expanded.add(row.identity); choose(row, false); }
-    }, 'Show changed block', 'logic-badge'));
+    if (row.changed) {
+      const badge = button(updating(row) ? 'Updating…' : flowMode() ? 'Needs update' : 'Changed', () => {
+        if (flowMode()) zoom(row);
+        else { expanded.add(row.identity); choose(row, false); }
+      }, 'Show changed block', 'logic-badge');
+      if (updating(row)) { badge.prepend(node('span', '', 'logic-updating')); badge.setAttribute('aria-busy', 'true'); }
+      flags.append(badge);
+    }
     else if (!flowMode() && (state.inlineDiff?.blocks?.[row.index] || state.workspace.diffs?.[row.index])) flags.append(node('span', '+/−', 'logic-badge'));
     main.append(disclosure, check, node('span', String((row.order ?? row.index) + 1).padStart(2, '0'), 'logic-index'), center, flags);
     return { main, tag };
@@ -946,7 +964,7 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
 
   function graphState(all) {
     if (!flowMode()) return;
-    const signature = JSON.stringify(all.map(row => [row.index, row.identity, row.title, row.stage, row.risk, row.behavior?.kind,
+    const signature = JSON.stringify(all.map(row => [row.index, row.identity, row.title, row.stage, row.risk, row.behavior?.kind, updating(row),
       row.tokenEstimates?.[chosenProvider()]])) + ':' + chosenProvider() + ':' + JSON.stringify(state.workspace.flow.usage || {});
     if (!graphView || graphView.signature !== signature) {
       const viewport = node('div', undefined, 'logic-flow-viewport'), oldLeft = graphView?.viewport?.scrollLeft || 0, oldTop = graphView?.viewport?.scrollTop || 0;
@@ -975,8 +993,9 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
           chip.append(node('span', String((row.order ?? row.index) + 1).padStart(2,'0'), 'logic-flow-number'), node('span', label));
           if (row.behavior) { chip.dataset.behavior = row.behavior.kind; chip.append(node('span', '±', 'logic-flow-number')); }
           if (row.riskCount) chip.append(node('span', '⚠', 'logic-flow-risk'));
+          if (updating(row)) { const spin = node('span', '', 'logic-updating'); spin.setAttribute('role', 'img'); spin.setAttribute('aria-label', 'Updating'); chip.append(spin); }
           const tokens = rowTokenEstimate(row);
-          chip.title = row.title + (tokens ? '\n' + tokens.title : '');
+          chip.title = row.title + (updating(row) ? ' · Updating…' : '') + (tokens ? '\n' + tokens.title : '');
           chip.addEventListener('pointerenter', event => {
             if (event.pointerType !== 'touch') focusFlowDependencies(row.index);
           });
@@ -1079,13 +1098,16 @@ function logicWorkspaceUI({ node, send, appendInline, appendReply, edgeMark, par
     if (!shell) return;
     if (full && !filtered().some(row => row.identity === full)) full = undefined;
     if (flowMode()) {
-      const focused = !!full;
+      const focused = !!full, inline = focused && inlineCard;
       shell.classList.toggle('card-open', focused);
-      graph.hidden = fileHeader.hidden = flowOutline.hidden = flowFull.hidden = focused;
+      shell.classList.toggle('card-inline', inline);
+      fileHeader.hidden = flowOutline.hidden = flowFull.hidden = focused;
+      graph.hidden = focused && !inline;
       flowBack.hidden = !focused;
       flowBack.disabled = !!draft;
       flowFull.disabled = !filtered().length;
       if (!focused) { graphState(rows()); storyState(); }
+      else if (inline) graphState(rows());
       else if (graphView?.hovered !== undefined) focusFlowDependencies();
       sendDemand();
       renderShortcuts();

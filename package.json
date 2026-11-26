@@ -347,6 +347,21 @@
           "default": true,
           "description": "Save pseudocode on this computer and show it immediately when you reopen an unchanged file, with no model request. A changed file keeps saved text for blocks whose source did not change. Turn off to generate again every time. Yamori: Clear Cached Explanations deletes saved explanations either way. Saved explanations and name flows are kept under about 64 MB; the least recently opened ones are dropped first."
         },
+        "yamori.autoRefresh": {
+          "type": "string",
+          "enum": [
+            "changedBlocks",
+            "off",
+            "wholeFile"
+          ],
+          "enumDescriptions": [
+            "About 2 seconds after you save, update only the blocks whose code changed. Unchanged blocks are reused from the cache.",
+            "Mark changed blocks Needs update and wait for Update all.",
+            "About 2 seconds after you save a changed file, write every block again."
+          ],
+          "default": "changedBlocks",
+          "markdownDescription": "Update pseudocode after you save a file open in Yamori. Rapid saves are combined, a newer save cancels an update in progress, and nothing runs for large files or during a git rebase or merge."
+        },
         "yamori.codeLens": {
           "type": "boolean",
           "default": true,

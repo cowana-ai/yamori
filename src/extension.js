@@ -12,6 +12,7 @@ const { parseCard } = require('./ai/cards');
 const logicWorkspace = require('./project/reader-workspace');
 const { inputComparison, estimateTokens, isReadingQuestion } = require('./project/token-estimates');
 const { createStepPreview } = require('./project/step-preview');
+const autoRefreshing = require('./project/auto-refresh');
 const { panelHTML } = require('./views/reader');
 const { createDiffReview } = require('./views/diff-review');
 const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks, dependencyFingerprint, reconcileRefresh, refreshSupport, verifyBlockHashes, acceptsCache, isCurrent, CACHE_SCHEMA_VERSION } = require('./storage/cache');
@@ -2064,7 +2065,7 @@ async function activate(context) {
     if (reader && selection) reader.cursorAt((selection.isEmpty ? selection.active : selection.start).line + 1);
   }));
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => { for (const reader of readers.values()) reader.changed(event); }));
-  if (vscode.workspace.onDidSaveTextDocument) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => { projectMap.saved(doc.uri); for (const reader of readers.values()) void reader.check(doc.uri, 'save').catch(() => {}); }));
+  if (vscode.workspace.onDidSaveTextDocument) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => { projectMap.saved(doc.uri); for (const reader of readers.values()) { void reader.check(doc.uri, 'save').catch(() => {}); reader.saved(doc.uri); } }));
   if (vscode.window.onDidChangeWindowState) context.subscriptions.push(vscode.window.onDidChangeWindowState(state => { if (state.focused) { projectMap.rescanOpen(); for (const reader of readers.values()) void reader.check(undefined, 'focus').catch(() => {}); } }));
   // First run: the setup screen when no AI is ready yet, otherwise a pointer
   // to the gecko.
@@ -2087,7 +2088,8 @@ function createReader(context, navigation) {
   let online = true, logic = { reviews: {}, activity: [] }, logicLoaded, logicCursor, cursorTimer;
   let readerUsage, fileGist, fileUsage, demandKeys = new Set(), demandTimer, demandJob, flowOn = false, visibleBlocks = [], workspaceMemo, previousLogic, refreshJob, lastLogicStatus, failedLogicBlocks = new Set();
   const writingBlocks = new Set();
-  let openFillHash;
+  const autoRefresh = autoRefreshing.createAutoRefresh(runAutoRefresh);
+  let openFillHash, autoNotice = '';
   // Unit tests per block, and notebook-style runs keyed by block index.
   let blockTests = {}, runs = {}, runsKey;
   const runControllers = new Map();
@@ -2139,7 +2141,7 @@ function createReader(context, navigation) {
     post();
   }
   const dailyBudget = () => Math.max(0, Number(setting(vscode, 'tokenBudgetPerFilePerDay', 0)) || 0);
-  async function confirmBudget(snapshot, opts, blocks, selected, cards = [], baseline) {
+  async function confirmBudget(snapshot, opts, blocks, selected, cards = [], baseline, auto = false) {
     const budget = dailyBudget();
     if (!budget) return true;
     const prompt = selected.length ? gistPrompt(snapshot, blocks, selected) + JSON.stringify(GIST_SCHEMA) : '';
@@ -2150,6 +2152,8 @@ function createReader(context, navigation) {
     }, 0);
     const used = fileUsage?.day === usageDay() ? fileUsage.input + fileUsage.output + fileUsage.cacheWrite + fileUsage.cacheRead : 0;
     if (!estimate || used + estimate <= budget) return true;
+    // Never interrupt a save with a modal; the user can still choose Update all.
+    if (auto) { autoNotice = 'Auto-update paused: it may exceed the daily token budget. Use Update all to continue.'; return false; }
     const pick = await vscode.window.showWarningMessage('Yamori may exceed the daily token budget for ' + snapshot.name +
       '. Used ' + used.toLocaleString() + ' of ' + budget.toLocaleString() + ' tokens, including cached reads. Estimated upcoming input is ' +
       estimate.toLocaleString() + ' tokens.', { modal: true }, 'Continue');
@@ -2257,7 +2261,7 @@ function createReader(context, navigation) {
         .filter(row => !removedBlocks.has(row.index)).sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
     }
     const rows = workspaceMemo.flowRows.map(({ local, ...row }, order) => ({ ...row, order, failed: failedLogicBlocks.has(row.index),
-      generating: writingBlocks.has(row.identity), tokenEstimates: tokenRows[row.index] }));
+      generating: writingBlocks.has(row.identity), queued: autoRefresh.queued && row.changed && !writingBlocks.has(row.identity), tokenEstimates: tokenRows[row.index] }));
     const entry = workspaceMemo.rows.find(row => /^(?:main|run|train|fit)$/i.test(row.symbol || '')) ||
       (workspaceMemo.rows.length === 1 ? workspaceMemo.rows[0] : undefined);
     const card = entry && workspaceMemo.sections[entry.index]?.pseudocode;
@@ -2265,7 +2269,7 @@ function createReader(context, navigation) {
     const story = savedStory && Object.values(savedStory).some(Boolean) ? savedStory : (card && parseCard(card) && shown ? { lead: shown.title, then: shown.summary,
       in: /^INPUTS: (.+)$/m.exec(card)?.[1], out: /^RETURNS: (.+)$/m.exec(card)?.[1] } : undefined);
     const flow = { story, edges: workspaceMemo.edges, usage: fileUsage?.day === usageDay() ? fileUsage : undefined, budget: dailyBudget() };
-    return { rows, flow, tokenModels, sections: workspaceMemo.sections, cursor: logicCursor, online, provider, usage: readerUsage, editable: vscode.workspace.isTrusted !== false && !sourceMissing,
+    return { rows, flow, tokenModels, sections: workspaceMemo.sections, cursor: logicCursor, online, provider, autoRefresh: { mode: autoRefreshMode(), queued: autoRefresh.queued, notice: autoNotice }, usage: readerUsage, editable: vscode.workspace.isTrusted !== false && !sourceMissing,
       keywords: os.platform() === 'darwin' ? '⌘' : 'Ctrl+', activity: logic.activity,
       terminalProviders: navigation.terminalProviders(),
       proposal: codePreview.state(), undo: codePreview.undoState(), loading: !syntax.defs || busy, canUpdate: online && !busy && !sourceMissing &&
@@ -3348,6 +3352,35 @@ function createReader(context, navigation) {
     const snapshot = source;
     void refreshAffected(result, snapshot, snapshot, false, true, false, { keys, initial: true });
   }
+  function autoRefreshMode() { return autoRefreshing.autoRefreshMode(setting(vscode, 'autoRefresh', 'changedBlocks')); }
+  // A save of this reader's file queues one debounced update. Further saves
+  // restart the timer; a content change cancels a running update (applySource).
+  function saved(uri) {
+    if (disposed || !source || !uri || uri.toString() !== source.uri || autoRefreshMode() === 'off') return;
+    autoNotice = '';
+    autoRefresh.schedule();
+    if (panel) post();
+  }
+  async function runAutoRefresh(isCurrent) {
+    const mode = autoRefreshMode();
+    const skip = notice => { autoNotice = notice || ''; if (panel && !disposed) post(); };
+    if (mode === 'off' || disposed || !source || sourceMissing) return skip();
+    await inspect(undefined, 'refresh');
+    if (!isCurrent() || disposed || !source) return;
+    if (!result || sourceMissing || !stale || source.stamp?.dirty) return skip();
+    if (!online) return skip('Auto-update is waiting for the AI provider. Use Update all when it is ready.');
+    if (source.notebook || source.selected) return skip();
+    if (Buffer.byteLength(source.fullText || source.text) > autoRefreshing.timing.maxBytes) return skip('Auto-update skipped: this file is large. Use Update all to update it.');
+    if (source.uri.startsWith('file:') && await autoRefreshing.gitOperationInProgress(vscode.Uri.parse(source.uri).fsPath)) return skip('Auto-update paused during a git rebase or merge. Use Update all when it finishes.');
+    if (!isCurrent() || disposed) return;
+    if (refreshJob) { await refreshJob.catch(() => {}); if (!isCurrent() || disposed) return; }
+    if (busy || refreshJob) return skip();
+    autoNotice = '';
+    const settings = mode === 'wholeFile' ? { all: true, auto: true, flow: level === 'logic' && (flowOn || !!fileGist) } :
+      { dirtyOnly: true, auto: true, flow: level === 'logic' && (flowOn || !!fileGist) };
+    try { await refresh(undefined, false, settings); }
+    catch (e) { if (!disposed) { error = e.message; post(); } }
+  }
   function setDemand(indices) {
     const rows = logicData()?.rows || [];
     const items = Array.isArray(indices) ? indices.slice(0, 3) : [];
@@ -3373,10 +3406,10 @@ function createReader(context, navigation) {
     }, 175);
   }
 
-  async function refreshAffected(base, contextSource, previousSource, upgradeOnly, dirtyOnly, cold = false, flow) {
+  async function refreshAffected(base, contextSource, previousSource, upgradeOnly, dirtyOnly, cold = false, flow, extra = {}) {
     cancel(); const id = serial, opts = options(contextSource), task = new AbortController(); controller = task;
     busy = true; error = ''; startedAt = Date.now(); activity = []; progress = 'Matching cached blocks to current source'; post();
-    const explicitRewrite = !stale && !upgradeOnly && !dirtyOnly;
+    const explicitRewrite = !!extra.all || !stale && !upgradeOnly && !dirtyOnly;
     const refineDraft = opts.refinementSteps && (!flow || flow.update);
     let current = base, remaining = new Set(staleBlocks), savedCount = 0, failure, reviewDraftAfterRefresh;
     const drafted = new Set(!flow && base.refinement?.status === 'pending' ? base.refinement.refreshBlocks || [] : []);
@@ -3415,7 +3448,7 @@ function createReader(context, navigation) {
         if (flow.update || flow.initial) {
           const changed = flow.update ? gistChanges(blocks) : [];
           const cards = blocks.filter((block, index) => remaining.has(index) && flow.keys.has(block.identity));
-          if (!await confirmBudget(contextSource, opts, blocks, changed, cards, current)) return;
+          if (!await confirmBudget(contextSource, opts, blocks, changed, cards, current, !!extra.auto)) return;
           if (!await alive()) return;
           if (changed.length) {
             await updateFileGist(contextSource, opts, blocks, changed, task.signal);
@@ -3450,6 +3483,7 @@ function createReader(context, navigation) {
         group.push(index); size += bytes;
       }
       if (group.length) groups.push(group);
+      if (extra.auto) { const sent = groups.reduce((sum, item) => sum + item.length, 0); activity.push('Auto-update after save: ' + sent + ' changed ' + (sent === 1 ? 'block' : 'blocks') + ' sent to the model; ' + Math.max(0, current.sections.length - sent) + ' reused from cache'); }
       const fast = groups.length ? await quickModel(opts.provider, opts.cliPath) : undefined;
       const concurrency = dirtyOnly ? Math.min(flow ? 4 : 8, parallelRequests()) : 1;
       const pendingBatches = groups.map((indices, index) => ({ indices, index }));
@@ -3461,7 +3495,9 @@ function createReader(context, navigation) {
       };
       const batchWork = async (batch, indices) => {
         const baseline = current;
-        const targets = flow ? indices.map(index => blocks[index].identity) : [];
+        // Mark the blocks being written so the reader shows them as updating, with or without File Flow.
+        const targets = flow ? indices.map(index => blocks[index].identity) :
+          indices.flatMap(index => logicData()?.rows.find(row => row.index === index)?.identity || []);
         progress = 'Update batch ' + (batch + 1) + ' of ' + groups.length + ' · ' + indices.length + ' blocks · ' + savedCount + ' saved · ' + remaining.size + ' remaining';
         if (!run || concurrency === 1 || batch === 0) {
           startRun(contextSource, opts, progress, { deferReview: true });
@@ -3565,7 +3601,7 @@ function createReader(context, navigation) {
       if (demandAtStart !== demandKeys) scheduleDemand();
     });
   }
-  async function refreshRequest(index, upgradeOnly = false, { dirtyOnly = false, flow = false } = {}) {
+  async function refreshRequest(index, upgradeOnly = false, { dirtyOnly = false, flow = false, all = false, auto = false } = {}) {
     if (!source) return navigation.open();
     if (busy) return;
     await inspect(undefined, 'refresh');
@@ -3582,8 +3618,11 @@ function createReader(context, navigation) {
     if (source.fullHash !== previousSource.fullHash || !await stillCurrent(contextSource)) { await inspect(undefined, 'change'); return; }
     if (Buffer.byteLength(requestSource.text) > MAX_BYTES) throw new Error('Select a smaller code range before refreshing.');
     if (!one) {
-      const keys = flow && new Set(demandKeys.size ? demandKeys : logicData()?.rows.filter(row => row.changed).map(row => row.identity));
-      await refreshAffected(base, contextSource, previousSource, upgradeOnly, dirtyOnly, false, flow ? { keys, update: true } : undefined);
+      // Auto-refresh after save writes exactly the changed blocks (or every block for wholeFile), never the demand queue.
+      const rows = flow && logicData()?.rows || [];
+      const keys = flow && new Set(all ? rows.map(row => row.identity) : auto ? rows.filter(row => row.changed).map(row => row.identity) :
+        demandKeys.size ? demandKeys : rows.filter(row => row.changed).map(row => row.identity));
+      await refreshAffected(base, contextSource, previousSource, upgradeOnly, dirtyOnly, false, flow ? { keys, update: true } : undefined, { all, auto });
       return;
     }
     cancel(); const id = serial, opts = options(contextSource), task = new AbortController(); controller = task;
@@ -3769,11 +3808,11 @@ function createReader(context, navigation) {
     stop: cancel,
     focus() { ensurePanel(); post(); },
     async clear() { clearTimeout(persistTimer); for (const timer of watchTimers.values()) clearTimeout(timer); watchTimers.clear(); cancel(); result = undefined; refreshBase = undefined; openFillHash = undefined; await disk.flush(); memory.clear(); revisions.clear(); revisionLoaded.clear(); draftScopes.clear(); fileGist = fileUsage = undefined; demandKeys.clear(); clearTimeout(demandTimer); error = ''; cacheWarning = ''; restoreStatus(); panel?.webview.postMessage({ type: 'cacheCleared' }); post(); },
-    changed, check: inspect,
+    changed, check: inspect, saved,
     dispose() {
       if (disposed) return;
       const pendingSave = !!persistTimer; clearTimeout(persistTimer); persistTimer = undefined;
-      disposed = true; clearTimeout(cursorTimer); clearTimeout(demandTimer); codePreview.dispose(); for (const timer of watchTimers.values()) clearTimeout(timer); watchTimers.clear(); cancel(); clearHighlight();
+      disposed = true; autoRefresh.dispose(); clearTimeout(cursorTimer); clearTimeout(demandTimer); codePreview.dispose(); for (const timer of watchTimers.values()) clearTimeout(timer); watchTimers.clear(); cancel(); clearHighlight();
       for (const review of backgroundReviews.values()) review.abort(); backgroundReviews.clear();
       const closing = pendingSave && source && result ? save(source, options(), result) : disk.flush();
       panel?.dispose?.(); panel = undefined;

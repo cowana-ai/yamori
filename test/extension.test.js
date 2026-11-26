@@ -2177,7 +2177,7 @@ async function readerHarness(settings = {}, options = {}) {
     commands: { registerCommand(id, fn) { harness.commands.set(id, fn); return noop(); } },
     workspace: { isTrusted: options.trusted !== false, onDidGrantWorkspaceTrust: fn => { harness.grantTrust = fn; return noop(); }, workspaceFolders: [{ uri: new Uri(root) }], textDocuments: [], getWorkspaceFolder: uri => uri.fsPath.startsWith(root) ? { uri: new Uri(root) } : undefined, asRelativePath: uri => path.relative(root, uri.fsPath), openTextDocument: docFor,
       findFiles: async pattern => (await walk(root)).filter(file => /package\.json/.test(pattern.pattern) ? false : /\.(py|md|mdx|txt|rst|json|yaml|yml|toml|ini|cfg)$/.test(file)).map(file => new Uri(file)),
-      createFileSystemWatcher: () => ({ onDidCreate: noop, onDidDelete: noop, onDidChange: noop, dispose() {} }), getConfiguration: () => ({ get: (key, fallback) => key in settings ? settings[key] : fallback, inspect: () => ({}) }), onDidChangeTextDocument: fn => { harness.changeDocument = fn; return noop(); } },
+      createFileSystemWatcher: () => ({ onDidCreate: noop, onDidDelete: noop, onDidChange: noop, dispose() {} }), getConfiguration: () => ({ get: (key, fallback) => key in settings ? settings[key] : fallback, inspect: () => ({}) }), onDidChangeTextDocument: fn => { harness.changeDocument = fn; return noop(); }, onDidSaveTextDocument: fn => { harness.saveDocument = fn; return noop(); } },
     window: { createStatusBarItem: statusItem, activeTextEditor: undefined, visibleTextEditors: [], createTextEditorDecorationType: noop, onDidChangeActiveTextEditor: noop, showErrorMessage(message) { throw new Error(message); }, showInformationMessage: async () => undefined,
       showWarningMessage: async message => { harness.warnings.push(message); return harness.answer; },
       onDidCloseTerminal(fn) { (harness.terminalClosers ||= []).push(fn); return noop(); },
@@ -5206,4 +5206,180 @@ console.log(JSON.stringify({type:'result',structured_output:{title:'Sample',summ
     assert.equal(result.sections[0].lineMap[0].startLine, 2);
     assert.deepEqual(result.sections[1], main.sections[1]);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+// Auto-refresh after save ------------------------------------------------------
+const autoRefreshing = require('../src/project/auto-refresh');
+async function withAutoTiming(values, fn) {
+  const saved = { ...autoRefreshing.timing };
+  Object.assign(autoRefreshing.timing, values);
+  try { return await fn(); } finally { Object.assign(autoRefreshing.timing, saved); }
+}
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+function partsEngine(calls, respond) {
+  return () => ({ generate: async options => {
+    if (!options.sourceRefresh) return { title: 'Parts', summary: '', sections: Array.from({ length: 3 }, (_, i) => ({ title: 'part' + i, startLine: i * 3 + 1, endLine: i * 3 + 2, pseudocode: 'Return 1.', lineMap: [] })) };
+    const refresh = options.sourceRefresh; calls.push([...refresh.staleBlocks]);
+    if (respond) await respond(options);
+    const value = Number(/return (\d+)/.exec(options.source.text.split('\n').slice(3, 5).join('\n'))?.[1] || 1);
+    return { ...refresh.previous, views: undefined, sections: refresh.previous.sections.map((section, i) => refresh.staleBlocks.includes(i) ? { ...section, pseudocode: 'Return ' + value + '.' } : section) };
+  } });
+}
+const partsSource = Array.from({ length: 3 }, (_, i) => 'def part' + i + '():\n    return 1\n').join('\n');
+async function openParts(h) {
+  const fs = require('node:fs/promises'), path = require('node:path'), file = path.join(h.root, 'parts.py');
+  await fs.writeFile(file, partsSource); await h.commands.get('yamori.openAt')(h.Uri.file(file).toString(), 1);
+  const reader = h.readers().at(-1); await h.until(() => h.last(reader).result?.sections.length === 3, 'initial explanation');
+  const save = async text => { await fs.writeFile(file, text); h.saveDocument({ uri: h.Uri.file(file) }); };
+  return { file, reader, save };
+}
+
+test('auto-refresh: the setting accepts only known modes and a burst of saves runs once', async () => {
+  assert.equal(autoRefreshing.autoRefreshMode(undefined), 'changedBlocks');
+  assert.equal(autoRefreshing.autoRefreshMode('wholeFile'), 'wholeFile');
+  assert.equal(autoRefreshing.autoRefreshMode('off'), 'off');
+  assert.equal(autoRefreshing.autoRefreshMode('always'), 'changedBlocks');
+  await withAutoTiming({ delay: 25 }, async () => {
+    const runs = [], checks = [];
+    const timer = autoRefreshing.createAutoRefresh(isCurrent => { runs.push(Date.now()); checks.push(isCurrent); });
+    for (let i = 0; i < 5; i++) { timer.schedule(); assert.equal(timer.queued, true); await pause(5); }
+    await pause(60);
+    assert.equal(runs.length, 1, 'five quick saves trigger one run');
+    assert.equal(timer.queued, false);
+    assert.equal(checks[0](), true);
+    timer.schedule(); assert.equal(checks[0](), false, 'a newer save makes the earlier run stale');
+    timer.cancel(); await pause(60);
+    assert.equal(runs.length, 1, 'cancel drops the pending run');
+    timer.schedule(); timer.dispose(); await pause(60);
+    assert.equal(runs.length, 1, 'dispose drops the pending run');
+  });
+});
+
+test('auto-refresh: a git rebase, merge, cherry-pick or revert pauses it, including in a linked worktree', async t => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-git-op-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo'), file = path.join(repo, 'src', 'a.py');
+  await fs.mkdir(path.join(repo, '.git'), { recursive: true }); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, 'x = 1\n');
+  assert.equal(await autoRefreshing.gitOperationInProgress(file), false);
+  for (const marker of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD']) {
+    await fs.writeFile(path.join(repo, '.git', marker), 'abc\n');
+    assert.equal(await autoRefreshing.gitOperationInProgress(file), true, marker);
+    await fs.rm(path.join(repo, '.git', marker));
+  }
+  await fs.mkdir(path.join(repo, '.git', 'rebase-merge'));
+  assert.equal(await autoRefreshing.gitOperationInProgress(file), true);
+  const linked = path.join(root, 'linked'), gitdir = path.join(repo, '.git', 'worktrees', 'linked');
+  await fs.mkdir(gitdir, { recursive: true }); await fs.mkdir(linked); await fs.writeFile(path.join(linked, '.git'), 'gitdir: ' + gitdir + '\n');
+  assert.equal(await autoRefreshing.gitOperationInProgress(path.join(linked, 'b.py')), false, 'markers are read from the worktree gitdir');
+  await fs.mkdir(path.join(gitdir, 'rebase-apply'));
+  assert.equal(await autoRefreshing.gitOperationInProgress(path.join(linked, 'b.py')), true);
+  assert.equal(await autoRefreshing.gitOperationInProgress(path.join(os.tmpdir(), 'no-repo-' + Date.now(), 'c.py')), false);
+});
+
+test('auto-refresh: saving updates only the changed block without a click, once per burst of saves', async () => {
+  const calls = [];
+  const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 0 }, { engine: partsEngine(calls) });
+  try {
+    await withAutoTiming({ delay: 40 }, async () => {
+      const { reader, save } = await openParts(h);
+      let text = partsSource;
+      for (let i = 0; i < 5; i++) { text = text.replace(/(def part1\(\):\n    return )\d+/, '$1' + (i + 2)); await save(text); await pause(5); }
+      await h.until(() => h.last(reader).workspace?.autoRefresh?.queued || calls.length, 'the save is queued');
+      if (!calls.length) {
+        const queued = h.last(reader).workspace.rows.filter(row => row.queued).map(row => row.index);
+        assert.deepEqual(queued, [1], 'the changed block shows it is updating while the save settles');
+      }
+      await h.until(() => calls.length === 1 && h.last(reader).stale === false && !h.last(reader).busy, 'auto-refresh finishes');
+      await pause(100);
+      assert.deepEqual(calls, [[1]], 'only the changed block calls the model, once for five saves');
+      const state = h.last(reader);
+      assert.deepEqual(state.result.sections.map(section => section.pseudocode), ['Return 1.', 'Return 6.', 'Return 1.']);
+      assert.ok(state.activity.some(item => /Auto-update after save: 1 changed block sent to the model; 2 reused from cache/.test(item)), state.activity.join(' | '));
+      assert.equal(state.workspace.autoRefresh.mode, 'changedBlocks');
+      await save(text); await pause(100);
+      assert.equal(calls.length, 1, 'saving unchanged content does not call the model');
+    });
+  } finally { await h.close(); }
+});
+
+test('auto-refresh: a newer save cancels the running update and the next run uses the newest code', async () => {
+  const calls = [], signals = []; let hold = true;
+  const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 0 }, { engine: partsEngine(calls, options => {
+    signals.push(options.signal);
+    if (!hold) return;
+    return new Promise((resolve, reject) => { options.signal.addEventListener('abort', () => reject(Object.assign(new Error('Cancelled'), { name: 'AbortError' })), { once: true }); });
+  }) });
+  try {
+    await withAutoTiming({ delay: 30 }, async () => {
+      const { reader, save } = await openParts(h);
+      await save(partsSource.replace('def part1():\n    return 1', 'def part1():\n    return 2'));
+      await h.until(() => calls.length === 1, 'the first update starts');
+      assert.ok(h.last(reader).workspace.rows.find(row => row.index === 1).generating, 'the changed block is marked as updating');
+      hold = false;
+      await save(partsSource.replace('def part1():\n    return 1', 'def part1():\n    return 3'));
+      await h.until(() => signals[0].aborted, 'the newer save cancels the running update');
+      await h.until(() => calls.length === 2 && h.last(reader).stale === false && !h.last(reader).busy, 'the newest code is explained');
+      assert.equal(h.last(reader).result.sections[1].pseudocode, 'Return 3.');
+      assert.equal(h.last(reader).error, '');
+    });
+  } finally { await h.close(); }
+});
+
+test('auto-refresh: off keeps Needs update, wholeFile rewrites every block, and large files or git merges are skipped', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), calls = [];
+  const settings = { autoNotes: false, prefetchNext: false, refinementSteps: 0, autoRefresh: 'off' };
+  const h = await readerHarness(settings, { engine: partsEngine(calls) });
+  try {
+    await withAutoTiming({ delay: 20 }, async () => {
+      const { reader, save } = await openParts(h);
+      const changed = partsSource.replace('def part1():\n    return 1', 'def part1():\n    return 2');
+      await save(changed); await h.until(() => h.last(reader).stale, 'marked stale'); await pause(80);
+      assert.equal(calls.length, 0, 'off makes no model request');
+      assert.deepEqual(h.last(reader).staleBlocks, [1]);
+      assert.equal(h.last(reader).workspace.autoRefresh.queued, false);
+      settings.autoRefresh = 'changedBlocks';
+      await fs.mkdir(path.join(h.root, '.git'), { recursive: true }); await fs.writeFile(path.join(h.root, '.git', 'MERGE_HEAD'), 'abc\n');
+      await save(changed); await h.until(() => h.last(reader).workspace.autoRefresh.notice, 'merge notice');
+      assert.match(h.last(reader).workspace.autoRefresh.notice, /rebase or merge/);
+      await fs.rm(path.join(h.root, '.git'), { recursive: true });
+      await withAutoTiming({ maxBytes: 10 }, async () => {
+        await save(changed); await h.until(() => /large/.test(h.last(reader).workspace.autoRefresh.notice), 'size notice');
+      });
+      assert.equal(calls.length, 0, 'skipped saves make no model request');
+      assert.equal(h.last(reader).stale, true);
+      settings.autoRefresh = 'wholeFile';
+      await save(changed);
+      await h.until(() => calls.length === 1 && !h.last(reader).stale && !h.last(reader).busy, 'whole-file update');
+      assert.deepEqual(calls[0], [0, 1, 2], 'wholeFile rewrites every block');
+      assert.equal(h.last(reader).workspace.autoRefresh.notice, '');
+    });
+  } finally { await h.close(); }
+});
+
+test('auto-refresh in File Flow: only the changed card is written, the demand queue is ignored, and the ± rows come back fresh', async () => {
+  const calls = [], gists = [];
+  const h = await readerHarness({ autoNotes: false, prefetchNext: false, refinementSteps: 0 }, { engine: harness => ({
+    generate: async options => {
+      const value = await partsEngine(calls)().generate(options);
+      const card = text => 'PURPOSE: ' + text + '\nINPUTS: None.\nRETURNS: A number.\nSTEPS:\n- ' + text;
+      return { ...value, sections: value.sections.map(section => ({ ...section, pseudocode: card(section.pseudocode) })) };
+    },
+    requestStructured: async ({ prompt }) => { gists.push(prompt); return { raw: JSON.stringify({ story: { lead: 'Parts', then: '', in: '', out: '' }, blocks: [] }) }; }
+  }) });
+  try {
+    await withAutoTiming({ delay: 30 }, async () => {
+      const { reader, save } = await openParts(h);
+      await reader.receive({ type: 'workspaceDemand', documentKey: h.last(reader).documentKey, indices: [0, 2] });
+      await pause(50); calls.length = 0;
+      await save(partsSource.replace('def part1():\n    return 1', 'def part1():\n    return 2'));
+      await h.until(() => calls.length && !h.last(reader).busy && !h.last(reader).stale, 'flow auto-refresh finishes');
+      assert.deepEqual(calls, [[1]], 'only the changed card is sent, not the blocks on screen');
+      const rows = h.last(reader).workspace.rows;
+      assert.equal(rows.find(row => row.index === 1).changed, false);
+      assert.ok(rows.every(row => !row.generating && !row.queued));
+      assert.match(h.last(reader).result.sections[1].pseudocode, /Return 2\./);
+      assert.match(h.last(reader).result.sections[0].pseudocode, /Return 1\./);
+    });
+  } finally { await h.close(); }
 });

@@ -104,6 +104,16 @@ for a preview and shows the proposed code alongside the current source.
 refreshes the affected explanation. **Esc** cancels. A draft regression test
 also requires an explicit **Accept test**.
 
+**Saving updates changed blocks.** About two seconds after you save, Yamori
+rewrites only the blocks whose code changed and reuses the rest from the cache.
+Changed blocks show a spinner while they update, then their removed steps in red
+and new steps in green. Opening a changed block shows it under File Flow, so the
+graph stays in view. Rapid saves are combined into one update, and a newer save
+cancels an update in progress. Nothing runs automatically for large files, during
+a git rebase or merge, or when it would exceed your daily token budget. Set
+`yamori.autoRefresh` to `off` to update only when you click **Update all**, or
+to `wholeFile` to rewrite every block after a change.
+
 **Update all** refreshes dirty or missing blocks. The individual refresh action
 can rewrite a clean card. Symbols, line links, cached cards and review
 controls are available offline. Generation, preview and apply require the provider.
