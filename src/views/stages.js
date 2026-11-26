@@ -649,6 +649,7 @@ function mountStages(root, post) {
     }
     if (!entries.length) return h('p', { class: 'st-muted' }, 'No steps mapped yet.');
     const width = flow.length * (W + GX) - GX, tall = Math.max(...nodes.map(node => node.y + node.h));
+    keepFull(part, graphKey);
     const bar = () => h('div', { class: 'st-flowbar' },
         h('input', { id: 'st-flowsearch', type: 'search', placeholder: 'Find in this part, e.g. angle selection', value: ui.flowQuery || '', 'aria-label': 'Find steps in this part', autocomplete: 'off', spellcheck: 'false' }),
         words.length ? muted(hits.length ? hits.length + (hits.length === 1 ? ' match' : ' matches') + (hits.length > 1 ? ' · ' + (((ui.flowHit || 0) % hits.length + hits.length) % hits.length + 1) + ' of ' + hits.length : '') : 'No match') : muted(ui.full === graphKey ? 'Click a box to trace its path.' : 'Type words from a step, a behavior, a function or a file. Click a box to trace its path.'),
@@ -660,6 +661,11 @@ function mountStages(root, post) {
     const picked = clicked?.step;
     return [ui.full === graphKey ? undefined : bar(),
       canvas, picked ? flowStepDetail(picked) : undefined];
+  }
+  // Moving between a part's whole diagram and a step's path stays in full view.
+  function keepFull(part, graphKey) {
+    const [kind, id] = String(ui.full || '').split(':');
+    if ((kind === 'pflow' || kind === 'ppath') && id === part.id) ui.full = graphKey;
   }
   // A clicked step's path on its own, read left to right: what leads to it,
   // the step, and what it calls, each box labeled with its stage.
@@ -673,6 +679,7 @@ function mountStages(root, post) {
     const layout = layeredLayout(list.map(entry => ({ id: entry.ref })), links, { width: W, height: H, gapX: 64, gapY: 18 });
     const stageNumber = new Map((state.partFlow || []).map((stage, index) => [stage.id, index + 1]));
     const graphKey = 'ppath:' + part.id + ':' + clicked.ref;
+    keepFull(part, graphKey);
     const nodes = list.map(entry => {
       const at = layout.positions.get(entry.ref), color = stepColor(part.id, entry.stage.id);
       const box = flowBox({ ...entry.step, depth: 0 }, entry.key, color, entry === clicked ? 'selected' : '', words);
