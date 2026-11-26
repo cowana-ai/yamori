@@ -368,6 +368,9 @@ test('a part opens on how it works, old maps say so, and one click maps a part a
     const flow = ctx.last().partFlow;
     assert.deepEqual(flow.map(stage => stage.name), ['Read inbox', 'Answer', 'Write text']);
     assert.deepEqual(flow[1].steps.map(step => step.symbol), ['triage_loop', 'reply']);
+    // Which step calls which, for tracing a path on the diagram (built without AI).
+    const calls = ctx.last().partCalls;
+    assert.deepEqual(calls['agents/email/run.py#triage_loop'].sort(), ['agents/email/inbox.py#fetch_unread', 'agents/email/inbox.py#reply', 'shared/llm.py#complete']);
     // A map made by an older mapper is flagged, and remapping it brings it up to date.
     const db = ctx.screen.dbFor(ctx.item);
     db.setMeta('workflow:email-helper:version', '3|cheap-model');

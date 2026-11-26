@@ -30,7 +30,11 @@ The map is a graph you can pan, zoom (scroll or + / −) and **Fit**. Drag any b
 - **Shared code** (for example a contracts package several parts import) is its own dashed box, linked to every part that uses it. Click it for its files and how they use each other.
 - Parts with no links sit in a row underneath.
 
-Click a part to open it below the map. It opens on **How it works**: every stage as a column, its steps top to bottom with what they call indented under them, and key behaviors on every box (◆ decisions and ⚠ stop conditions written out, badges for AI calls, files written, fallbacks and more). Click a box for everything about that step. **Files** is the second tab.
+Click a part to open it below the map. It opens on **How it works**: every stage as a column, its steps top to bottom with what they call indented under them, and key behaviors on every box (◆ decisions and ⚠ stop conditions written out, badges for AI calls, files written, fallbacks and more). Click a box for everything about that step; the diagram also traces its path: the steps that lead to it (across stages) and what it calls light up, joined by bold arrows, and everything else fades. Click it again to clear.
+
+The search bar above the diagram finds steps as you type, for example `angle selection`: it reads what each step does, its key behaviors, function and file names, forgives word endings and one typo, and knows a few verbs that mean the same thing (select, pick, choose). Matched words are marked on the boxes, matching steps are outlined, and the diagram centers on the best one and traces how the part gets there. **Enter** (or ↓) goes to the next match, **Shift+Enter** (or ↑) back, **Esc** or **Clear** ends the search. Which step calls which comes from the part's call tree, built without AI.
+
+**Files** is the second tab.
 
 A part mapped by an older version of Yamori says so, with **Map this part again**; the top of the tab offers **Upgrade all parts**. Functions whose code did not change keep their saved descriptions, so this is mostly the planner's cost.
 

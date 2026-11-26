@@ -127,6 +127,17 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-kind, body[data-p
 #stages-view .st-behaviors { list-style: none; margin: 8px 0 0; padding: 0; }
 #stages-view .st-behaviors li { padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--read-border) 50%, transparent); }
 #stages-view .st-flow-detail { border-color: var(--read-ink); }
+#stages-view .st-flowbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 0; }
+#stages-view .st-flowbar input { flex: 0 1 360px; min-width: 220px; font: inherit; font-size: 13px; color: var(--read-ink); background: var(--read-page); border: 1px solid var(--read-border); border-radius: 0; padding: 5px 8px; }
+#stages-view .st-flowbar input:focus { outline: 2px solid var(--read-link, var(--read-ink)); outline-offset: 0; }
+#stages-view .st-flowbar button { border: 1px solid var(--read-border); min-width: 28px; }
+#stages-view mark { background: oklch(80% .15 85 / .45); color: inherit; padding: 0 1px; }
+#stages-view .st-node.flowstep.hit { border-color: oklch(80% .15 85); box-shadow: 0 0 0 1px oklch(80% .15 85); }
+#stages-view .st-node.flowstep.hit.current { box-shadow: 0 0 0 3px oklch(80% .15 85); }
+#stages-view .st-node.flowstep.onpath { border-color: var(--read-link, var(--read-ink)); box-shadow: 0 0 0 1px var(--read-link, var(--read-ink)); }
+#stages-view .st-node.flowstep.selected { border-color: var(--read-ink); box-shadow: 3px 3px 0 var(--read-ink), 0 0 0 1px var(--read-ink); }
+#stages-view .st-node.flowstep.dim { opacity: .38; }
+#stages-view .st-flowhead.dim { opacity: .4; }
 #stages-view .st-upgrade { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 10px 0; padding: 10px 12px; border: 1px solid oklch(75% .14 75); background: color-mix(in srgb, oklch(75% .14 75) 10%, var(--read-surface)); }
 #stages-view .st-tabs { display: flex; gap: 4px; align-items: center; margin: 12px 0 4px; border-bottom: 1px solid var(--read-border); }
 #stages-view .st-tabs button { border: 1px solid transparent; border-bottom: 0; padding: 6px 14px; font-size: 13px; }
@@ -236,6 +247,36 @@ function layeredLayout(nodes, edges, { width = 220, height = 100, gapX = 90, gap
   return { positions, width: Math.max(hasChain ? columns.length : 0, Math.min(alone.length, perRow)) * (width + gapX) - gapX, height: ((hasChain ? tallest : 0) + rows) * (height + gapY) - gapY + (rows && hasChain ? 24 : 0) };
 }
 
+// Loose word search over a part's steps, for the How it works search bar:
+// lower case, simple endings dropped ("selection" finds "selects"), one typo
+// allowed in longer words, and a few plain verbs that mean the same thing.
+function stepSearch() {
+  const stem = word => word.length > 4 ? word.replace(/(ations?|ions?|ings?|ers?|ed|es|s)$/, '') || word : word;
+  const queryWords = text => String(text || '').toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length > 1).map(stem);
+  const tokensOf = text => String(text || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(stem);
+  const SAME = [['select', 'pick', 'choose', 'chosen', 'winner'], ['save', 'write', 'store', 'persist'], ['load', 'read', 'open'], ['fetch', 'download', 'scrape', 'get'], ['delete', 'remove', 'drop'], ['retry', 'again', 'repeat'], ['limit', 'cap', 'max', 'most'], ['error', 'fail', 'exception'], ['rank', 'score', 'sort'], ['check', 'validate', 'verify'], ['ask', 'prompt'], ['search', 'find', 'query']].map(group => group.map(stem));
+  function near(a, b) {
+    if (a === b || b.startsWith(a) || (a.length >= 4 && a.startsWith(b) && b.length >= 4)) return true;
+    if (a.length < 5 || Math.abs(a.length - b.length) > 1) return false;
+    let edits = 0, i = 0, j = 0;
+    while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; continue; } if (++edits > 1) return false; if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; } }
+    return edits + (a.length - i) + (b.length - j) <= 1;
+  }
+  const close = (word, token) => near(word, token) || SAME.some(group => group.some(other => near(word, other)) && group.some(other => near(other, token)));
+  // Items that have the most of the words (at least half), best first.
+  function find(items, words, textOf) {
+    const scored = items.map((item, order) => {
+      const tokens = tokensOf(textOf(item));
+      return { item, order, exact: words.filter(word => tokens.some(token => near(word, token))).length, score: words.filter(word => tokens.some(token => close(word, token))).length };
+    });
+    const best = Math.max(0, ...scored.map(item => item.score));
+    if (best < Math.max(1, Math.ceil(words.length / 2))) return [];
+    return scored.filter(item => item.score === best).sort((a, b) => b.exact - a.exact || a.order - b.order).map(item => item.item);
+  }
+  const matches = (text, words) => tokensOf(text).some(token => words.some(word => close(word, token)));
+  return { queryWords, find, matches };
+}
+
 function mountStages(root, post) {
   if (!root) return { update() {}, shown() {} };
   const doc = root.ownerDocument, SVG = 'http://www.w3.org/2000/svg';
@@ -280,6 +321,7 @@ function mountStages(root, post) {
   const stageOf = (part, id) => partOf(part)?.stages.find(stage => stage.id === id);
   const stepColor = (part, stageId) => { const index = (partOf(part)?.stages || []).findIndex(stage => stage.id === stageId); return index < 0 ? undefined : 'var(--st-c' + (index % 7) + ')'; };
   const fileName = file => file.split('/').at(-1);
+  const finder = stepSearch();
   // Key behaviors, drawn the same way everywhere.
   const KIND = { decides: 'Decides', ai: 'AI', asks: 'Asks you', writes: 'Writes', reads: 'Reads', loops: 'Loops', fallback: 'Fallback', stops: 'Stops on error', limit: 'Limit', other: 'Note' };
   const behaviorChip = (kind, text) => h('span', { class: 'st-kind k-' + kind, title: text || KIND[kind] }, KIND[kind] || kind);
@@ -542,40 +584,79 @@ function mountStages(root, post) {
   // The whole part as it works: each stage a column, its steps down the column with
   // what they call indented under them, and key behaviors on every box.
   function partFlowView(part) {
-    const flow = state.partFlow || [], W = 236, GX = 70, GY = 12, HEAD = 46;
+    const flow = state.partFlow || [], W = 236, GX = 70, GY = 12, HEAD = 46, graphKey = 'pflow:' + part.id;
     const lines = (text, per) => Math.min(3, Math.ceil(String(text || '').length / per));
     const decisionsOf = step => (step.details || []).filter(item => item.kind === 'decides' || item.kind === 'stops').slice(0, 3);
     const height = step => 38 + 17 * lines(step.what || step.symbol, 26) + decisionsOf(step).reduce((sum, item) => sum + 4 + 15 * Math.min(2, lines(item.text, 30)), 0) + (step.details?.length ? 24 : 0);
-    const nodes = [], edges = [];
+    // Every step once, with its call links: from the part's call tree when known, else from nesting.
+    const entries = [];
+    flow.forEach(stage => stage.steps.forEach((step, index) => entries.push({ key: 'p:' + stage.id + ':' + index, id: 'n:' + stage.id + ':' + index, ref: step.file + '#' + step.symbol, step, stage })));
+    const byRef = new Map(entries.map(entry => [entry.ref, entry]));
+    const calls = new Map(), callers = new Map();
+    const connect = (from, to) => { if (from === to || !byRef.has(from) || !byRef.has(to)) return; (calls.get(from) || calls.set(from, new Set()).get(from)).add(to); (callers.get(to) || callers.set(to, new Set()).get(to)).add(from); };
+    for (const [from, list] of Object.entries(state.partCalls || {})) for (const to of list) connect(from, to);
+    for (const entry of entries) if (entry.step.parent) connect(entry.step.parent, entry.ref);
+    const walk = (start, next, depth) => { const out = new Set(), queue = [[start, 0]]; while (queue.length) { const [ref, d] = queue.shift(); if (d >= depth) continue; for (const other of next.get(ref) || []) if (!out.has(other) && other !== start) { out.add(other); queue.push([other, d + 1]); } } return out; };
+    // What to light up: search hits and the steps that lead to them; a clicked step, what leads to it and what it calls.
+    const words = finder.queryWords(ui.flowQuery);
+    const hits = words.length ? finder.find(entries, words, entry => [entry.step.what, entry.step.symbol, fileName(entry.step.file), ...(entry.step.details || []).map(item => item.text + ' ' + (KIND[item.kind] || ''))].join(' ')) : [];
+    const clicked = entries.find(entry => entry.key === ui.flowStep);
+    const path = new Set();
+    // The current match's path: what leads to it and what it does next.
+    const current = hits.length ? hits[((ui.flowHit || 0) % hits.length + hits.length) % hits.length] : undefined;
+    // A clicked box takes over the trace; matches stay outlined.
+    if (current && !clicked) { path.add(current.ref); walk(current.ref, callers, 6).forEach(ref => path.add(ref)); walk(current.ref, calls, 1).forEach(ref => path.add(ref)); }
+    if (clicked) { path.add(clicked.ref); walk(clicked.ref, callers, 6).forEach(ref => path.add(ref)); walk(clicked.ref, calls, 3).forEach(ref => path.add(ref)); }
+    const active = !!(clicked || hits.length), hitRefs = new Set(hits.map(hit => hit.ref));
+    const nodes = [], edges = [], idOf = ref => byRef.get(ref)?.id;
     let previousLast;
     flow.forEach((stage, c) => {
-      const x = c * (W + GX);
-      nodes.push({ id: 'head:' + stage.id, fixed: true, x, y: 0, w: W, h: HEAD - 8, content: h('div', { class: 'st-flowhead' + (state.card?.id === stage.id ? ' on' : ''), data: { act: 'openStage', part: part.id, id: state.card?.id === stage.id ? '' : stage.id }, style: 'border-bottom-color:' + stepColor(part.id, stage.id), title: stage.gist || '' }, (c + 1) + '. ' + stage.name) });
+      const x = c * (W + GX), stageLit = !active || stage.steps.some(step => path.has(step.file + '#' + step.symbol));
+      nodes.push({ id: 'head:' + stage.id, fixed: true, x, y: 0, w: W, h: HEAD - 8, content: h('div', { class: 'st-flowhead' + (state.card?.id === stage.id ? ' on' : '') + (stageLit ? '' : ' dim'), data: { act: 'openStage', part: part.id, id: state.card?.id === stage.id ? '' : stage.id }, style: 'border-bottom-color:' + stepColor(part.id, stage.id), title: stage.gist || '' }, (c + 1) + '. ' + stage.name) });
       let y = HEAD, lastTop;
       stage.steps.forEach((step, index) => {
-        const key = 'p:' + stage.id + ':' + index, id = 'n:' + stage.id + ':' + index, indent = (step.depth || 0) * 14, h2 = height(step);
-        nodes.push({ id, x: x + indent, y, w: W - indent, h: h2, content: flowBox(step, key, stepColor(part.id, stage.id)) });
-        if (!step.depth) { if (lastTop) edges.push({ from: lastTop, to: id }); else if (previousLast) edges.push({ from: previousLast, to: id }); lastTop = id; }
-        else { const parent = [...nodes].reverse().find(node => node.id.startsWith('n:' + stage.id + ':') && node !== nodes.at(-1) && node.depth === step.depth - 1); if (parent) edges.push({ from: parent.id, to: id, soft: true }); }
-        nodes.at(-1).depth = step.depth || 0;
+        const entry = entries.find(item => item.key === 'p:' + stage.id + ':' + index), indent = (step.depth || 0) * 14, h2 = height(step);
+        const state2 = clicked?.ref === entry.ref ? 'selected' + (hitRefs.has(entry.ref) ? ' hit' : '') : current?.ref === entry.ref && !clicked ? 'hit current' : hitRefs.has(entry.ref) ? 'hit' : path.has(entry.ref) ? 'onpath' : active ? 'dim' : '';
+        nodes.push({ id: entry.id, x: x + indent, y, w: W - indent, h: h2, ref: entry.ref, content: flowBox(step, entry.key, stepColor(part.id, stage.id), state2, words) });
+        if (!step.depth) { if (lastTop) edges.push({ from: lastTop, to: entry.id, seq: true }); else if (previousLast) edges.push({ from: previousLast, to: entry.id, seq: true }); lastTop = entry.id; }
         y += h2 + GY;
       });
       previousLast = lastTop;
     });
-    if (!nodes.length) return h('p', { class: 'st-muted' }, 'No steps mapped yet.');
+    for (const entry of entries) if (entry.step.parent && byRef.has(entry.step.parent)) edges.push({ from: idOf(entry.step.parent), to: entry.id, soft: true, from_ref: entry.step.parent, to_ref: entry.ref });
+    // The path itself: call links between lit steps, drawn bold, even across stages.
+    if (active) for (const from of path) for (const to of calls.get(from) || []) if (path.has(to) && !edges.some(edge => edge.from_ref === from && edge.to_ref === to)) edges.push({ from: idOf(from), to: idOf(to), path: true, from_ref: from, to_ref: to, title: byRef.get(from).step.symbol + ' calls ' + byRef.get(to).step.symbol });
+    const refOf = new Map(nodes.filter(node => node.ref).map(node => [node.id, node.ref]));
+    for (const edge of edges) {
+      const both = path.has(refOf.get(edge.from)) && path.has(refOf.get(edge.to));
+      if (active) { edge.hot = both && (edge.path || edge.soft); edge.dim = !both; }
+    }
+    if (!entries.length) return h('p', { class: 'st-muted' }, 'No steps mapped yet.');
     const width = flow.length * (W + GX) - GX, tall = Math.max(...nodes.map(node => node.y + node.h));
-    const picked = ui.flowStep?.startsWith('p:') ? (() => { const [, stageId, index] = ui.flowStep.split(':'); return flow.find(stage => stage.id === stageId)?.steps[Number(index)]; })() : undefined;
-    return [h('p', { class: 'st-muted st-hint' }, 'Stages left to right; each stage\'s steps top to bottom, with what they call indented under them. Badges are key behaviors; ◆ decisions and ⚠ stop conditions are written on the boxes. Click a box for everything about it.'),
-      graphView('pflow:' + part.id, { nodes, edges, width, height: tall, minHeight: 360, maxHeight: 760, minZoom: 0.7, label: 'How ' + part.name + ' works' }), picked ? flowStepDetail(picked) : undefined];
+    const canvas = graphView(graphKey, { nodes, edges, width, height: tall, minHeight: 360, maxHeight: 760, minZoom: 0.7, label: 'How ' + part.name + ' works' });
+    // Where each box ended up (after any dragging), to jump to a match.
+    ui.flowPlaces = { key: graphKey, hits: hits.map(hit => nodes.find(node => node.ref === hit.ref)).filter(Boolean).map(node => ({ x: node.x, y: node.y, w: node.w, h: node.h })) };
+    const picked = clicked?.step;
+    return [h('div', { class: 'st-flowbar' },
+        h('input', { id: 'st-flowsearch', type: 'search', placeholder: 'Find in this part, e.g. angle selection', value: ui.flowQuery || '', 'aria-label': 'Find steps in this part', autocomplete: 'off', spellcheck: 'false' }),
+        words.length ? muted(hits.length ? hits.length + (hits.length === 1 ? ' match' : ' matches') + (hits.length > 1 ? ' · ' + ((ui.flowHit || 0) % hits.length + 1) + ' of ' + hits.length : '') : 'No match') : muted('Type words from a step, a behavior, a function or a file. Click a box to trace its path.'),
+        hits.length > 1 ? [act('flowHit', { by: -1 }, '↑', { title: 'Previous match (Shift+Enter)' }), act('flowHit', { by: 1 }, '↓', { title: 'Next match (Enter)' })] : undefined,
+        words.length || clicked ? link('flowClear', {}, 'Clear') : undefined),
+      canvas, picked ? flowStepDetail(picked) : undefined];
   }
-  function flowBox(step, key, color) {
+  // Marks the words that matched, inside a box's text.
+  function marked(text, words) {
+    if (!words?.length) return text;
+    return String(text).split(/([A-Za-z0-9_]+)/).map(part => /[A-Za-z0-9]/.test(part) && finder.matches(part, words) ? h('mark', {}, part) : part);
+  }
+  function flowBox(step, key, color, look = '', words = []) {
     const decisionsOf = (step.details || []).filter(item => item.kind === 'decides' || item.kind === 'stops').slice(0, 3);
-    return h('div', { class: 'st-node flowstep' + (step.depth ? ' sub' : '') + (ui.flowStep === key ? ' selected' : ''), data: { act: 'flowStep', key }, role: 'button', tabindex: 0, style: step.depth ? undefined : 'border-left: 4px solid ' + color,
+    return h('div', { class: 'st-node flowstep' + (step.depth ? ' sub' : '') + (look ? ' ' + look : ''), data: { act: 'flowStep', key }, role: 'button', tabindex: 0, style: step.depth ? undefined : 'border-left: 4px solid ' + color,
       title: step.symbol + ' · ' + step.file + ':' + (step.line_start || '') + (step.details?.length ? '\n\n' + step.details.map(item => (KIND[item.kind] || item.kind) + ': ' + item.text).join('\n') : '') },
-      h('b', {}, step.what || step.symbol),
-      decisionsOf.map(item => h('div', { class: 'st-decision' + (item.kind === 'stops' ? ' stops' : '') }, (item.kind === 'stops' ? '⚠ ' : '◆ ') + item.text)),
+      h('b', {}, marked(step.what || step.symbol, words)),
+      decisionsOf.map(item => h('div', { class: 'st-decision' + (item.kind === 'stops' ? ' stops' : '') }, (item.kind === 'stops' ? '⚠ ' : '◆ '), marked(item.text, words))),
       step.details?.length ? h('div', { class: 'st-node-kinds' }, chips(step.details)) : undefined,
-      h('div', { class: 'st-node-meta' }, step.symbol + ' · ' + fileName(step.file)));
+      h('div', { class: 'st-node-meta' }, marked(step.symbol, words), ' · ' + fileName(step.file)));
   }
   // A stage as a diagram: its steps left to right, what each calls stacked under it,
   // and key behaviors (decisions, AI calls, waiting for you, files written) on every box.
@@ -774,7 +855,7 @@ function mountStages(root, post) {
       h('p', { class: 'st-muted st-foot' }, 'Not right? ', link('rebuild', {}, 'Map the system again'), ' (one AI call for the parts, plus one per part).')];
   }
   function render() {
-    const active = doc.activeElement, keep = active && /^st-(note|why|intent|system-note)$/.test(active.id || '') ? { id: active.id, value: active.value, start: active.selectionStart, end: active.selectionEnd } : undefined;
+    const active = doc.activeElement, keep = active && /^st-(note|why|intent|system-note|flowsearch)$/.test(active.id || '') ? { id: active.id, value: active.value, start: active.selectionStart, end: active.selectionEnd } : undefined;
     const scrollTop = root.scrollTop;
     root.replaceChildren(...body().flat(Infinity).filter(Boolean));
     root.scrollTop = scrollTop;
@@ -801,6 +882,8 @@ function mountStages(root, post) {
       case 'fit': target.closest('.st-canvas')?.fit?.(); return;
       case 'allSupport': ui.allSupport = !ui.allSupport; render(); return;
       case 'partTab': ui.partTab = data.tab; render(); return;
+      case 'flowHit': ui.flowHit = (ui.flowHit || 0) + Number(data.by); ui.flowStep = undefined; render(); jumpToHit(); return;
+      case 'flowClear': ui.flowQuery = ''; ui.flowStep = undefined; render(); return;
       case 'flowStep': ui.flowStep = ui.flowStep === data.key || !data.key ? undefined : data.key; render(); return;
       case 'resetLayout': if (state.layouts) delete state.layouts[data.key]; delete ui.views[data.key]; send('layout', { key: data.key, reset: true }); render(); return;
       case 'fullGraph': ui.full = ui.full === data.key ? undefined : data.key; render(); return;
@@ -832,7 +915,23 @@ function mountStages(root, post) {
     }
   });
   doc?.addEventListener?.('keydown', event => { if (event.key === 'Escape' && ui.full) { ui.full = undefined; render(); } });
+  // Center the diagram on the current match.
+  function jumpToHit() { requestAnimationFrame(centerHit); }
+  function centerHit() {
+    const places = ui.flowPlaces, hits = places?.hits || [];
+    if (!hits.length) return;
+    const index = ((ui.flowHit || 0) % hits.length + hits.length) % hits.length, node = hits[index];
+    const canvas = root.querySelector('.st-canvas[data-key="' + places.key + '"]'), view = ui.views[places.key];
+    if (!canvas || !view) return;
+    // Center it in the part of the diagram that is on screen.
+    const k = Math.max(view.k, 0.85), box = canvas.getBoundingClientRect(), screen = doc.defaultView?.innerHeight || box.bottom;
+    const top = Math.max(0, -box.top), bottom = Math.min(box.height, screen - box.top), middle = bottom > top + 80 ? (top + bottom) / 2 : box.height / 2;
+    ui.views[places.key] = { ...view, k, x: canvas.clientWidth / 2 - (node.x + node.w / 2) * k, y: middle - (node.y + node.h / 2) * k };
+    canvas.querySelector('.st-world')?.setAttribute('transform', 'translate(' + ui.views[places.key].x + ' ' + ui.views[places.key].y + ') scale(' + k + ')');
+  }
   root.addEventListener('keydown', event => {
+    if (event.target.id === 'st-flowsearch' && event.key === 'Enter') { event.preventDefault(); ui.flowHit = (ui.flowHit || 0) + (event.shiftKey ? -1 : 1); ui.flowStep = undefined; render(); jumpToHit(); return; }
+    if (event.target.id === 'st-flowsearch' && event.key === 'Escape') { ui.flowQuery = ''; render(); return; }
     if (event.target.id === 'st-intent' && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); ask(); return; }
     if ((event.key === 'Enter' || event.key === ' ') && event.target.matches?.('.st-node[data-act]')) { event.preventDefault(); event.target.click(); }
   });
@@ -846,6 +945,7 @@ function mountStages(root, post) {
     if (id === 'st-note') ui.noteDraft = event.target.value;
     if (id === 'st-system-note') ui.systemDraft = event.target.value;
     if (id === 'st-intent') ui.intentDraft = event.target.value;
+    if (id === 'st-flowsearch') { ui.flowQuery = event.target.value; ui.flowHit = 0; ui.flowStep = undefined; clearTimeout(ui.flowTimer); ui.flowTimer = setTimeout(() => { render(); jumpToHit(); }, 140); }
   });
   root.addEventListener('toggle', event => { const id = event.target.dataset?.expand; if (id) ui.expanded[id] = event.target.open; }, true);
   return {
@@ -859,7 +959,7 @@ function mountStages(root, post) {
 }
 
 // The client as a string for a webview script.
-const stagesClient = () => `const lineDiff = ${lineDiff.toString()};\nconst layeredLayout = ${layeredLayout.toString()};\nconst mountStages = ${mountStages.toString()};`;
+const stagesClient = () => `const lineDiff = ${lineDiff.toString()};\nconst stepSearch = ${stepSearch.toString()};\nconst layeredLayout = ${layeredLayout.toString()};\nconst mountStages = ${mountStages.toString()};`;
 
 // A standalone page (previews and tests); in VS Code the project panel hosts it.
 function stagesHTML() {
@@ -879,4 +979,4 @@ stages.shown();
 </script></body></html>`;
 }
 
-module.exports = { stagesHTML, stagesClient, STAGES_STYLE, lineDiff, mountStages, layeredLayout };
+module.exports = { stagesHTML, stagesClient, STAGES_STYLE, lineDiff, mountStages, layeredLayout, stepSearch };

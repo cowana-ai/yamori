@@ -416,3 +416,23 @@ test('the budget counts cache reads at a tenth, so cached prompts do not use up 
   assert.doesNotThrow(() => createRun(db, { budget: { perRun: 0, perDay: 3000 } }).check(500), '1000 + 500 + 900 = 2400 spent; 500 more fits in 3000');
   assert.throws(() => createRun(db, { budget: { perRun: 0, perDay: 3000 } }).check(700), /daily budget \(2,400 of 3,000 used\)/);
 });
+
+test('the How it works search is loose: word endings, one typo, same-meaning verbs; steps with the most words come first', () => {
+  const { stepSearch } = require('../src/views/stages');
+  const { queryWords, find, matches } = stepSearch();
+  const steps = [
+    { name: 'init', text: 'Sets up the research folder for a chosen month.' },
+    { name: '_eligible_angles', text: 'Picks up to three distinct angles per topic.' },
+    { name: 'rank_monthly_angles', text: 'Scores each angle and selects a winner.' },
+    { name: 'save_audit', text: 'Saves the audit record.' }
+  ];
+  const names = query => find(steps, queryWords(query), step => step.name + ' ' + step.text).map(step => step.name);
+  // Both words (picks ~ selection), exact ones first; "chosen" alone is only half.
+  assert.deepEqual(names('angle selection'), ['rank_monthly_angles', '_eligible_angles']);
+  assert.deepEqual(names('angel'), ['_eligible_angles', 'rank_monthly_angles'], 'one typo is fine');
+  assert.deepEqual(names('saving'), ['save_audit']);
+  assert.deepEqual(names('eligible'), ['_eligible_angles'], 'function names count');
+  assert.deepEqual(names('database migration'), []);
+  assert.equal(matches('Picks', queryWords('selection')), true);
+  assert.equal(matches('folder', queryWords('selection')), false);
+});

@@ -156,6 +156,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     return { ...base, system: view, part: item.workflowId, card, queue, systemNotes: vault.systemNotes(),
       partDetail: item.workflowId ? system.partDetail(db, graph, item.entry.notes, item.workflowId) : undefined,
       partFlow: item.workflowId ? system.partFlow(db, graph, item.workflowId) : undefined,
+      partCalls: item.workflowId ? item.callLinks?.[item.workflowId]?.links : undefined,
       shared: item.shared ? sharedDetail(item, view) : undefined,
       file: item.file ? system.fileDetail(db, graph, item.entry.notes, item.file, item.entry.explanations) : undefined,
       route: item.route, steer: item.steer && steerState(item.steer), activity: activity(db) };
@@ -242,10 +243,46 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (!db) return {};
     try { return JSON.parse(db.meta('layouts') || '{}'); } catch { return {}; }
   }
+  // Which steps of a part call which, from its call tree (local, no AI), so a click
+  // or a search can trace the real path. Cached until the part's files change.
+  async function callLinks(item, workflowId) {
+    const db = dbFor(item, false), graph = item.entry.graph, workflow = db?.workflow(workflowId);
+    if (!workflow || !graph) return;
+    const steps = db.steps(workflowId), keys = new Set(steps.map(step => step.file + '#' + step.symbol));
+    const signature = db.files(workflowId).map(file => file.path + ':' + (graph.files[file.path]?.hash || '')).join('|') + '|' + [...keys].sort().join(',');
+    item.callLinks ||= {};
+    if (item.callLinks[workflowId]?.signature === signature) return;
+    const { callTree } = require('./callgraph');
+    const files = [...new Set([...db.files(workflowId).map(file => file.path), ...(system.areasOf(graph).find(area => area.folder === workflow.folder)?.files || [])])].filter(file => graph.files[file]);
+    const texts = new Map();
+    for (const file of files) { try { texts.set(file, await map.readSource(item.entry, file)); } catch { /* Left out. */ } }
+    const tree = callTree(graph, texts, files, workflow.entry_file, workflow.entry_symbol, { maxNodes: 400, maxDepth: 14 });
+    const byId = new Map(tree.nodes.map(node => [node.id, node])), links = {};
+    // A step calls another step directly, or through helpers that are not steps.
+    for (const node of tree.nodes) {
+      const from = node.file + '#' + node.symbol;
+      if (!keys.has(from)) continue;
+      const found = new Set(), seen = new Set([node.id]), queue = [...node.calls];
+      while (queue.length) {
+        const next = byId.get(queue.shift());
+        if (!next || seen.has(next.id)) continue;
+        seen.add(next.id);
+        const key = next.file + '#' + next.symbol;
+        if (keys.has(key)) { if (key !== from) found.add(key); continue; }
+        queue.push(...next.calls);
+      }
+      if (found.size) links[from] = [...found];
+    }
+    item.callLinks[workflowId] = { signature, links };
+  }
   // A message from the System tab: errors show in the tab.
   async function message(entry, value) {
     const item = projectFor(entry);
-    try { item.error = ''; await receive(item, value); if (['openPart', 'openStage', 'openFile', 'openShared'].includes(value?.type)) noteSelection(item); }
+    try {
+      item.error = ''; await receive(item, value);
+      if (['openPart', 'openStage', 'openFile', 'openShared'].includes(value?.type)) noteSelection(item);
+      if (item.workflowId && ['openPart', 'ready', 'remapPart', 'upgradeParts', 'describeParts'].includes(value?.type)) await callLinks(item, item.workflowId).catch(() => {});
+    }
     catch (error) { item.error = error.message; }
     post(item);
   }
