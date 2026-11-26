@@ -153,16 +153,25 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-movable .st-node { cursor: grab; }
 #stages-view .st-svg { width: 100%; height: 100%; display: block; }
 #stages-view .st-zoom { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; }
-#stages-view .st-zoom button { min-width: 28px; font-size: 12px; border: 1px solid var(--read-border); background: var(--read-surface); }
+#stages-view .st-zoom button { min-width: 24px; height: 24px; padding: 0 7px; font-size: 12px; line-height: 22px; border: 1px solid var(--read-border); background: var(--read-page); }
 #stages-view .st-zoom { align-items: center; }
 #stages-view .st-canvas { resize: vertical; min-height: 180px; }
 #stages-view .st-path-stage { font: 600 10px/1.4 var(--vscode-editor-font-family, monospace); letter-spacing: .04em; text-transform: uppercase; margin: 0 0 3px; }
-#stages-view .st-full-tools { position: absolute; left: 8px; top: 6px; max-width: calc(100% - 440px); z-index: 2; background: var(--read-page); border: 1px solid var(--read-border); padding: 4px 8px; }
-#stages-view .st-full-tools .st-muted { font-size: 12px; }
-#stages-view .st-full-tools .st-flowbar { margin: 0; }
-#stages-view .st-full-aside { position: absolute; right: 8px; top: 48px; bottom: 8px; width: min(440px, 42%); overflow: auto; background: var(--read-page); border: 1px solid var(--read-border); padding: 0 14px 12px; cursor: auto; z-index: 2; }
-#stages-view .st-full-aside .st-card, #stages-view .st-full-aside .st-detail { border: 0; margin: 0; padding: 0; }
-#stages-view .st-canvas.full { position: fixed; inset: 6px; z-index: 50; height: auto; resize: none; box-shadow: 0 8px 40px rgba(0,0,0,.45); background-color: var(--read-page); }
+/* Full view: one thin strip on top (tools left, zoom right) and a slim panel on the right. */
+#stages-view .st-canvas.full::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 36px; background: var(--read-page); border-bottom: 1px solid var(--read-border); z-index: 1; }
+#stages-view .st-canvas.full .st-zoom { top: 6px; z-index: 3; }
+#stages-view .st-full-tools { position: absolute; left: 8px; top: 0; height: 36px; right: 260px; display: flex; align-items: center; z-index: 3; overflow: hidden; }
+#stages-view .st-full-tools .st-flowbar { margin: 0; flex-wrap: nowrap; gap: 6px; min-width: 0; }
+#stages-view .st-full-tools .st-flowbar > * { flex-shrink: 0; }
+#stages-view .st-full-tools .st-flowbar .st-muted { flex-shrink: 1; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#stages-view .st-full-tools .st-flowbar input { height: 24px; padding: 0 8px; font-size: 12px; flex: 0 1 260px; min-width: 160px; }
+#stages-view .st-flowbar button { height: 24px; padding: 0 8px; font-size: 12px; }
+#stages-view .st-full-aside { position: absolute; right: 0; top: 36px; bottom: 0; width: min(340px, 34%); overflow: auto; background: var(--read-page); border-left: 1px solid var(--read-border); padding: 10px 12px; cursor: auto; z-index: 2; font-size: 12.5px; }
+#stages-view .st-full-aside .st-card, #stages-view .st-full-aside .st-detail { border: 0; margin: 0; padding: 0; background: none; box-shadow: none; }
+#stages-view .st-full-aside h2 { font-size: 14px; margin: 0 0 6px; }
+#stages-view .st-full-aside .st-chip { white-space: normal; word-break: break-all; text-align: left; }
+#stages-view .st-full-aside button:not(.st-link) { height: 24px; padding: 0 8px; font-size: 12px; }
+#stages-view .st-canvas.full { position: fixed; inset: 0; border: 0; z-index: 50; height: auto; resize: none; box-shadow: 0 8px 40px rgba(0,0,0,.45); background-color: var(--read-page); }
 #stages-view .st-full-title { margin-right: 10px; font-size: 13px; }
 #stages-view .st-canvas-hidden { display: flex; gap: 8px; align-items: center; margin: 8px 0; padding: 8px 10px; border: 1px dashed var(--read-border); }
 #stages-view .st-blocks { list-style: none; margin: 6px 0 0; padding: 0; }
@@ -368,7 +377,7 @@ function mountStages(root, post) {
     }
     svg.append(layer);
     box.append(svg, h('div', { class: 'st-zoom' },
-      full ? h('b', { class: 'st-full-title' }, label) : undefined,
+      full && !toolbar ? h('b', { class: 'st-full-title' }, label) : undefined,
       Object.keys(saved).length ? act('resetLayout', { key }, 'Reset layout', { title: 'Put the boxes back where Yamori placed them' }) : undefined,
       act('zoom', { key, by: 1.25 }, '+', { title: 'Zoom in' }), act('zoom', { key, by: 0.8 }, '−', { title: 'Zoom out' }), act('fit', { key }, 'Fit', { title: 'See everything' }),
       act('fullGraph', { key }, full ? 'Exit full view' : '⤢ Enlarge', { title: full ? 'Back to the page (Esc)' : 'Fill the whole panel' }),
@@ -379,14 +388,16 @@ function mountStages(root, post) {
     // Drag the bottom edge to make the graph taller or shorter; the height is kept.
     if (!full && typeof ResizeObserver === 'function') { let first = true; new ResizeObserver(() => { if (first) { first = false; return; } ui.heights[key] = box.clientHeight; }).observe(box); }
     const apply = v => layer.setAttribute('transform', 'translate(' + v.x.toFixed(1) + ' ' + v.y.toFixed(1) + ') scale(' + v.k.toFixed(3) + ')');
+    // In full view the strip on top and the side panel cover part of the canvas.
+    const area = () => { const w = box.clientWidth || 900, hgt = box.clientHeight || 400, top = full ? 36 : 0, right = full && aside ? Math.min(340, w * 0.34) : 0; return { w: w - right, hgt: hgt - top, top }; };
     const fit = () => {
-      const w = box.clientWidth || 900, hgt = box.clientHeight || 400;
+      const { w, hgt, top } = area();
       // Readable first: never shrink below minZoom; drag or Fit to see the rest.
       const fitK = Math.min(1.1, (w - 40) / Math.max(1, width), (hgt - 50) / Math.max(1, height)), k = Math.max(Math.min(minZoom, 1), fitK);
-      ui.views[key] = { k, x: width * k < w ? (w - width * k) / 2 : 20, y: height * k < hgt ? Math.max(16, (hgt - height * k) / 2) : 16, sig: width + 'x' + height };
+      ui.views[key] = { k, x: width * k < w ? (w - width * k) / 2 : 20, y: top + (height * k < hgt ? Math.max(16, (hgt - height * k) / 2) : 16), sig: width + 'x' + height };
       apply(ui.views[key]);
     };
-    box.fit = () => { const w = box.clientWidth || 900, hgt = box.clientHeight || 400, k = Math.min(1.1, (w - 40) / Math.max(1, width), (hgt - 50) / Math.max(1, height)); ui.views[key] = { k, x: (w - width * k) / 2, y: Math.max(16, (hgt - height * k) / 2), sig: width + 'x' + height }; apply(ui.views[key]); };
+    box.fit = () => { const { w, hgt, top } = area(), k = Math.min(1.1, (w - 40) / Math.max(1, width), (hgt - 50) / Math.max(1, height)); ui.views[key] = { k, x: (w - width * k) / 2, y: top + Math.max(16, (hgt - height * k) / 2), sig: width + 'x' + height }; apply(ui.views[key]); };
     const sig = width + 'x' + height + (full ? ':full' : '');
     if (view && view.sig === sig) apply(view); else requestAnimationFrame(() => { fit(); ui.views[key].sig = sig; });
     let drag, moving;
@@ -615,14 +626,16 @@ function mountStages(root, post) {
     // What to light up: search hits and the steps that lead to them; a clicked step, what leads to it and what it calls.
     const words = finder.queryWords(ui.flowQuery);
     const hits = words.length ? finder.find(entries, words, entry => [entry.step.what, entry.step.symbol, fileName(entry.step.file), ...(entry.step.details || []).map(item => item.text + ' ' + (KIND[item.kind] || ''))].join(' ')) : [];
-    const clicked = entries.find(entry => entry.key === ui.flowStep);
+    // The path on screen is built around the box you first clicked (its root);
+    // clicking along it only selects another box, so the layout stays put.
+    const clicked = entries.find(entry => entry.key === (ui.flowRoot || ui.flowStep));
     const path = new Set();
     // The current match's path: what leads to it and what it does next.
     const current = hits.length ? hits[((ui.flowHit || 0) % hits.length + hits.length) % hits.length] : undefined;
     // A clicked box takes over the trace; matches stay outlined.
     if (current && !clicked) { path.add(current.ref); walk(current.ref, callers, 6).forEach(ref => path.add(ref)); walk(current.ref, calls, 1).forEach(ref => path.add(ref)); }
     if (clicked) { path.add(clicked.ref); walk(clicked.ref, callers, 6).forEach(ref => path.add(ref)); walk(clicked.ref, calls, 3).forEach(ref => path.add(ref)); }
-    if (clicked) return pathView(part, clicked, entries, calls, callers, walk, height, words);
+    if (clicked) return pathView(part, clicked, entries.find(entry => entry.key === ui.flowStep) || clicked, entries, calls, callers, walk, height, words);
     const active = !!(clicked || hits.length), hitRefs = new Set(hits.map(hit => hit.ref));
     const nodes = [], edges = [], idOf = ref => byRef.get(ref)?.id;
     let previousLast;
@@ -669,7 +682,7 @@ function mountStages(root, post) {
   }
   // A clicked step's path on its own, read left to right: what leads to it,
   // the step, and what it calls, each box labeled with its stage.
-  function pathView(part, clicked, entries, calls, callers, walk, height, words) {
+  function pathView(part, clicked, selected, entries, calls, callers, walk, height, words) {
     const before = walk(clicked.ref, callers, 6), after = walk(clicked.ref, calls, 2);
     const keep = new Set([...before, clicked.ref, ...after]);
     const list = entries.filter(entry => keep.has(entry.ref));
@@ -682,7 +695,7 @@ function mountStages(root, post) {
     keepFull(part, graphKey);
     const nodes = list.map(entry => {
       const at = layout.positions.get(entry.ref), color = stepColor(part.id, entry.stage.id);
-      const box = flowBox({ ...entry.step, depth: 0 }, entry.key, color, entry === clicked ? 'selected' : '', words);
+      const box = flowBox({ ...entry.step, depth: 0 }, entry.key, color, entry === selected ? 'selected' : entry === clicked ? 'onpath' : '', words);
       box.prepend(h('div', { class: 'st-path-stage', style: 'color:' + color }, stageNumber.get(entry.stage.id) + '. ' + entry.stage.name));
       return { id: entry.ref, x: at.x, y: at.y, w: W, h: H, ref: entry.ref, content: box };
     });
@@ -691,10 +704,14 @@ function mountStages(root, post) {
     const summary = (before.size ? plural(before.size, 'step') + ' lead here' : 'Nothing in this part calls it') + (after.size ? ' · it calls ' + plural(after.size, 'step') : '');
     const bar = () => h('div', { class: 'st-flowbar' },
       act('flowBack', {}, '← Whole part', { title: 'Back to every step of this part' }),
-      h('b', {}, 'Path of ' + clicked.step.symbol), muted(summary + '. Read left to right; click another box to follow its path.'));
+      h('b', {}, 'Path of ' + clicked.step.symbol), muted(summary + '. Read left to right; click a box for its details.'));
     ui.flowPlaces = { key: graphKey, hits: [] };
-    const canvas = graphView(graphKey, { nodes, edges, width: layout.width, height: layout.height, minHeight: 300, maxHeight: 760, minZoom: 0.7, label: 'Path of ' + clicked.step.symbol + ' in ' + part.name, aside: flowStepDetail(clicked.step), toolbar: bar });
-    return [ui.full === graphKey ? undefined : bar(), canvas, flowStepDetail(clicked.step)];
+    // Another box's own path, only when asked.
+    const detail = () => [selected !== clicked ? h('div', { class: 'st-row' }, link('flowRoot', { key: selected.key }, 'Show the path of ' + selected.step.symbol + ' →', { title: 'Lay out what leads to this step and what it calls' })) : undefined, flowStepDetail(selected.step)];
+    const canvas = graphView(graphKey, { nodes, edges, width: layout.width, height: layout.height, minHeight: 300, maxHeight: 760, minZoom: 0.7, label: 'Path of ' + clicked.step.symbol + ' in ' + part.name, aside: detail(), toolbar: bar });
+    const box = nodes.find(node => node.ref === selected.ref);
+    ui.flowSelected = { key: graphKey, x: box.x, y: box.y, w: box.w, h: box.h };
+    return [ui.full === graphKey ? undefined : bar(), canvas, detail()];
   }
   // Marks the words that matched, inside a box's text.
   function marked(text, words) {
@@ -934,10 +951,17 @@ function mountStages(root, post) {
       case 'fit': target.closest('.st-canvas')?.fit?.(); return;
       case 'allSupport': ui.allSupport = !ui.allSupport; render(); return;
       case 'partTab': ui.partTab = data.tab; render(); return;
-      case 'flowHit': ui.flowHit = (ui.flowHit || 0) + Number(data.by); ui.flowStep = undefined; render(); jumpToHit(); return;
-      case 'flowClear': ui.flowQuery = ''; ui.flowStep = undefined; render(); return;
-      case 'flowBack': ui.flowStep = undefined; render(); jumpToHit(); return;
-      case 'flowStep': ui.flowStep = ui.flowStep === data.key || !data.key ? undefined : data.key; render(); return;
+      case 'flowHit': ui.flowHit = (ui.flowHit || 0) + Number(data.by); ui.flowStep = ui.flowRoot = undefined; render(); jumpToHit(); return;
+      case 'flowClear': ui.flowQuery = ''; ui.flowStep = ui.flowRoot = undefined; render(); return;
+      case 'flowBack': ui.flowStep = ui.flowRoot = undefined; render(); jumpToHit(); return;
+      case 'flowStep':
+        // In a part's steps: the first click opens that step's path; clicks along it only select.
+        if (!data.key) ui.flowStep = ui.flowRoot = undefined;
+        else if (data.key.startsWith('p:') && ui.flowRoot) { ui.flowStep = data.key; render(); requestAnimationFrame(revealSelected); return; }
+        else if (data.key.startsWith('p:')) ui.flowStep = ui.flowRoot = data.key;
+        else ui.flowStep = ui.flowStep === data.key ? undefined : data.key;
+        render(); return;
+      case 'flowRoot': ui.flowStep = ui.flowRoot = data.key; render(); return;
       case 'resetLayout': if (state.layouts) delete state.layouts[data.key]; delete ui.views[data.key]; send('layout', { key: data.key, reset: true }); render(); return;
       case 'fullGraph': ui.full = ui.full === data.key ? undefined : data.key; render(); return;
       case 'hideGraph': ui.hidden[data.key] = true; if (ui.full === data.key) ui.full = undefined; render(); return;
@@ -945,7 +969,7 @@ function mountStages(root, post) {
       case 'notesPanel': ui.notesPanel = !ui.notesPanel; render(); return;
       case 'block': ui.blocks[data.key] = !ui.blocks[data.key]; render(); return;
       case 'allBlocks': { const keys = (state.file?.pseudocode?.sections || []).map((_, index) => state.file.file + '#' + index); const open = !keys.every(key => ui.blocks[key]); keys.forEach(key => { ui.blocks[key] = open; }); render(); return; }
-      case 'openPart': ui.here = undefined; send('openPart', { id: data.id || undefined }); return;
+      case 'openPart': ui.here = undefined; ui.flowStep = ui.flowRoot = undefined; send('openPart', { id: data.id || undefined }); return;
       case 'openShared': ui.here = undefined; send('openShared', { id: data.id || undefined }); return;
       case 'openStage': send('openStage', { part: data.part, id: data.id || undefined }); return;
       case 'openFile': send('openFile', { file: data.file || undefined }); return;
@@ -968,6 +992,21 @@ function mountStages(root, post) {
     }
   });
   doc?.addEventListener?.('keydown', event => { if (event.key === 'Escape' && ui.full) { ui.full = undefined; render(); } });
+  // Pan just enough that the selected box is not cut off or under the side panel.
+  function revealSelected() {
+    const place = ui.flowSelected, canvas = place && root.querySelector('.st-canvas[data-key="' + place.key + '"]'), view = place && ui.views[place.key];
+    if (!canvas || !view) return;
+    const full = canvas.classList.contains('full'), width = canvas.clientWidth, right = full && canvas.querySelector('.st-full-aside') ? Math.min(340, width * 0.34) : 0, top = full ? 36 : 0;
+    const left = place.x * view.k + view.x, rightEdge = left + place.w * view.k, upper = place.y * view.k + view.y, lower = upper + place.h * view.k;
+    let dx = 0, dy = 0;
+    if (rightEdge > width - right - 12) dx = width - right - 12 - rightEdge;
+    if (left + dx < 12) dx = 12 - left;
+    if (lower > canvas.clientHeight - 12) dy = canvas.clientHeight - 12 - lower;
+    if (upper + dy < top + 12) dy = top + 12 - upper;
+    if (!dx && !dy) return;
+    ui.views[place.key] = { ...view, x: view.x + dx, y: view.y + dy };
+    canvas.querySelector('.st-world')?.setAttribute('transform', 'translate(' + ui.views[place.key].x + ' ' + ui.views[place.key].y + ') scale(' + view.k + ')');
+  }
   // Center the diagram on the current match.
   function jumpToHit() { requestAnimationFrame(centerHit); }
   function centerHit() {
@@ -983,7 +1022,7 @@ function mountStages(root, post) {
     canvas.querySelector('.st-world')?.setAttribute('transform', 'translate(' + ui.views[places.key].x + ' ' + ui.views[places.key].y + ') scale(' + k + ')');
   }
   root.addEventListener('keydown', event => {
-    if (event.target.id === 'st-flowsearch' && event.key === 'Enter') { event.preventDefault(); ui.flowHit = (ui.flowHit || 0) + (event.shiftKey ? -1 : 1); ui.flowStep = undefined; render(); jumpToHit(); return; }
+    if (event.target.id === 'st-flowsearch' && event.key === 'Enter') { event.preventDefault(); ui.flowHit = (ui.flowHit || 0) + (event.shiftKey ? -1 : 1); ui.flowStep = ui.flowRoot = undefined; render(); jumpToHit(); return; }
     if (event.target.id === 'st-flowsearch' && event.key === 'Escape') { ui.flowQuery = ''; render(); return; }
     if (event.target.id === 'st-intent' && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); ask(); return; }
     if ((event.key === 'Enter' || event.key === ' ') && event.target.matches?.('.st-node[data-act]')) { event.preventDefault(); event.target.click(); }
@@ -998,7 +1037,7 @@ function mountStages(root, post) {
     if (id === 'st-note') ui.noteDraft = event.target.value;
     if (id === 'st-system-note') ui.systemDraft = event.target.value;
     if (id === 'st-intent') ui.intentDraft = event.target.value;
-    if (id === 'st-flowsearch') { ui.flowQuery = event.target.value; ui.flowHit = 0; ui.flowStep = undefined; clearTimeout(ui.flowTimer); ui.flowTimer = setTimeout(() => { render(); jumpToHit(); }, 140); }
+    if (id === 'st-flowsearch') { ui.flowQuery = event.target.value; ui.flowHit = 0; ui.flowStep = ui.flowRoot = undefined; clearTimeout(ui.flowTimer); ui.flowTimer = setTimeout(() => { render(); jumpToHit(); }, 140); }
   });
   root.addEventListener('toggle', event => { const id = event.target.dataset?.expand; if (id) ui.expanded[id] = event.target.open; }, true);
   return {
