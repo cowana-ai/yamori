@@ -173,7 +173,7 @@ async function pool(items, size, work) {
  * Existing parts are matched by where they start, so their ids, notes and
  * pinned steps survive. Returns { parts, calls, failed }.
  */
-async function buildSystem({ db, graph, notes, explanations, texts, request, run, provider, model, headSha, project, signal, onProgress = () => {}, concurrency = 3, force = false, readText }) {
+async function buildSystem({ db, graph, notes, explanations, texts, request, run, provider, model, headSha, project, signal, onProgress = () => {}, concurrency = 8, force = false, readText }) {
   const scopeOf = folder => areasOf(graph).find(area => area.folder === folder)?.files || [];
   const sig = signature(graph), version = SYSTEM_PROMPT_VERSION + '|' + (model || '');
   if (!force && db.meta('system_sig') === sig && db.meta('system_version') === version && db.workflows().length) {

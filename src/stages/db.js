@@ -104,6 +104,15 @@ CREATE TABLE IF NOT EXISTS requests (
   outcome TEXT NOT NULL,
   files   TEXT
 );
+CREATE TABLE IF NOT EXISTS function_notes (
+  file    TEXT NOT NULL,
+  symbol  TEXT NOT NULL,
+  hash    TEXT NOT NULL,
+  what    TEXT,
+  details TEXT,
+  at      TEXT NOT NULL,
+  PRIMARY KEY (file, symbol, hash)
+);
 CREATE INDEX IF NOT EXISTS steps_by_file ON steps(file);
 CREATE INDEX IF NOT EXISTS changes_by_status ON changes(workflow_id, status);
 CREATE INDEX IF NOT EXISTS calls_by_day ON model_calls(day);
@@ -303,6 +312,15 @@ class StageDb {
   pendingCount(workflowId) {
     return workflowId === undefined ? Number(this.get("SELECT COUNT(*) AS n FROM changes WHERE status = 'pending'").n)
       : Number(this.get("SELECT COUNT(*) AS n FROM changes WHERE workflow_id = ? AND status = 'pending'", workflowId).n);
+  }
+
+  // --- what each function does, keyed by its code: reused until the code changes ---
+  functionNote(file, symbol, hash) {
+    const row = this.get('SELECT what, details FROM function_notes WHERE file = ? AND symbol = ? AND hash = ?', file, symbol, hash);
+    return row && { what: row.what, details: safeJson(row.details, []) };
+  }
+  setFunctionNote(file, symbol, hash, { what, details = [] }) {
+    this.run('INSERT INTO function_notes (file, symbol, hash, what, details, at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(file, symbol, hash) DO UPDATE SET what = excluded.what, details = excluded.details, at = excluded.at', file, symbol, hash, what ?? null, JSON.stringify(details || []), now());
   }
 
   // --- what the founder asked for, and what came of it (for the notes) ---

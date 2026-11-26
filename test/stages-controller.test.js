@@ -22,25 +22,37 @@ function fakeModel() {
     if (/Code behind one stage changed/.test(prompt)) return { name: 'Answer', gist: 'Writes and sends replies, twice if needed.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email' }], behaviorChanged: true, summary: 'Replies are now sent twice when the first try fails.' };
     if (/Yamori's router/.test(prompt)) return { targets: ['email-helper/answer'], explanation: 'Retrying belongs where replies are sent, in the Email helper.' };
     if (/steer writer/.test(prompt)) return { summary: 'Replies are retried once.', edits: [{ file: 'agents/email/inbox.py', startLine: 6, endLine: 6, replacement: '    print(message, answer) or print(message, answer)', why: 'Retry once.' }] };
-    if (/stage mapper|Yamori's mapper/.test(prompt)) {
+    // Step writers describe each function they are given, as the planner's stages say.
+    if (/Yamori's step writer/.test(prompt)) {
+      const known = new Map([...stagesFor('server'), ...stagesFor('sales'), ...stagesFor('email')].flatMap(stage => stage.steps).map(step => [step.file + '#' + step.symbol, step]));
+      return { steps: [...prompt.matchAll(/^### (\S+) \(([^:]+):\d+\)$/gm)].map(([, symbol, file]) => ({ file, symbol, what: known.get(file + '#' + symbol)?.what || 'Does ' + symbol, details: known.get(file + '#' + symbol)?.details || [] })) };
+    }
+    if (/stage mapper|Yamori's mapper|Yamori's planner/.test(prompt)) {
       const entry = (/WORKFLOW ENTRY: (\{.*\})/.exec(prompt) || /CALL TREE \(from (.*)\):/.exec(prompt))[1];
-      if (/email/.test(entry)) return { stages: [
-        { id: 'read', name: 'Read inbox', gist: 'Gets unread email.', input: 'mailbox', output: 'unread email', steps: [{ file: 'agents/email/inbox.py', symbol: 'fetch_unread', what: 'Gets the unread email' }] },
-        { id: 'answer', name: 'Answer', gist: 'Writes and sends replies.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email', details: ['Asks the AI once per email', 'Replies even when the AI answer is empty'] }, { file: 'agents/email/inbox.py', symbol: 'reply', what: 'Sends the reply' }] },
-        { id: 'write', name: 'Write text', gist: 'Asks AI for the words.', input: 'prompt', output: 'text', steps: [{ file: 'shared/llm.py', symbol: 'complete', what: 'Asks the AI to write' }] }] };
-      if (/sales/.test(entry)) return { stages: [
-        { id: 'load', name: 'Load leads', gist: 'Reads leads.', input: 'CRM', output: 'leads', steps: [{ file: 'agents/sales/crm.py', symbol: 'load_leads', what: 'Reads the leads' }] },
-        { id: 'score', name: 'Score', gist: 'Scores each lead.', input: 'leads', output: 'scores', steps: [{ file: 'agents/sales/pipeline.py', symbol: 'score_leads', what: 'Scores each lead' }] },
-        { id: 'save', name: 'Save scores', gist: 'Stores scores.', input: 'scores', output: 'saved', steps: [{ file: 'agents/sales/crm.py', symbol: 'save_score', what: 'Saves a score' }] }] };
-      return { stages: [
-        { id: 'receive', name: 'Receive request', gist: 'Takes a web request.', input: 'request', output: 'path', steps: [{ file: 'server/app.py', symbol: 'main', what: 'Starts the server' }] },
-        { id: 'route', name: 'Pick helper', gist: 'Starts the right helper.', input: 'path', output: 'helper run', steps: [{ file: 'server/app.py', symbol: 'handle_request', what: 'Picks the helper for the path' }] },
-        { id: 'respond', name: 'Respond', gist: 'Returns the result.', input: 'helper run', output: 'response', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Runs the email helper' }] }] };
+      return { stages: stagesFor(/email/.test(entry) ? 'email' : /sales/.test(entry) ? 'sales' : 'server') };
     }
     throw new Error('Unexpected prompt: ' + prompt.slice(0, 80));
   };
-  const requestStructured = async ({ prompt }) => { calls.push(prompt); return { raw: JSON.stringify(answer(prompt)), usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0 }, actualModel: /steer writer/.test(prompt) ? 'main-model' : 'cheap-model' }; };
-  return { calls, requestStructured };
+  function stagesFor(kind) {
+    {
+      if (kind === 'email') return [
+        { id: 'read', name: 'Read inbox', gist: 'Gets unread email.', input: 'mailbox', output: 'unread email', steps: [{ file: 'agents/email/inbox.py', symbol: 'fetch_unread', what: 'Gets the unread email' }] },
+        { id: 'answer', name: 'Answer', gist: 'Writes and sends replies.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email', details: ['Asks the AI once per email', 'Replies even when the AI answer is empty'] }, { file: 'agents/email/inbox.py', symbol: 'reply', what: 'Sends the reply' }] },
+        { id: 'write', name: 'Write text', gist: 'Asks AI for the words.', input: 'prompt', output: 'text', steps: [{ file: 'shared/llm.py', symbol: 'complete', what: 'Asks the AI to write' }] }];
+      if (kind === 'sales') return [
+        { id: 'load', name: 'Load leads', gist: 'Reads leads.', input: 'CRM', output: 'leads', steps: [{ file: 'agents/sales/crm.py', symbol: 'load_leads', what: 'Reads the leads' }] },
+        { id: 'score', name: 'Score', gist: 'Scores each lead.', input: 'leads', output: 'scores', steps: [{ file: 'agents/sales/pipeline.py', symbol: 'score_leads', what: 'Scores each lead' }] },
+        { id: 'save', name: 'Save scores', gist: 'Stores scores.', input: 'scores', output: 'saved', steps: [{ file: 'agents/sales/crm.py', symbol: 'save_score', what: 'Saves a score' }] }];
+      return [
+        { id: 'receive', name: 'Receive request', gist: 'Takes a web request.', input: 'request', output: 'path', steps: [{ file: 'server/app.py', symbol: 'main', what: 'Starts the server' }] },
+        { id: 'route', name: 'Pick helper', gist: 'Starts the right helper.', input: 'path', output: 'helper run', steps: [{ file: 'server/app.py', symbol: 'handle_request', what: 'Picks the helper for the path' }] },
+        { id: 'respond', name: 'Respond', gist: 'Returns the result.', input: 'helper run', output: 'response', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Runs the email helper' }] }];
+    }
+  }
+
+  const live = { now: 0, most: 0 };
+  const requestStructured = async ({ prompt }) => { calls.push(prompt); live.now++; live.most = Math.max(live.most, live.now); await new Promise(resolve => setTimeout(resolve, 2)); live.now--; return { raw: JSON.stringify(answer(prompt)), usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0 }, actualModel: /steer writer/.test(prompt) ? 'main-model' : 'cheap-model' }; };
+  return { calls, requestStructured, live };
 }
 
 async function setup({ obsidianConfig = '/nonexistent/obsidian.json', answers = {}, root: existing } = {}) {
@@ -82,7 +94,7 @@ async function setup({ obsidianConfig = '/nonexistent/obsidian.json', answers = 
   const last = () => posted.filter(message => message.type === 'stages').at(-1).state;
   const item = screen.projectFor(entry);
   const settle = async () => { while (item.estimating) await new Promise(resolve => setTimeout(resolve, 5)); };
-  return { root, entry, screen, posted, send, last, settle, settings, item, map, calls: model.calls, close() { screen.dispose(); closeStageDb(dbPath(root)); }, cleanup() { this.close(); fs.rmSync(root, { recursive: true, force: true }); } };
+  return { root, entry, screen, posted, send, last, settle, settings, item, map, live: model.live, calls: model.calls, close() { screen.dispose(); closeStageDb(dbPath(root)); }, cleanup() { this.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
 test('one click maps the whole system: every part, its steps in plain words, and how the parts connect', { skip }, async () => {
@@ -95,7 +107,11 @@ test('one click maps the whole system: every part, its steps in plain words, and
     assert.equal(ctx.calls.length, 0, 'the estimate needs no AI');
     assert.equal(fs.existsSync(path.join(ctx.root, '.yamori', 'notes')), false, 'nothing is written before mapping');
     await ctx.send({ type: 'buildSystem' });
-    assert.equal(ctx.calls.length, 4, 'one system call and one call per part');
+    assert.equal(ctx.calls.filter(prompt => /system mapper/.test(prompt)).length, 1, 'one call finds the parts');
+    assert.equal(ctx.calls.filter(prompt => /Yamori's planner/.test(prompt)).length, 3, 'one planner per part, reading the call tree and docs only');
+    assert.equal(ctx.calls.filter(prompt => /Yamori's step writer/.test(prompt)).length, 9, 'one step writer per stage, in parallel');
+    const mapped = ctx.calls.length;
+    assert.ok(ctx.live.most > 1 && ctx.live.most <= 4, 'parts and step writers run in parallel, at most 4 AI calls at once (saw ' + ctx.live.most + ')');
     const state = ctx.last();
     assert.deepEqual(state.system.parts.map(part => part.name), ['Web server', 'Email helper', 'Lead scoring']);
     assert.match(state.system.summary, /web server starts them/);
@@ -109,10 +125,13 @@ test('one click maps the whole system: every part, its steps in plain words, and
     assert.deepEqual(card.steps.map(step => step.what), ['Answers each unread email', 'Sends the reply']);
     assert.deepEqual(card.steps[0].details, ['Asks the AI once per email', 'Replies even when the AI answer is empty']);
     // The deep map read the part's call tree and code, not only file notes.
-    const deep = ctx.calls.find(prompt => /CALL TREE \(from "triage_loop"/.test(prompt));
-    assert.match(deep, /- triage_loop \(agents\/email\/run\.py:5\)\n {2}- fetch_unread \(agents\/email\/inbox\.py:1\)/);
-    assert.match(deep, /### triage_loop \(agents\/email\/run\.py:5\)\ndef triage_loop\(\):/);
-    assert.equal(ctx.calls.length, 4, 'opening a step calls no AI');
+    const planner = ctx.calls.find(prompt => /CALL TREE \(from "triage_loop"/.test(prompt));
+    assert.match(planner, /- triage_loop \(agents\/email\/run\.py:5\)\n {2}- fetch_unread \(agents\/email\/inbox\.py:1\)/);
+    assert.doesNotMatch(planner, /def triage_loop/, 'the planner reads no code');
+    const writer = ctx.calls.find(prompt => /Yamori's step writer/.test(prompt) && /### triage_loop/.test(prompt));
+    assert.match(writer, /### triage_loop \(agents\/email\/run\.py:5\)\ndef triage_loop\(\):/);
+    assert.doesNotMatch(writer, /def score_leads/, 'a writer reads only its own stage\'s code');
+    assert.equal(ctx.calls.length, mapped, 'opening a step calls no AI');
     // Readable notes: a system note, a note per part, a note per step.
     const notes = path.join(ctx.root, '.yamori', 'notes');
     const systemNote = fs.readFileSync(path.join(notes, 'System.md'), 'utf8');
@@ -124,7 +143,13 @@ test('one click maps the whole system: every part, its steps in plain words, and
     assert.match(stepNote, /> \[!note\]- Where this is in the code/);
     // Mapping again with the same files: no AI.
     await ctx.send({ type: 'buildSystem' });
-    assert.equal(ctx.calls.length, 4);
+    assert.equal(ctx.calls.length, mapped);
+    // Mapping again on purpose: the parts and plans are redone, but every function's description is reused.
+    await ctx.send({ type: 'buildSystem', force: true });
+    const again = ctx.calls.slice(mapped);
+    assert.equal(again.filter(prompt => /Yamori's step writer/.test(prompt)).length, 0, 'unchanged functions need no step writer');
+    assert.equal(again.length, 4);
+    assert.deepEqual(ctx.last().system.parts.find(part => part.id === 'email-helper').stages.map(stage => stage.name), ['Read inbox', 'Answer', 'Write text']);
   } finally { ctx.cleanup(); }
 });
 
@@ -219,6 +244,7 @@ test('the map shows shared code, a part opens to its files and how they use each
   const ctx = await setup();
   try {
     await ctx.send({ type: 'buildSystem' });
+    const mapped = ctx.calls.length;
     let state = ctx.last();
     assert.deepEqual(state.system.shared.map(box => [box.folder, box.usedBy.sort()]), [['shared', ['email-helper', 'lead-scoring', 'web-server']]]);
     await ctx.send({ type: 'openPart', id: 'email-helper' });
@@ -237,7 +263,7 @@ test('the map shows shared code, a part opens to its files and how they use each
     state = ctx.last();
     assert.deepEqual(state.shared.fileList.map(file => file.file), ['shared/llm.py']);
     assert.equal(state.part, undefined, 'opening shared code closes the part');
-    assert.equal(ctx.calls.length, 4, 'browsing the map calls no AI');
+    assert.equal(ctx.calls.length, mapped, 'browsing the map calls no AI');
   } finally { ctx.cleanup(); }
 });
 
@@ -293,6 +319,7 @@ test('the agent session sees what is selected, can bring a step into view, and d
   const ctx = await setup();
   try {
     await ctx.send({ type: 'buildSystem' });
+    const mapped = ctx.calls.length;
     assert.equal(ctx.last().terminalChat, true);
     await ctx.send({ type: 'openPart', id: 'email-helper' });
     await ctx.send({ type: 'openStage', part: 'email-helper', id: 'answer' });
@@ -315,6 +342,18 @@ test('the agent session sees what is selected, can bring a step into view, and d
     assert.deepEqual(state.layouts.system, { 'email-helper': { x: 512, y: -40 } });
     await ctx.send({ type: 'layout', key: 'system', reset: true });
     assert.deepEqual(ctx.last().layouts, {});
-    assert.equal(ctx.calls.length, 4, 'none of this calls AI');
+    assert.equal(ctx.calls.length, mapped, 'none of this calls AI');
+  } finally { ctx.cleanup(); }
+});
+
+test('notes bring themselves up to date when Yamori opens, with nothing to press', { skip }, async () => {
+  const ctx = await setup();
+  try {
+    await ctx.send({ type: 'buildSystem' });
+    const system = path.join(ctx.root, '.yamori', 'notes', 'System.md');
+    fs.rmSync(system);
+    ctx.screen.attach(ctx.entry, { postMessage: () => Promise.resolve(true) });
+    assert.ok(fs.existsSync(system), 'opening the panel rewrote the notes');
+    assert.ok(ctx.screen.state(ctx.item).vault.lastSync.notes > 5);
   } finally { ctx.cleanup(); }
 });

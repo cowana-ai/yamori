@@ -60,8 +60,12 @@ test('one persistent agent session per project: started once with Yamori\'s tool
   try {
     const sessions = stub.exports.createAgentSessions(context, api, { find: async () => '/usr/local/bin/claude' });
     const entry = { root: { fsPath: path.join(home, 'shop'), toString: () => 'file://' + path.join(home, 'shop') } };
+    // Started by itself with the panel: in the background, not shown.
+    let shown = 0; const createTerminal = api.window.createTerminal; api.window.createTerminal = options => { const terminal = createTerminal(options); terminal.show = () => { shown++; }; return terminal; };
+    await sessions.ensure(entry); await sessions.ensure(entry);
+    assert.equal(created.length, 1, 'started once'); assert.equal(shown, 0, 'not shown, no focus taken');
     await sessions.open(entry);
-    assert.equal(created.length, 1); assert.equal(created[0].name, 'Yamori chat · shop'); assert.equal(created[0].options.cwd, path.join(home, 'shop'));
+    assert.equal(shown, 1, 'Chat shows the same session'); assert.equal(created.length, 1); assert.equal(created[0].name, 'Yamori chat · shop'); assert.equal(created[0].options.cwd, path.join(home, 'shop'));
     const args = created[0].options.shellArgs.join(' ');
     assert.match(args, /--session-id [0-9a-f-]{36}/); assert.match(args, /--append-system-prompt .*call the yamori get_view tool first/s); assert.match(args, /--mcp-config \{"mcpServers":\{"yamori":/);
     assert.ok(sessions.alive(entry));

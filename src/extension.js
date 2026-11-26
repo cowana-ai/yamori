@@ -1221,6 +1221,8 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     panel.webview.html = mapHTML(context.globalState.get('readingPalette', 'auto'));
     entry.panel = panel; watch(entry); void refreshGit(entry);
     stagesHost?.attach(entry, panel.webview);
+    // Your agent session starts by itself with the panel, out of the way, so Chat is instant.
+    if (setting(api, 'chatInTerminal', true) !== false && setting(api, 'chatAutoStart', true) !== false) void agentSessions?.ensure(entry).then(() => post(entry)).catch(() => {});
     panel.onDidDispose(() => { stagesHost?.detach(entry); entry.panel = undefined; unwatch(entry); entry.notesController?.abort(); entry.flowController?.abort(); entry.planController?.abort(); entry.search = undefined; entry.flow = undefined; });
     panel.webview.onDidReceiveMessage(async message => {
       try { await receive(entry, message); } catch (e) { entry.error = e.message; post(entry); }
@@ -1739,6 +1741,12 @@ function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
   }
   return {
     alive: entry => !!alive(entry),
+    // Ready in the background (not shown, no focus taken) so Chat opens at once.
+    async ensure(entry) {
+      if (api.workspace.isTrusted === false || !api.window.createTerminal || alive(entry)) return;
+      if (!PROVIDERS[context.globalState.get('provider')]) return;
+      await start(entry);
+    },
     async open(entry, { prefill = '' } = {}) {
       if (api.workspace.isTrusted === false) throw new Error('Trust this workspace to start an agent session.');
       if (!api.window.createTerminal) throw new Error('The integrated terminal is unavailable.');

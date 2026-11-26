@@ -106,15 +106,25 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     } catch (error) { item.lastSync = { at: new Date().toISOString(), notes: 0, error: error.message }; item.notice = 'Notes were not written: ' + error.message; }
   }
 
+  // At most a few AI calls at once, across parts and step writers: each is a CLI process.
+  const slots = { free: Math.max(1, Math.min(8, Number(setting('parallelRequests', 4)) || 4)), waiting: [] };
+  const acquire = () => slots.free > 0 ? (slots.free--, Promise.resolve()) : new Promise(resolve => slots.waiting.push(resolve));
+  const release = () => { const next = slots.waiting.shift(); if (next) next(); else slots.free++; };
   async function request(tier) {
-    const connection = await map.connection(tier);
+    // Stage work (mapping, step writing, updates) is simple and structured: low
+    // reasoning effort cut output tokens in half and time by about 3x in testing.
+    const connection = tier === 'cheap' ? { ...(await map.connection(tier)), effort: 'low' } : await map.connection(tier);
     // Agents' propose_change (MCP, outside VS Code) uses the same provider and budget.
     try { for (const item of projects.values()) if (item.db && tier === 'cheap') { item.db.setMeta('connection:cheap', JSON.stringify({ provider: connection.provider, model: connection.model || '', effort: connection.effort ?? null, cliPath: connection.cliPath || '' })); item.db.setMeta('budget', JSON.stringify(budget())); } } catch { /* Agents fall back to get_stage. */ }
     return {
       provider: connection.provider, model: connection.model,
       request: async ({ prompt, schema, signal }) => {
-        const response = await map.requestStructured({ ...connection, prompt, schema, signal, showPreview: false });
-        return { raw: response.raw, usage: response.usage, model: response.actualModel || connection.model };
+        await acquire();
+        try {
+          if (signal?.aborted) throw new Error('Cancelled.');
+          const response = await map.requestStructured({ ...connection, prompt, schema, signal, showPreview: false });
+          return { raw: response.raw, usage: response.usage, model: response.actualModel || connection.model };
+        } finally { release(); }
       }
     };
   }
@@ -187,6 +197,8 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const item = projectFor(entry);
     item.host = host;
     try { markChanged(item); } catch { /* Shown on the next post. */ }
+    // Notes are kept current by themselves: opening Yamori brings them up to date.
+    try { if (dbFor(item, false)) { vaultFor(item); sync(item); } } catch { /* Shown on the next post. */ }
     return item;
   }
   function detach(entry) { const item = projects.get(entry.root.toString()); if (item) item.host = undefined; }
@@ -486,6 +498,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (signal.aborted) return;
     const affected = new Set();
     for (const file of files) for (const stage of stages.fileChanged(db, file, entry.graph.files[file]?.hash || 'removed')) affected.add(stage.workflow_id);
+    sync(item);
     post(item);
     if (!affected.size || !autoUpdate() || signal.aborted) return;
     await updateChanged(item, { trigger: 'system.auto', signal, workflows: [...affected] }).catch(error => { item.error = error.message; post(item); });

@@ -39,7 +39,8 @@
         "yamori.stages.autoUpdate",
         "yamori.obsidian.vaultPath",
         "yamori.obsidian.auto",
-        "yamori.chatInTerminal"
+        "yamori.chatInTerminal",
+        "yamori.chatAutoStart"
       ]
     }
   },
@@ -455,6 +456,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Chat, plan and ask for changes with your own Claude Code or Codex session in the VS Code terminal (one per project, it stays open). It sees what you have open in the editor and in Yamori, and plans it saves appear on the Plan canvas. Off: use the chat inside the Plan tab and the request box in System."
+        },
+        "yamori.chatAutoStart": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Start your agent session in the terminal by itself when you open Yamori's project panel, without showing it or taking focus, so **Chat** opens at once. It uses no AI until you write to it."
         }
       }
     },

@@ -8,9 +8,13 @@ Open the System tab and click **Map my system**. The tab says up front about how
 
 1. Without AI, Yamori looks in every folder (two levels deep, so `agents/email` and `agents/sales` count separately) for functions that could start something: a function nothing else in its file calls, that reaches the most of the project, runs at startup, or is named like a starter (`main`, `run_*`, `*_loop`, handlers).
 2. One cheap AI call reads those candidates with the files' AI notes, decides which are real parts, names them, and says how they connect ("the web server starts the email helper"). It can only choose among the candidates, so it cannot invent code.
-3. For each part, Yamori builds its call tree without AI: from where the part starts, what each function calls and defines inside itself (tools registered in a function, handlers), across files, with each function's docstring. One cheap AI call then reads the part's README, that call tree and the code of the functions it reaches (saved pseudocode where Yamori has it, otherwise the source, bounded), and splits the part into 3–8 stages in the order the work happens. Each step says what it does and lists up to four details that matter when steering: decisions and limits ("keeps at most 5 sources"), fallbacks ("if the AI call fails, keeps every source"), which AI or prompt it uses, what it reads and writes. A part that is driven from outside (an MCP server's tools, a CLI's commands) is ordered by the workflow its docs and tool descriptions describe.
+3. For each part, Yamori builds its call tree without AI: from where the part starts, what each function calls and defines inside itself (tools registered in a function, handlers), across files, with each function's docstring. Then a small team of cheap AI calls, at low reasoning effort:
+   - a **planner** reads the part's README and call tree (no code) and splits the part into 3–8 stages in the order the work happens, with the functions that do each one. A part driven from outside (an MCP server's tools, a CLI's commands) is ordered by the workflow its docs and tool descriptions describe;
+   - **step writers**, one per stage and in parallel, read only that stage's code (saved pseudocode where Yamori has it) and say what each function does, with up to four details that matter when steering: decisions and limits ("keeps at most 5 sources"), fallbacks ("if the AI call fails, keeps every source"), which AI or prompt it uses, what it reads and writes.
 
-On a 49-file research agent this took one call, about 2 minutes and $0.016, for 8 stages and 62 steps.
+   What each function does is saved against a hash of its code, so mapping again or updating reuses every unchanged function without a call. At most 4 AI calls run at once (`yamori.parallelRequests`).
+
+   On a 49-file research agent (153 functions, 62 steps): 36 seconds and $0.017 to map, against 114 seconds and $0.016 for one big call; mapping it again reused 51 functions' descriptions and cost $0.014.
 
 Mapping again with the same files makes no AI call. When files are added or removed, the tab offers **Update the map**; parts whose code did not change are reused. **Map the system again** at the bottom redoes the parts.
 
@@ -30,7 +34,7 @@ Click a part to open it below the map, which stays in view:
 
 ## Chat, plan and change things in the terminal
 
-**Chat** (top of the System tab), **Open chat in terminal** (in System and in Plan), or **Yamori: Chat with Your Agent in the Terminal** opens one agent session for the project in the VS Code terminal: Claude Code or Codex, whichever Yamori uses. It stays open while you work; with Claude Code the same conversation resumes after VS Code restarts. You can enlarge the System map and chat beside it.
+Opening Yamori's project panel starts one agent session for the project in the VS Code terminal by itself, in the background (`yamori.chatAutoStart`); it uses no AI until you write to it. **Chat** (top of the System tab), **Show chat** (in System and in Plan), or **Yamori: Chat with Your Agent in the Terminal** brings it up: Claude Code or Codex, whichever Yamori uses. It stays open while you work; with Claude Code the same conversation resumes after VS Code restarts. You can enlarge the System map and chat beside it.
 
 The session is connected to Yamori and knows what you are looking at: the file, line and selected text in the editor, the file open in Read, the Yamori tab, and the part, step or file you selected in the System map (MCP `get_view`). So "why does this retry?" works without naming the file. It reads the map and your notes (`list_stages`, `get_stage`), writes plans onto Yamori's **Plan** canvas (`save_plan`), and can bring a part, step, file or plan into view in Yamori (`show_in_yamori`). **Ask in terminal…** on a step or file opens the session with that step or file already on the prompt.
 
@@ -50,7 +54,7 @@ Notes connect to Obsidian with nothing to set up:
 - Otherwise, if Obsidian is installed, they go to the vault Obsidian has open (or opened last), found in Obsidian's own list of vaults.
 - Otherwise they go to `.yamori/notes/` in the project. Notes written there move into the vault once Yamori finds one; nothing in the vault is overwritten.
 
-The top of the System tab says where notes are and when they were last written. Click it for the folder, **Update notes now** (no AI), **Open in Obsidian** and **Show the folder**. **Update** also says what it did, including when nothing changed. `yamori.obsidian.vaultPath` picks a vault by hand; `yamori.obsidian.auto` turns the search off.
+Notes update by themselves: when you open Yamori, save code, map, review, or ask your agent. The top of the System tab says where they are and when they last synced; click it for the folder, **Open in Obsidian** and **Show the folder**. **Update** also says what it did, including when nothing changed. `yamori.obsidian.vaultPath` picks a vault by hand; `yamori.obsidian.auto` turns the search off.
 
 In the vault, under `Yamori/<repo>/`:
 

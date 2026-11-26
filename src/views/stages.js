@@ -539,7 +539,7 @@ function mountStages(root, post) {
     const total = state.activity?.total, sys = state.system;
     return h('div', { class: 'st-bar' },
       h('h1', { class: 'st-title' }, 'How ' + (state.repo || 'this project') + ' works'), spacer(),
-      state.vault && sys ? link('notesPanel', {}, (state.vault.obsidian ? 'Obsidian' : 'Notes') + (state.vault.lastSync?.error ? ' · not written' : state.vault.lastSync ? ' · updated ' + new Date(state.vault.lastSync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''), { title: 'Where the notes are, and update them now' }) : undefined,
+      state.vault && sys ? link('notesPanel', {}, (state.vault.obsidian ? 'Obsidian' : 'Notes') + (state.vault.lastSync?.error ? ' · not written' : state.vault.lastSync ? ' · synced ' + new Date(state.vault.lastSync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''), { title: 'Notes sync by themselves. Click for where they are.' }) : undefined,
       sys ? act('refresh', {}, 'Update', { disabled: !!state.busy, title: 'Update only what changed in the code' }) : undefined,
       state.terminalChat ? act('agentSession', {}, state.agentSession ? 'Chat ↗' : 'Chat', { title: 'Your agent session in the VS Code terminal' }) : undefined,
       link('activity', {}, total?.calls ? 'Today: ' + tokens(total.input + total.cached + total.output) + ' tokens · ' + money(total.cost) : 'AI use', { title: 'Every AI call today, with tokens and cost' }));
@@ -615,9 +615,9 @@ function mountStages(root, post) {
     const v = state.vault, last = v.lastSync;
     return h('section', { class: 'st-card' }, h('h2', {}, v.obsidian ? 'Notes in Obsidian' : 'Notes', spacer(), link('notesPanel', {}, 'Close')),
       h('p', {}, v.obsidian ? 'Yamori writes the notes into your Obsidian vault by itself: ' : 'Yamori writes the notes here by itself: ', h('code', {}, v.dir)),
-      h('p', { class: last?.error ? 'st-error' : 'st-muted' }, last?.error ? 'The last update failed: ' + last.error : last ? 'Last updated ' + new Date(last.at).toLocaleString() + ' · ' + plural(last.notes, 'note') + '. They update after every change, review and request.' : 'Not written yet in this session.'),
+      h('p', { class: last?.error ? 'st-error' : 'st-muted' }, last?.error ? 'The last update failed: ' + last.error : (last ? 'Last updated ' + new Date(last.at).toLocaleString() + ' · ' + plural(last.notes, 'note') + '. ' : '') + 'Nothing to do: they update by themselves when you open Yamori, save code, map, review, or ask your agent.'),
       v.obsidian ? undefined : h('p', { class: 'st-muted' }, 'No Obsidian vault found. Open this folder as a vault in Obsidian, or set yamori.obsidian.vaultPath, and the notes move there.'),
-      h('div', { class: 'st-tools' }, go('syncNotes', {}, 'Update notes now'), act('openNote', {}, v.obsidian ? 'Open in Obsidian' : 'Open the system note'), link('revealNotes', {}, 'Show the folder'), link('notesSettings', {}, 'Settings')));
+      h('div', { class: 'st-tools' }, go('openNote', {}, v.obsidian ? 'Open in Obsidian' : 'Open the system note'), link('revealNotes', {}, 'Show the folder'), link('notesSettings', {}, 'Settings')));
   }
   function systemNotes() {
     return h('section', { class: 'st-card' }, h('h2', {}, 'Rules for the whole system', spacer(), link('openNote', {}, state.vault?.obsidian ? 'Open in Obsidian' : 'Open notes file')),
