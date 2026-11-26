@@ -1650,7 +1650,7 @@ async function connectAgents(context, api = vscode, { run = runProcess, discover
   const plan = agentPlan(launch, { claude, codex, home });
   if (!plan.claude && !plan.codex) { api.window.showWarningMessage?.('Yamori: neither Claude Code nor Codex is installed. Use Yamori: Set Up AI first.'); return; }
   const action = disconnect ? 'Disconnect' : 'Connect';
-  const choice = await api.window.showWarningMessage(disconnect ? 'Remove Yamori\'s knowledge server from your Claude Code and Codex?' : 'Add Yamori\'s knowledge server to your own Claude Code and Codex sessions?\n\nThey can then look up the project map and Yamori\'s pseudocode, and save pseudocode for files that have none, so you see it in Yamori without generating it. This only registers the server (claude mcp add, codex mcp add); your settings and instruction files are not changed.', { modal: true }, action);
+  const choice = await api.window.showWarningMessage(disconnect ? 'Remove Yamori\'s knowledge server from your Claude Code and Codex?' : 'Add Yamori\'s knowledge server to your own Claude Code and Codex sessions?\n\nThey can then look up the project map, your stages and their notes, and Yamori\'s pseudocode, and save pseudocode for files that have none, so you see it in Yamori without generating it. This only registers the server (claude mcp add, codex mcp add, and the yamori entry in ~/.cursor/mcp.json when Cursor is installed); your settings and instruction files are not changed.', { modal: true }, action);
   if (choice !== action) return;
   const results = [];
   // Remove what earlier versions wrote; never create these files.
@@ -1664,6 +1664,19 @@ async function connectAgents(context, api = vscode, { run = runProcess, discover
       if (item.legacy.settings) await clean(item.legacy.settings, text => JSON.stringify(stripHooks(JSON.parse(text)), null, 2) + '\n');
       results.push(name + (disconnect ? ': disconnected' : ': connected'));
     } catch (error) { results.push(name + ': ' + String(error.message || error).split('\n')[0].slice(0, 200)); }
+  }
+  // Cursor reads ~/.cursor/mcp.json; only touched when Cursor is installed.
+  const cursorDir = path.join(home, '.cursor');
+  if (await fs.stat(cursorDir).then(stat => stat.isDirectory(), () => false)) {
+    try {
+      const file = path.join(cursorDir, 'mcp.json'), before = await fs.readFile(file, 'utf8').catch(() => undefined);
+      const config = before === undefined ? {} : JSON.parse(before);
+      const servers = { ...(config.mcpServers || {}) };
+      if (disconnect) delete servers.yamori; else servers.yamori = { command: launch.runtime, args: [launch.launcher], env: { ELECTRON_RUN_AS_NODE: '1' } };
+      const after = JSON.stringify({ ...config, mcpServers: servers }, null, 2) + '\n';
+      if (after !== before && !(before === undefined && disconnect)) await fs.writeFile(file, after);
+      results.push('Cursor' + (disconnect ? ': disconnected' : ': connected'));
+    } catch (error) { results.push('Cursor: ' + String(error.message || error).split('\n')[0].slice(0, 200)); }
   }
   await context.globalState.update('agentsConnected', !disconnect && results.some(row => /connected$/.test(row)));
   api.window.showInformationMessage?.('Yamori · ' + results.join(' · ') + (disconnect ? '' : '. Start a new Claude Code or Codex session to use it.'));

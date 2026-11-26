@@ -34,10 +34,14 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (!available()) throw new StageDbUnavailable();
     item.db = openStageDb(file);
     // The database is derived and local: keep it out of commits.
-    try { const ignore = path.join(item.root, '.yamori', '.gitignore'); if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'yamori.db\nyamori.db-*\n'); } catch { /* Best effort. */ }
+    try { const ignore = path.join(item.root, '.yamori', '.gitignore'); if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'yamori.db\nyamori.db-*\nagent-done\n'); } catch { /* Best effort. */ }
     if (!item.workflowId) item.workflowId = item.db.meta('last_workflow') || item.db.workflows()[0]?.id;
     extensions.opened?.(item);
     try { vaultFor(item); } catch { /* Notes are optional. */ }
+    // An agent's MCP `done` touches .yamori/agent-done: settle the burst now.
+    try {
+      item.doneWatch = fs.watch(path.dirname(file), (_event, name) => { if (String(name) === 'agent-done') item.scheduler.done(); });
+    } catch { /* Without the watch, the idle timer still settles the burst. */ }
     return item.db;
   }
   // The vault (or .yamori/notes/) follows the setting; agents find it through the db.
@@ -75,6 +79,8 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   }
   async function request(tier) {
     const connection = await map.connection(tier);
+    // Agents' propose_change (MCP, outside VS Code) uses the same provider and budget.
+    try { if (tier === 'cheap' && projects.size) for (const item of projects.values()) if (item.db) { item.db.setMeta('connection:cheap', JSON.stringify({ provider: connection.provider, model: connection.model || '', effort: connection.effort ?? null, cliPath: connection.cliPath || '' })); item.db.setMeta('budget', JSON.stringify(budget())); } } catch { /* Agents fall back to get_stage. */ }
     return {
       provider: connection.provider, model: connection.model,
       request: async ({ prompt, schema, signal }) => {
@@ -309,7 +315,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     saved, updateChanged, post, state, projectFor, dbFor, vaultFor, sync, vaultChanged, request, budget, busy,
     // An agent finished a run (MCP `done`): summarize once, now.
     agentDone(entry) { projectFor(entry).scheduler.done(); },
-    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); item.panel?.dispose(); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
+    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.doneWatch?.close(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); item.panel?.dispose(); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
   };
 }
 

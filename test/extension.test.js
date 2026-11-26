@@ -3460,6 +3460,26 @@ test('the reader shows pseudocode an agent saved, with no AI request, and the gu
   } finally { await h.close(); }
 });
 
+test('Connect also registers Yamori in Cursor\'s mcp.json when Cursor is installed, keeping the user\'s other servers', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-home-')), storage = path.join(home, 'storage');
+  try {
+    await fs.mkdir(path.join(home, '.cursor'), { recursive: true });
+    await fs.writeFile(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { mine: { command: 'mine' } } }));
+    const api = { workspace: { isTrusted: true, getConfiguration: () => ({ get: (_, fallback) => fallback }) }, window: { showWarningMessage: async (_message, _options, action) => action, showInformationMessage: async () => undefined } };
+    const stub = { exports: {} };
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: path.join(__dirname, '..', 'src'), console, URL, URLSearchParams });
+    const values = new Map(), context = { globalStorageUri: { fsPath: storage }, extensionUri: { fsPath: path.join(__dirname, '..') }, globalState: { get: k => values.get(k), update: async (k, v) => values.set(k, v) } };
+    const options = { run: async () => '', discover: async owner => '/usr/local/bin/' + owner, home, platform: 'darwin' };
+    assert.deepEqual(JSON.parse(JSON.stringify(await stub.exports.connectAgents(context, api, options))), ['Claude Code: connected', 'Codex: connected', 'Cursor: connected']);
+    let config = JSON.parse(await fs.readFile(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+    assert.deepEqual(config.mcpServers.mine, { command: 'mine' });
+    assert.deepEqual(config.mcpServers.yamori.args, [path.join(storage, 'bin', 'yamori-mcp.js')]); assert.deepEqual(config.mcpServers.yamori.env, { ELECTRON_RUN_AS_NODE: '1' });
+    await stub.exports.connectAgents(context, api, { ...options, disconnect: true });
+    config = JSON.parse(await fs.readFile(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+    assert.deepEqual(config, { mcpServers: { mine: { command: 'mine' } } });
+  } finally { await fs.rm(home, { recursive: true, force: true }); }
+});
 test('Connect only registers the server with both CLIs, removes what earlier versions added, and leaves the user\'s own settings alone', async () => {
   const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-home-')), storage = path.join(home, 'storage'), runs = [];

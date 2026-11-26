@@ -47,6 +47,21 @@ Set `yamori.obsidian.vaultPath` to your vault folder to keep the notes in Obsidi
 
 Yamori rewrites only the text between `<!-- yamori:start -->` and `<!-- yamori:end -->`; edits inside it are restored on the next update. Everything else in the note is yours and is never overwritten. Changing `name:` in a stage note's front matter renames the stage in Yamori and pins it. Notes of stages that no longer exist move to `_archive/`; notes you created yourself are never touched. Writing and reading notes is file IO only: a note edit never triggers a model call.
 
+## Agents (MCP)
+
+**Yamori: Connect Claude Code & Codex** registers Yamori's MCP server with Claude Code and Codex, and with Cursor (`~/.cursor/mcp.json`) when Cursor is installed. Agents get these stage tools:
+
+| Tool | What it returns | Cost |
+|---|---|---|
+| `list_stages(workflow?)` | Stages in order with gist, In/Out, files, Needs update and pending review | no model call |
+| `get_stage(workflow?, stage)` | Steps with current lines and cached pseudocode, plus the founder's notes | no model call |
+| `what_changed(workflow?, since_review?)` | Change sentences since the last review, with status and why | no model call |
+| `add_note(workflow?, stage, text)` | Appends to the stage's free notes | file IO |
+| `done()` | Tells Yamori the editing run finished, so it summarizes each changed stage once | file IO |
+| `propose_change(workflow?, stage, intent)` | Files and steps to touch for an intent, with the founder's notes as constraints | one cheap-model call, at most one per 30 s and 20 a day, counted against `yamori.tokenBudget` |
+
+The server tells agents that founder notes are constraints on edits to a stage. `propose_change` uses the provider and model Yamori last used for stages in VS Code.
+
 ## Storage
 
 `.yamori/yamori.db` (SQLite, git-ignored) holds workflows, stages, steps, file hashes, the review queue and the token ledger. It is derived from code and can be deleted; pinned stages are the only founder edits it keeps. Stages need the editor's built-in SQLite (VS Code 1.101 or newer).
