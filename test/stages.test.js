@@ -211,3 +211,71 @@ test('the review diff marks removed and added pseudocode lines', () => {
   const { lineDiff } = require('../src/views/stages');
   assert.deepEqual(lineDiff('a\nb\nc', 'a\nB\nc\nd').map(line => line.kind + ':' + line.text), ['same:a', 'del:b', 'add:B', 'same:c', 'add:d']);
 });
+
+test('vault: managed sections are rewritten, free sections survive, renames pin, orphans move to _archive, decisions reach the change log', { skip }, async () => {
+  const fs = require('node:fs'), os = require('node:os');
+  const { Vault, parseNote, mergeNote } = require('../src/stages/vault');
+  const review = require('../src/stages/review');
+  const ctx = await setup(), model = fakeModel(prompt => /Code behind one stage changed/.test(prompt)
+    ? { name: 'Act', gist: 'g', input: 'a', output: 'b', steps: [{ file: 'agent/actor.py', symbol: 'act' }], behaviorChanged: true, summary: 'Act now runs steps in parallel.' } : STAGES);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yamori-vault-'));
+  try {
+    // Without a vault: .yamori/notes/ in the project.
+    const local = new Vault({ root });
+    assert.equal(local.dir, path.join(root, '.yamori', 'notes'));
+    const vault = new Vault({ root, vaultPath: path.join(root, 'vault') });
+    assert.equal(vault.dir, path.join(root, 'vault', 'Yamori', path.basename(root)));
+    vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    const planFile = vault.findStageNote(workflowId, 'plan');
+    assert.ok(planFile.endsWith(path.join('Stages', workflowId, 'Plan.md')));
+    let text = fs.readFileSync(planFile, 'utf8');
+    assert.match(text, /^---\ntype: stage\nworkflow: run-agent\nstage_id: plan\nname: Plan\nfiles: \[agent\/planner\.py\]/);
+    assert.match(text, /vscode:\/\/cowana-ai\.yamori\/open\?file=agent%2Fplanner\.py&line=4/); assert.match(text, /cursor:\/\/cowana-ai\.yamori\/open/);
+    assert.match(text, /\[\[Files\/agent\/planner\.py#\^plan\|agent\/planner\.py\]\]/);
+    assert.ok(fs.existsSync(path.join(vault.dir, 'Files', 'agent', 'planner.py.md')));
+    assert.match(fs.readFileSync(path.join(vault.dir, 'Index.md'), 'utf8'), /\[\[Stages\/run-agent\/Plan\|Plan\]\]/);
+    // A founder note in Obsidian and an agent note via the card/MCP.
+    fs.writeFileSync(planFile, text.replace('## Notes\n', '## Notes\n\nNever store PII in prompts.\n'));
+    vault.addNote(ctx.db, workflowId, 'plan', 'Keep plans under 10 steps.', { author: 'Claude Code', at: new Date('2026-11-26T10:00:00Z') });
+    assert.equal(vault.stageNotes(workflowId, 'plan').text, 'Never store PII in prompts.\n- 2026-11-26 · Claude Code: Keep plans under 10 steps.');
+    // Re-export after a regeneration never removes it; edits inside the managed section are restored.
+    fs.writeFileSync(planFile, fs.readFileSync(planFile, 'utf8').replace('**In:**', '**Hacked In:**'));
+    ctx.db.updateStage(workflowId, 'plan', { gist: 'New gist.' });
+    vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    text = fs.readFileSync(planFile, 'utf8');
+    assert.match(text, /> New gist\./); assert.doesNotMatch(text, /Hacked/);
+    assert.match(text, /Never store PII in prompts\./); assert.match(text, /Keep plans under 10 steps\./);
+    // A rename in front matter becomes a pinned override (no model call).
+    fs.writeFileSync(planFile, text.replace('name: Plan\n', 'name: Think ahead\n'));
+    const renames = vault.renames(ctx.db, workflowId);
+    assert.deepEqual(renames, [{ stageId: 'plan', name: 'Think ahead' }]);
+    stages.renameStage(ctx.db, workflowId, 'plan', renames[0].name);
+    vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    assert.deepEqual(vault.renames(ctx.db, workflowId), []);
+    assert.ok(ctx.db.stage(workflowId, 'plan').pinned);
+    assert.equal(model.calls.length, 1);
+    // An approved change lands in Changes/<date>.md with its sentence and why.
+    stages.fileChanged(ctx.db, 'agent/actor.py', edit(ctx, 'agent/actor.py', 'act', 'do act in parallel'));
+    await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db) });
+    const [change] = review.reviewQueue(ctx.db, workflowId);
+    const decided = review.decide(ctx.db, change.id, 'approved', 'Faster on big inboxes.');
+    const log = vault.appendChange(ctx.db, decided, { at: new Date('2026-11-26T14:02:00Z') });
+    assert.ok(log.endsWith(path.join('Changes', '2026-11-26.md')));
+    assert.match(fs.readFileSync(log, 'utf8'), /14:02 · \[\[Stages\/run-agent\/Act\|Act\]\] · \*\*approved\*\* · Act now runs steps in parallel\.\n {2}- Why: Faster on big inboxes\./);
+    // A stage that disappears: its note moves to _archive with the founder's text.
+    stages.mergeStages(ctx.db, workflowId, 'act', 'plan');
+    vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    assert.equal(fs.existsSync(planFile), false);
+    const archived = path.join(vault.dir, '_archive', 'Stages', workflowId, 'Plan.md');
+    assert.match(fs.readFileSync(archived, 'utf8'), /Never store PII/);
+    // A note the user created by hand is never touched.
+    const mine = path.join(vault.stageDir(workflowId), 'My thoughts.md');
+    fs.writeFileSync(mine, '# Mine\n'); vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    assert.equal(fs.readFileSync(mine, 'utf8'), '# Mine\n');
+    // User front matter keys survive a merge.
+    const merged = mergeNote('---\ntags: [agent]\nname: X\n---\nhello', { front: { type: 'stage', name: 'Y' }, managed: 'M' });
+    assert.deepEqual(parseNote(merged).front, { tags: ['agent'], name: 'Y', type: 'stage' });
+    assert.match(merged, /<!-- yamori:end -->\n\nhello$/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

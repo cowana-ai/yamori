@@ -34,6 +34,19 @@ When a stage update finds that behavior changed, it adds one plain sentence to t
 
 Renames, formatting and refactors that keep behavior do not enter the queue.
 
+## Notes and Obsidian
+
+Each stage card has a note box (**Save note**). Write why a stage works the way it does, constraints ("never store PII") and decisions. Agents read these notes before they edit the stage.
+
+Set `yamori.obsidian.vaultPath` to your vault folder to keep the notes in Obsidian under `Yamori/<repo>/`; without it they go to `.yamori/notes/` in the project.
+
+- `Stages/<workflow>/<Stage>.md`: front matter (`type`, `workflow`, `stage_id`, `name`, `files`, `updated`), then a managed section with the gist, In/Out and the ordered steps. Each step links to its file note (`[[Files/<file>#^step]]`) and back to the code (`vscode://…` and `cursor://…`).
+- `Files/<path>.md`: the file's AI note, the stages that use it, and backlinks.
+- `Changes/YYYY-MM-DD.md`: every approved or rejected change with its sentence, stage link and why.
+- `Index.md`: workflows → stages → files.
+
+Yamori rewrites only the text between `<!-- yamori:start -->` and `<!-- yamori:end -->`; edits inside it are restored on the next update. Everything else in the note is yours and is never overwritten. Changing `name:` in a stage note's front matter renames the stage in Yamori and pins it. Notes of stages that no longer exist move to `_archive/`; notes you created yourself are never touched. Writing and reading notes is file IO only: a note edit never triggers a model call.
+
 ## Storage
 
 `.yamori/yamori.db` (SQLite, git-ignored) holds workflows, stages, steps, file hashes, the review queue and the token ledger. It is derived from code and can be deleted; pinned stages are the only founder edits it keeps. Stages need the editor's built-in SQLite (VS Code 1.101 or newer).

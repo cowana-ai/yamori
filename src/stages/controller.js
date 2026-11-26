@@ -10,6 +10,7 @@ const { createRun, normalizeBudget, activity } = require('./budget');
 const stages = require('./generate');
 const { createStageScheduler } = require('./scheduler');
 const review = require('./review');
+const { Vault } = require('./vault');
 const { stagesHTML } = require('../views/stages');
 
 function createStages({ api, context, map, setting, gitOperationInProgress, extensions = {} }) {
@@ -36,7 +37,41 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     try { const ignore = path.join(item.root, '.yamori', '.gitignore'); if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'yamori.db\nyamori.db-*\n'); } catch { /* Best effort. */ }
     if (!item.workflowId) item.workflowId = item.db.meta('last_workflow') || item.db.workflows()[0]?.id;
     extensions.opened?.(item);
+    try { vaultFor(item); } catch { /* Notes are optional. */ }
     return item.db;
+  }
+  // The vault (or .yamori/notes/) follows the setting; agents find it through the db.
+  function vaultFor(item) {
+    const vaultPath = String(setting('obsidian.vaultPath', '') || '').trim();
+    if (item.vault && item.vault.vaultPath === vaultPath) return item.vault;
+    item.vault = new Vault({ vaultPath, root: item.root });
+    item.vaultWatch?.close(); item.vaultWatch = undefined;
+    try { dbFor(item).setMeta('vault_root', item.vault.dir); } catch { /* No database yet. */ }
+    try {
+      fs.mkdirSync(item.vault.dir, { recursive: true });
+      item.vaultWatch = fs.watch(item.vault.dir, { recursive: true }, (_event, name) => {
+        if (!name || !String(name).endsWith('.md')) return;
+        clearTimeout(item.vaultTimer);
+        item.vaultTimer = setTimeout(() => vaultChanged(item), 300);
+      });
+    } catch { /* Watching is best effort; the card re-reads notes when opened. */ }
+    return item.vault;
+  }
+  // Note edits never call a model. A rename in front matter becomes a pinned override.
+  function vaultChanged(item) {
+    const db = dbFor(item, false);
+    if (!db) return;
+    let renamed = false;
+    for (const workflow of db.workflows()) for (const change of item.vault.renames(db, workflow.id)) { stages.renameStage(db, workflow.id, change.stageId, change.name); renamed = true; }
+    if (renamed) sync(item);
+    post(item);
+  }
+  // Rewrite managed sections. Pure file IO.
+  function sync(item, workflowId = item.workflowId) {
+    const db = dbFor(item, false);
+    if (!db || !workflowId) return;
+    try { vaultFor(item).syncWorkflow(db, item.entry.graph || { files: {} }, item.entry.notes, workflowId); }
+    catch (error) { item.notice = 'Notes were not written: ' + error.message; }
   }
   async function request(tier) {
     const connection = await map.connection(tier);
@@ -62,7 +97,9 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const workflow = item.workflowId ? stages.workflowView(db, graph, item.workflowId) : undefined;
     const status = item.workflowId ? stages.workflowStatus(db, graph, item.workflowId, item.lastModel) : {};
     const card = workflow && item.open ? stages.stageView(db, graph, item.entry.explanations, item.workflowId, item.open) : undefined;
+    if (card) { const notes = vaultFor(item).stageNotes(item.workflowId, card.id); card.notes = notes.text; card.noteFile = !!notes.file; }
     const extra = extensions.state?.(item, { db, graph, workflow, card }) || {};
+    extra.vault = { dir: vaultFor(item).dir, obsidian: vaultFor(item).obsidian };
     const lineOf = (file, symbol) => { const def = stages.symbolsOf(graph.files[file]).find(item => item.name === symbol); return def ? def.start || def.line : 1; };
     const queue = workflow ? review.reviewQueue(db, item.workflowId).map(change => ({ ...change, detail: change.detail && { ...change.detail, steps: (change.detail.steps || []).map(step => ({ ...step, line: lineOf(step.file, step.symbol) })) } })) : [];
     return { ...base, workflows, workflow, card, queue, outdated: !!status.outdated, activity: activity(db), ...extra };
@@ -90,8 +127,13 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     });
     return item;
   }
+  const MUTATIONS = new Set(['rename', 'pin', 'merge', 'move', 'decide', 'refresh', 'refreshStage']);
   async function receive(item, message) {
     if (!message || typeof message.type !== 'string') return;
+    await handle(item, message);
+    if (MUTATIONS.has(message.type)) sync(item);
+  }
+  async function handle(item, message) {
     const db = () => dbFor(item);
     const wf = item.workflowId;
     switch (message.type) {
@@ -127,7 +169,14 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       case 'decide': {
         if (!['approved', 'rejected'].includes(message.status)) break;
         const decided = review.decide(db(), Number(message.id), message.status, typeof message.why === 'string' ? message.why : '', { headSha: await head(item) });
+        try { vaultFor(item).appendChange(db(), decided); } catch (error) { item.notice = 'The change log was not written: ' + error.message; }
         await extensions.decided?.(item, decided);
+        break;
+      }
+      case 'addNote': vaultFor(item).addNote(db(), wf, message.stage, message.text, { author: 'You' }); break;
+      case 'openNote': {
+        const file = vaultFor(item).findStageNote(wf, message.stage) || (sync(item), vaultFor(item).findStageNote(wf, message.stage));
+        if (file) await api.window.showTextDocument(await api.workspace.openTextDocument(api.Uri.file(file)), { preview: true, viewColumn: api.ViewColumn.Beside });
         break;
       }
       case 'markReviewed': review.markReviewed(db(), wf, await head(item)); break;
@@ -186,6 +235,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       const result = await stages.generateWorkflow({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, entryFile: choice.file, entrySymbol: choice.symbol, files, request: send, run, provider, model, headSha: await head(item) });
       item.workflowId = result.workflowId; db.setMeta('last_workflow', result.workflowId);
       item.notice = result.calls ? '' : 'Nothing changed since these stages were made: no model call.';
+      sync(item, result.workflowId);
       await extensions.generated?.(item, result.workflowId);
     });
   }
@@ -200,6 +250,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     await busy(item, 'Regenerating stages…', async () => {
       const run = createRun(db, { budget: budget(), trigger: 'stages.regenerate' });
       await stages.generateWorkflow({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, entryFile: workflow.entry_file, entrySymbol: workflow.entry_symbol, id: workflow.id, files: db.files(workflow.id).map(file => file.path), request: send, run, provider, model, headSha: await head(item), force: true });
+      sync(item, workflow.id);
       await extensions.generated?.(item, workflow.id);
     });
   }
@@ -218,6 +269,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
         if (stageId) { calls += (await stages.refreshStage({ ...common, stageId })).calls; continue; }
         const result = await stages.refreshStale(common);
         calls += result.calls; skipped.push(...result.skipped);
+        sync(item, workflowId);
         await extensions.refreshed?.(item, workflowId, result);
       }
     });
@@ -254,10 +306,10 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   return {
     show: async (entry, options) => show(await map.ensureGraph(entry), options),
     fromEntry, regenerate: async entry => { const item = projectFor(entry); await show(entry); await regenerate(item); },
-    saved, updateChanged, post, state, projectFor, dbFor, request, budget, busy,
+    saved, updateChanged, post, state, projectFor, dbFor, vaultFor, sync, vaultChanged, request, budget, busy,
     // An agent finished a run (MCP `done`): summarize once, now.
     agentDone(entry) { projectFor(entry).scheduler.done(); },
-    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.panel?.dispose(); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
+    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); item.panel?.dispose(); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
   };
 }
 

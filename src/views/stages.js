@@ -148,7 +148,18 @@ function card() {
   return html + '</section>';
 }
 // Later milestones add sections (notes, steer) here.
-function extraCardSections() { return ''; }
+function extraCardSections(stage) {
+  return notesSection(stage) + steerSection(stage);
+}
+function notesSection(stage) {
+  const where = state.vault?.obsidian ? 'Obsidian' : '.yamori/notes';
+  return '<div class="section"><h3>Founder notes · why it is this way</h3>' +
+    (stage.notes ? '<pre style="white-space:pre-wrap">' + esc(stage.notes) + '</pre>' : '<p class="muted">No notes yet. Constraints and decisions written here (for example “never store PII”) are what agents read before they edit this stage.</p>') +
+    '<div class="tools"><textarea id="note" aria-label="Add a note" placeholder="Remember: why, constraints, decisions…">' + esc(ui.noteDraft || '') + '</textarea>' +
+    '<button class="primary" data-act="addNote" data-stage="' + esc(stage.id) + '">Save note</button>' +
+    '<button class="link" data-act="openNote" data-stage="' + esc(stage.id) + '">Open in ' + where + '</button></div></div>';
+}
+function steerSection() { return ''; }
 function activity() {
   if (!ui.activity || !state.activity) return '';
   const { total, calls, day } = state.activity;
@@ -195,7 +206,10 @@ function reviewPanel() {
   }).join('') + '</section>';
 }
 function render() {
+  // Keep typing intact when new state arrives mid-sentence.
+  const active = document.activeElement, keep = active && active.id && /^(note|why|intent)$/.test(active.id) ? { id: active.id, value: active.value, start: active.selectionStart, end: active.selectionEnd } : undefined;
   document.getElementById('app').innerHTML = body();
+  if (keep) { const field = document.getElementById(keep.id); if (field) { field.value = keep.value; field.focus(); field.setSelectionRange(keep.start, keep.end); } }
   const select = document.getElementById('workflow');
   if (select) select.onchange = () => { ui.open = undefined; save(); send('workflow', { id: select.value }); };
 }
@@ -223,10 +237,12 @@ function handleAction(act, target) {
     case 'approve': case 'reject': ui.why = { id: Number(target.dataset.id), status: act === 'approve' ? 'approved' : 'rejected' }; save(); render(); document.getElementById('why')?.focus(); return true;
     case 'cancelWhy': ui.why = undefined; save(); render(); return true;
     case 'saveWhy': send('decide', { id: ui.why.id, status: ui.why.status, why: document.getElementById('why')?.value || '' }); ui.why = undefined; save(); return true;
+    case 'addNote': { const text = document.getElementById('note')?.value || ''; if (!text.trim()) return true; send('addNote', { stage: target.dataset.stage, text }); ui.noteDraft = ''; save(); return true; }
     case 'diff': send('diff', { id: Number(target.dataset.id), file: target.dataset.file, line: Number(target.dataset.line) }); return true;
   }
   return false;
 }
+document.addEventListener('input', event => { if (event.target.id === 'note') { ui.noteDraft = event.target.value; save(); } });
 document.addEventListener('toggle', event => { const id = event.target.dataset?.expand; if (id) { ui.expanded = { ...(ui.expanded || {}), [id]: event.target.open }; save(); } }, true);
 window.addEventListener('message', event => {
   const message = event.data;

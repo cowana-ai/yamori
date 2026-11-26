@@ -74,10 +74,14 @@ test('from an entry point to a stage graph, then a save updates only the affecte
     let state = ctx.screen.state(ctx.screen.projectFor(ctx.entry));
     assert.deepEqual(state.workflow.stages.map(stage => stage.name), ['Plan', 'Act', 'Evaluate']);
     assert.equal(state.activity.total.calls, 1);
-    // Opening a card is a read: no model call.
+    // Without a vault, notes go to .yamori/notes/.
+    assert.ok(fs.existsSync(path.join(ctx.root, '.yamori', 'notes', 'Stages', 'run-agent', 'Act.md')));
+    // Opening a card is a read: no model call. The note box writes the free section.
     await ctx.panels[0].handlers.message({ type: 'openStage', id: 'act' });
+    await ctx.panels[0].handlers.message({ type: 'addNote', stage: 'act', text: 'Tools must be idempotent.' });
     state = ctx.posted.at(-1).state;
     assert.equal(state.card.id, 'act'); assert.equal(state.card.steps[0].symbol, 'act');
+    assert.match(state.card.notes, /You: Tools must be idempotent\./);
     assert.equal(ctx.calls.length, 1);
     // An edit to the actor: one call for the Act stage only.
     fs.appendFileSync(path.join(ctx.root, 'agent', 'actor.py'), '\n\ndef retry(step):\n    return run_step(step)\n');
