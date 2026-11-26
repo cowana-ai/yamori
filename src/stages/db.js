@@ -96,6 +96,14 @@ CREATE TABLE IF NOT EXISTS part_links (
   label   TEXT,
   PRIMARY KEY (from_id, to_id)
 );
+CREATE TABLE IF NOT EXISTS requests (
+  id      INTEGER PRIMARY KEY,
+  at      TEXT NOT NULL,
+  intent  TEXT NOT NULL,
+  targets TEXT,
+  outcome TEXT NOT NULL,
+  files   TEXT
+);
 CREATE INDEX IF NOT EXISTS steps_by_file ON steps(file);
 CREATE INDEX IF NOT EXISTS changes_by_status ON changes(workflow_id, status);
 CREATE INDEX IF NOT EXISTS calls_by_day ON model_calls(day);
@@ -296,6 +304,14 @@ class StageDb {
       : Number(this.get("SELECT COUNT(*) AS n FROM changes WHERE workflow_id = ? AND status = 'pending'", workflowId).n);
   }
 
+  // --- what the founder asked for, and what came of it (for the notes) ---
+  addRequest({ intent, targets = [], outcome, files = [], at = now() }) {
+    this.run('INSERT INTO requests (at, intent, targets, outcome, files) VALUES (?, ?, ?, ?, ?)', at, String(intent).slice(0, 2000), JSON.stringify(targets), outcome, JSON.stringify(files));
+  }
+  requests(limit = 50) {
+    return this.all('SELECT * FROM requests ORDER BY id DESC LIMIT ?', limit).map(row => ({ ...row, targets: safeJson(row.targets, []), files: safeJson(row.files, []) }));
+  }
+
   // --- token ledger ---
   logCall({ trigger, model = null, workflow_id = null, stage_id = null, run_id = null, input = 0, cached = 0, output = 0, cost = null, estimated = false, note = null, at = new Date() }) {
     const iso = typeof at === 'string' ? at : at.toISOString();
@@ -314,6 +330,7 @@ class StageDb {
   }
 }
 
+function safeJson(text, fallback) { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } }
 function fromStageRow(value) { return { ...value, pinned: !!value.pinned, stale: !!value.stale }; }
 function fromChangeRow(value) {
   let detail;

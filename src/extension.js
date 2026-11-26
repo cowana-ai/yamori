@@ -513,9 +513,10 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     entry.busy = true; entry.progress = 'Scanning files…'; entry.error = ''; post(entry);
     entry.scanning = (async () => {
       try {
-        const found = await api.workspace.findFiles(new api.RelativePattern(entry.root, INCLUDE), EXCLUDE, project.MAX_FILES + 1);
+        const found = await api.workspace.findFiles(new api.RelativePattern(entry.root, INCLUDE), EXCLUDE, project.MAX_FILES * 40);
         const rootReal = await fs.realpath(entry.root.fsPath);
-        const files = found.map(uri => ({ uri, rel: relative(entry.root.fsPath, uri.fsPath) })).filter(item => item.rel).sort((a, b) => a.rel.localeCompare(b.rel));
+        const order = new Map(project.prioritizeFiles(found.map(uri => relative(entry.root.fsPath, uri.fsPath)).filter(Boolean)).map((rel, index) => [rel, index]));
+        const files = found.map(uri => ({ uri, rel: relative(entry.root.fsPath, uri.fsPath) })).filter(item => item.rel).sort((a, b) => order.get(a.rel) - order.get(b.rel));
         const limited = files.length > project.MAX_FILES;
         const manifests = {};
         for (const uri of await api.workspace.findFiles(new api.RelativePattern(entry.root, '**/{package.json,go.mod,Cargo.toml}'), EXCLUDE, 50)) {

@@ -95,6 +95,7 @@ function codeLinks(file, line, root) {
   const query = 'file=' + encodeURIComponent(file) + '&line=' + (line || 1) + (root ? '&root=' + encodeURIComponent(root) : '');
   return '[open](vscode://cowana-ai.yamori/open?' + query + ') · [cursor](cursor://cowana-ai.yamori/open?' + query + ')';
 }
+const mermaidText = text => String(text || '').replace(/["\[\]{}()<>|#]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
 const linkTo = (dir, file, label) => '[[' + posix(path.relative(dir, file)).replace(/\.md$/, '') + (label ? '|' + label : '') + ']]';
 const GENERATED = new Set(['system', 'part', 'step', 'stage', 'file', 'index']);
 
@@ -143,15 +144,28 @@ class Vault {
     this.scan = listMarkdown(this.dir).map(file => [file, parseNote(readFile(file)).front]);
     try { return this.syncAll(db, graph, options); } finally { this.scan = undefined; }
   }
-  syncAll(db, graph, { summary = db.meta('system_summary') || '' } = {}) {
+  syncAll(db, graph, { summary = db.meta('system_summary') || '', notes = {} } = {}) {
     const owned = new Set(), workflows = db.workflows(), links = db.links();
     const name = id => this.partName(db, id);
+    const day = at => String(at || '').slice(0, 10);
+    const status = change => change.status === 'approved' ? 'kept' : change.status === 'rejected' ? 'rejected' : 'waiting for review';
+    const requests = db.requests(200);
+    // Code notes: one per file the map uses, so Obsidian's graph shows the real structure.
+    const codeFiles = new Set();
+    for (const workflow of workflows) for (const step of db.steps(workflow.id)) if (graph.files?.[step.file]) codeFiles.add(step.file);
+    const codeNote = file => path.join(this.dir, 'Code', ...file.split('/')) + '.md';
+    const codeLink = file => linkTo(this.dir, codeNote(file), file.split('/').at(-1));
     for (const workflow of workflows) {
-      const list = db.stages(workflow.id), partFile = this.partNotePath(db, workflow.id), dir = path.dirname(partFile);
+      const list = db.stages(workflow.id), partFile = this.partNotePath(db, workflow.id);
       list.forEach((stage, index) => {
         const steps = db.steps(workflow.id, stage.id), file = this.stageNotePath(db, workflow.id, stage);
         const prev = list[index - 1], next = list[index + 1];
-        const code = steps.map(step => '> - ' + (step.what ? step.what + ': ' : '') + '`' + step.symbol + '` in ' + step.file + ' · ' + codeLinks(step.file, step.line_start, this.obsidian ? this.root : undefined)).join('\n');
+        const code = steps.map(step => '> - ' + (step.what ? step.what + ': ' : '') + '`' + step.symbol + '` in ' + codeLink(step.file) + ' · ' + codeLinks(step.file, step.line_start, this.obsidian ? this.root : undefined)).join('\n');
+        // History writes itself: changes found in the code, your decisions, what you asked for.
+        const history = [
+          ...db.changes(workflow.id, { stageId: stage.id }).map(change => ({ at: change.decided_at || change.at, text: change.summary + ' (' + status(change) + (change.why ? ': ' + change.why.replace(/\n+/g, ' ') : '') + ')' })),
+          ...requests.filter(request => request.targets.some(target => target.part === workflow.id && target.stage === stage.id)).map(request => ({ at: request.at, text: 'You asked: “' + request.intent.replace(/\n+/g, ' ') + '” (' + request.outcome + ')' }))
+        ].sort((x, y) => x.at < y.at ? 1 : -1).slice(0, 12);
         const managed = [
           '# ' + stage.name, '',
           'Step ' + (index + 1) + ' of ' + list.length + ' in ' + linkTo(this.dir, partFile, name(workflow.id)), '',
@@ -159,8 +173,10 @@ class Vault {
           '**Takes:** ' + (stage.input || '—') + ' → **Gives:** ' + (stage.output || '—'),
           [prev ? '**Before:** ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, prev), prev.name) : '', next ? '**Next:** ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, next), next.name) : ''].filter(Boolean).join(' · '), '',
           steps.some(step => step.what) ? '**How:**\n' + steps.filter(step => step.what).map((step, n) => (n + 1) + '. ' + step.what).join('\n') + '\n' : '',
+          '**Files:** ' + [...new Set(steps.map(step => step.file))].map(codeLink).join(' · '), '',
+          history.length ? '## History\n\n' + history.map(item => '- ' + day(item.at) + ' · ' + item.text).join('\n') + '\n' : '',
           '> [!note]- Where this is in the code', code || '> (no code linked)', '',
-          '_Yamori keeps this part up to date. Write your notes below: why it works this way, what must never change. Your agents read them._'
+          '_Yamori writes and updates everything above. Add a rule below only if you want one; your agents read it._'
         ].filter(line => line !== '').join('\n');
         this.write(file, { type: 'step', part: name(workflow.id), workflow: workflow.id, stage_id: stage.id, name: stage.name }, managed);
         db.setMeta('vault:name:' + workflow.id + ':' + stage.id, stage.name);
@@ -168,21 +184,49 @@ class Vault {
       });
       const uses = links.filter(link => link.from === workflow.id).map(link => '- It ' + link.label + ' ' + linkTo(this.dir, this.partNotePath(db, link.to), name(link.to)));
       const usedBy = links.filter(link => link.to === workflow.id).map(link => '- ' + linkTo(this.dir, this.partNotePath(db, link.from), name(link.from)) + ' ' + link.label + ' it');
+      const flow = list.length ? '```mermaid\nflowchart LR\n' + list.map((stage, index) => '  s' + index + '["' + mermaidText((index + 1) + '. ' + stage.name) + '"]\n').join('') + list.slice(1).map((_, index) => '  s' + index + ' --> s' + (index + 1) + '\n').join('') + '```\n' : '';
       const managed = ['# ' + name(workflow.id), '',
         workflow.summary || '', '',
-        '## How it works', '',
+        flow,
+        '## Steps', '',
         ...list.map((stage, index) => (index + 1) + '. ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, stage), stage.name) + (stage.gist ? ': ' + stage.gist : '')), '',
         uses.length || usedBy.length ? '## Works with\n\n' + [...uses, ...usedBy].join('\n') + '\n' : '',
-        '_Starts at `' + workflow.entry_symbol + '` in ' + workflow.entry_file + '. Write your notes about this part below._'].join('\n').replace(/\n{3,}/g, '\n\n');
+        '_Starts at `' + workflow.entry_symbol + '` in ' + codeLink(workflow.entry_file) + '._'].join('\n').replace(/\n{3,}/g, '\n\n');
       this.write(partFile, { type: 'part', workflow: workflow.id, name: name(workflow.id) }, managed);
-      owned.add(partFile); void dir;
+      owned.add(partFile);
+      if (graph.files?.[workflow.entry_file]) codeFiles.add(workflow.entry_file);
     }
+    // Code notes: what each file is for, where it is used, what it uses.
+    const edges = graph.edges || [];
+    for (const file of [...codeFiles].sort().slice(0, 600)) {
+      const note = notes?.files?.[file];
+      const where = [];
+      for (const workflow of workflows) for (const stage of db.stages(workflow.id)) if (db.steps(workflow.id, stage.id).some(step => step.file === file)) where.push('- ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, stage), name(workflow.id) + ' › ' + stage.name));
+      const usesFiles = [...new Set(edges.filter(edge => edge.from === file).map(edge => edge.to))].filter(other => codeFiles.has(other));
+      const usedByFiles = [...new Set(edges.filter(edge => edge.to === file).map(edge => edge.from))].filter(other => codeFiles.has(other));
+      const managed = ['# ' + file.split('/').at(-1), '', '`' + file + '` · ' + codeLinks(file, 1, this.obsidian ? this.root : undefined), '',
+        note?.purpose || '', note?.role ? '_' + note.role + '_' : '', '',
+        where.length ? '## Used in\n\n' + where.join('\n') + '\n' : '',
+        usesFiles.length ? '## Uses\n\n' + usesFiles.map(other => '- ' + codeLink(other)).join('\n') + '\n' : '',
+        usedByFiles.length ? '## Used by\n\n' + usedByFiles.map(other => '- ' + codeLink(other)).join('\n') + '\n' : ''].join('\n').replace(/\n{3,}/g, '\n\n');
+      owned.add(this.write(codeNote(file), { type: 'file', path: file }, managed, '\n'));
+    }
+    // The system note: what it does, a diagram, the parts, and what happened lately.
+    const view = workflows.map((workflow, index) => ({ id: workflow.id, key: 'p' + index }));
+    const key = id => view.find(item => item.id === id)?.key;
+    const diagram = workflows.length ? '```mermaid\nflowchart LR\n' + workflows.map(workflow => '  ' + key(workflow.id) + '["' + mermaidText(name(workflow.id)) + '"]').join('\n') + '\n' +
+      links.filter(link => key(link.from) && key(link.to)).map(link => '  ' + key(link.from) + ' -- "' + mermaidText(link.label || 'uses') + '" --> ' + key(link.to) + '\n').join('') + '```\n' : '';
+    const recent = [
+      ...workflows.flatMap(workflow => db.changes(workflow.id).map(change => ({ at: change.decided_at || change.at, text: name(workflow.id) + ' › ' + (db.stage(workflow.id, change.stage_id)?.name || change.stage_id) + ': ' + change.summary + ' (' + status(change) + ')' }))),
+      ...requests.map(request => ({ at: request.at, text: 'You asked: “' + request.intent.replace(/\n+/g, ' ') + '” (' + request.outcome + ')' }))
+    ].sort((x, y) => x.at < y.at ? 1 : -1).slice(0, 15);
     const managed = ['# How ' + this.repo + ' works', '', summary || '', '',
+      diagram,
       '## Parts', '',
       ...workflows.map(workflow => '- ' + linkTo(this.dir, this.partNotePath(db, workflow.id), name(workflow.id)) + (workflow.summary ? ': ' + workflow.summary : '')), '',
       links.length ? '## How they work together\n\n' + links.map(link => '- ' + linkTo(this.dir, this.partNotePath(db, link.from), name(link.from)) + ' ' + link.label + ' ' + linkTo(this.dir, this.partNotePath(db, link.to), name(link.to))).join('\n') + '\n' : '',
-      'What changed and what you decided: the notes in Changes/.', '',
-      '_Yamori keeps this part up to date. Write notes about the whole system below; your agents read them before any change._'].join('\n').replace(/\n{3,}/g, '\n\n');
+      recent.length ? '## Lately\n\n' + recent.map(item => '- ' + day(item.at) + ' · ' + item.text).join('\n') + '\n' : '',
+      '_Yamori writes and updates everything above. Rules you add below apply to every change; your agents read them._'].join('\n').replace(/\n{3,}/g, '\n\n');
     owned.add(this.write(this.systemFile(), { type: 'system', repo: this.repo }, managed));
     this.archiveOrphans(owned);
     return [...owned];
@@ -249,6 +293,15 @@ class Vault {
   addSystemNote(db, text, { author = 'You', at = new Date() } = {}) {
     if (!fs.existsSync(this.systemFile())) this.syncSystem(db, { files: {} });
     return this.appendTo(this.systemFile(), text, author, at);
+  }
+  // What you asked for, in the day's log.
+  appendRequest(db, request, { at = new Date() } = {}) {
+    const day = at.toISOString().slice(0, 10), file = path.join(this.dir, 'Changes', day + '.md');
+    let text = readFile(file) ?? '---\ntype: changes\ndate: ' + day + '\n---\n# What changed on ' + day + '\n\n';
+    const where = (request.targets || []).map(target => target.file ? target.file : this.partName(db, target.part) + (target.stage ? ' › ' + (db.stage(target.part, target.stage)?.name || target.stage) : '')).join(', ');
+    text = (text.endsWith('\n\n') ? text : text.replace(/\s*$/, '\n')) + '- ' + at.toISOString().slice(11, 16) + ' · You asked: “' + String(request.intent).replace(/\n+/g, ' ') + '”' + (where ? ' in ' + where : '') + '. **' + request.outcome[0].toUpperCase() + request.outcome.slice(1) + '.**' + (request.files?.length ? '\n  - Files: ' + request.files.join(', ') : '') + '\n';
+    writeIfChanged(file, text);
+    return file;
   }
   // The change log in plain words: what changed, where, the decision and why.
   appendChange(db, change, { at = new Date() } = {}) {

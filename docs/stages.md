@@ -14,18 +14,26 @@ Mapping again with the same files makes no AI call. When files are added or remo
 
 ## Read it
 
-- Each part shows what it does, its steps in order, and what it starts or is started by. Click a part for its steps; click a step for what it does, what it takes and gives, and how, in plain steps.
-- **Show code** lists the functions behind a step, with links to the line, **Read** (the file in Yamori Read), its pseudocode and **Move to…** another step.
-- **Rename**, **Merge with…** and **Keep as is** fix how the code is grouped; updates keep your changes.
+The map is a graph you can drag, zoom (scroll or + / −) and **Fit**:
+
+- **Parts** are boxes with what they do and their steps in order. Arrows say how parts work together ("asks to research each topic"); dashed arrows are code one part uses from another.
+- **Shared code** (for example a contracts package several parts import) is its own dashed box, linked to every part that uses it. Click it for its files and how they use each other.
+- Parts with no links sit in a row underneath.
+
+Click a part to open it below the map, which stays in view:
+
+- **Its files, step by step**: one column per step in the order the work happens, then the supporting files and the code it uses from other folders. Colors are steps. Click a file and its links light up.
+- **A file** shows what it is for, which steps of which parts use it, what it uses and what uses it, and its functions, with **Read it** and **Open the code**.
+- **A step** shows what it does, takes and gives, and how; **Show functions** lists the code behind it, with **Move to…** another step. **Rename**, **Merge with…** and **Keep as is** fix the grouping; updates keep your changes.
 
 ## Steer it
 
-Type what should change in **What should change?** and click **Find where** (one small AI call). Yamori says which steps of which parts it touches and why; untick any you disagree with. Then:
+Type what should change in **What should change in …** and click **Find where** (one small AI call). The box follows what you have open: the whole system, or only the part you opened. Yamori says which steps it touches and why; untick any you disagree with. Then:
 
 - **Preview the change**: one AI call with your main model. It sends only those steps' code, and your notes (system, part and step) as rules. **Apply** writes every file or none; **Undo** puts them back. The change then shows up in Review.
 - **Give it to my agent**: no AI call. The request is saved as a to-do in those steps' notes, which Claude Code, Codex and Cursor read before they touch that code.
 
-From a step, **Change this step…** skips the search.
+From a step or a file, **Change this step…** or **Change this file…** skips the search and goes straight to a preview of that code.
 
 ## Review
 
@@ -45,10 +53,13 @@ The top of the System tab says where notes are. `yamori.obsidian.vaultPath` pick
 
 In the vault, under `Yamori/<repo>/`:
 
-- `System.md`: how the whole system works, its parts and how they work together. Your notes here are rules for every change.
-- `<Part>/<Part>.md`: what the part does and its steps in order.
-- `<Part>/<Step>.md`: what the step does, what it takes and gives, how, and the steps before and after. The code references are in a folded "Where this is in the code" box.
-- `Changes/YYYY-MM-DD.md`: what changed, where, whether you kept or rejected it, and why.
+- `System.md`: how the whole system works, a diagram of the parts and how they work together, and what happened lately. Rules you add here apply to every change.
+- `<Part>/<Part>.md`: what the part does, a diagram of its steps, and what it works with.
+- `<Part>/<Step>.md`: what the step does, takes and gives, how, its files, and its **History**: every change Yamori found, what you decided and why, and every request you made there. The code references are in a folded box.
+- `Code/<path>.md`: one note per file the map uses, with what it is for, which steps use it, what it uses and what uses it. Obsidian's graph view then shows the real structure of the project.
+- `Changes/YYYY-MM-DD.md`: what changed, what you asked for, what you decided, and why.
+
+You do not have to write anything: Yamori records changes, decisions and requests by itself. Notes you add are kept and read by your agents.
 
 Yamori rewrites only its own description, between `<!-- yamori:start -->` and `<!-- yamori:end -->`; everything under **Your notes** is yours and is never overwritten. Renaming a step in its note's front matter renames it in Yamori. Notes of steps that no longer exist move to `_archive/`; notes you created yourself are never touched. Writing and reading notes never calls AI.
 

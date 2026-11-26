@@ -226,16 +226,22 @@ test('vault: readable system, part and step notes; managed parts rewritten, your
     assert.equal(new Vault({ root }).dir, path.join(root, '.yamori', 'notes'));
     const vault = new Vault({ root, vaultPath: path.join(root, 'vault') });
     assert.equal(vault.dir, path.join(root, 'vault', 'Yamori', path.basename(root)));
-    vault.syncSystem(ctx.db, ctx.graph);
-    assert.match(fs.readFileSync(vault.systemFile(), 'utf8'), /# How .* works\n\nAn agent that works toward a goal\.\n\n## Parts\n\n- \[\[Agent loop\/Agent loop\|Agent loop\]\]: Plans, acts and checks the result\./);
-    assert.match(fs.readFileSync(path.join(vault.dir, 'Agent loop', 'Agent loop.md'), 'utf8'), /## How it works\n\n1\. \[\[Agent loop\/Plan\|Plan\]\]: Turn the goal into steps\./);
+    vault.syncSystem(ctx.db, ctx.graph, { notes: ctx.notes });
+    assert.match(fs.readFileSync(vault.systemFile(), 'utf8'), /# How .* works\n\nAn agent that works toward a goal\.\n\n```mermaid\nflowchart LR\n {2}p0\["Agent loop"\]\n```\n\n## Parts\n\n- \[\[Agent loop\/Agent loop\|Agent loop\]\]: Plans, acts and checks the result\./);
+    const partNote = fs.readFileSync(path.join(vault.dir, 'Agent loop', 'Agent loop.md'), 'utf8');
+    assert.match(partNote, /```mermaid\nflowchart LR\n {2}s0\["1\. Plan"\]\n {2}s1\["2\. Act"\]\n {2}s2\["3\. Evaluate result"\]\n {2}s0 --> s1\n {2}s1 --> s2\n```/);
+    assert.match(partNote, /## Steps\n\n1\. \[\[Agent loop\/Plan\|Plan\]\]: Turn the goal into steps\./);
+    // A note per code file: what it is for, where it is used, what it uses.
+    const codeNote = fs.readFileSync(path.join(vault.dir, 'Code', 'agent', 'planner.py.md'), 'utf8');
+    assert.match(codeNote, /Turns a goal into steps\./); assert.match(codeNote, /## Used in\n\n- \[\[Agent loop\/Plan\|Agent loop › Plan\]\]/);
     const planFile = vault.findStageNote(workflowId, 'plan');
     assert.equal(planFile, path.join(vault.dir, 'Agent loop', 'Plan.md'));
     let text = fs.readFileSync(planFile, 'utf8');
     assert.match(text, /^---\ntype: step\npart: Agent loop\nworkflow: run-agent\nstage_id: plan\nname: Plan/);
     assert.match(text, /Step 1 of 3 in \[\[Agent loop\/Agent loop\|Agent loop\]\]/);
     assert.match(text, /\*\*Next:\*\* \[\[Agent loop\/Act\|Act\]\]/);
-    assert.match(text, /> - `plan` in agent\/planner\.py · \[open\]\(vscode:\/\/cowana-ai\.yamori\/open\?file=agent%2Fplanner\.py&line=4/);
+    assert.match(text, /> - `plan` in \[\[Code\/agent\/planner\.py\|planner\.py\]\] · \[open\]\(vscode:\/\/cowana-ai\.yamori\/open\?file=agent%2Fplanner\.py&line=4/);
+    assert.match(text, /\*\*Files:\*\* \[\[Code\/agent\/planner\.py\|planner\.py\]\]/);
     // Founder notes in Obsidian and from the card/MCP.
     fs.writeFileSync(planFile, text.replace('## Your notes\n', '## Your notes\n\nNever store PII in prompts.\n'));
     vault.addNote(ctx.db, workflowId, 'plan', 'Keep plans under 10 steps.', { author: 'Claude Code', at: new Date('2026-11-26T10:00:00Z') });
@@ -245,7 +251,7 @@ test('vault: readable system, part and step notes; managed parts rewritten, your
     // Edits inside the managed part are restored; free text survives.
     fs.writeFileSync(planFile, fs.readFileSync(planFile, 'utf8').replace('**Takes:**', '**Hacked:**'));
     ctx.db.updateStage(workflowId, 'plan', { gist: 'New gist.' });
-    vault.syncSystem(ctx.db, ctx.graph);
+    vault.syncSystem(ctx.db, ctx.graph, { notes: ctx.notes });
     text = fs.readFileSync(planFile, 'utf8');
     assert.match(text, /\*\*What it does:\*\* New gist\./); assert.doesNotMatch(text, /Hacked/);
     assert.match(text, /Never store PII in prompts\./); assert.match(text, /Keep plans under 10 steps\./);
@@ -254,7 +260,7 @@ test('vault: readable system, part and step notes; managed parts rewritten, your
     const renames = vault.renames(ctx.db, workflowId);
     assert.deepEqual(renames, [{ stageId: 'plan', name: 'Think ahead' }]);
     stages.renameStage(ctx.db, workflowId, 'plan', renames[0].name);
-    vault.syncSystem(ctx.db, ctx.graph);
+    vault.syncSystem(ctx.db, ctx.graph, { notes: ctx.notes });
     assert.deepEqual(vault.renames(ctx.db, workflowId), []);
     assert.equal(model.calls.length, 1);
     // A decision lands in Changes/<date>.md in plain words.
@@ -263,14 +269,21 @@ test('vault: readable system, part and step notes; managed parts rewritten, your
     const [change] = review.reviewQueue(ctx.db, workflowId);
     const log = vault.appendChange(ctx.db, review.decide(ctx.db, change.id, 'approved', 'Faster on big inboxes.'), { at: new Date('2026-11-26T14:02:00Z') });
     assert.match(fs.readFileSync(log, 'utf8'), /# What changed on 2026-11-26\n\n- 14:02 · Agent loop › \[\[Agent loop\/Act\|Act\]\]: Act now runs steps in parallel\. \*\*Approved\.\*\*\n {2}- Why: Faster on big inboxes\./);
+    // History writes itself in the step note and the system note.
+    ctx.db.addRequest({ intent: 'run steps in parallel', targets: [{ part: workflowId, stage: 'act' }], outcome: 'applied', files: ['agent/actor.py'] });
+    vault.syncSystem(ctx.db, ctx.graph, { notes: ctx.notes });
+    assert.match(fs.readFileSync(path.join(vault.dir, 'Agent loop', 'Act.md'), 'utf8'), /## History\n\n- \d{4}-\d\d-\d\d · (You asked: “run steps in parallel” \(applied\)|Act now runs steps in parallel\. \(kept: Faster on big inboxes\.\))\n- \d{4}-\d\d-\d\d · (You asked|Act now)/);
+    assert.match(fs.readFileSync(vault.systemFile(), 'utf8'), /## Lately\n\n- .*(You asked: “run steps in parallel” \(applied\)|Agent loop › Act: Act now runs steps in parallel\. \(kept\))/);
+    vault.appendRequest(ctx.db, { intent: 'log failures', targets: [{ part: workflowId, stage: 'act' }], outcome: 'given to your agent' }, { at: new Date('2026-11-26T15:00:00Z') });
+    assert.match(fs.readFileSync(log, 'utf8'), /- 15:00 · You asked: “log failures” in Agent loop › Act\. \*\*Given to your agent\.\*\*/);
     // A step that disappears: its note moves to _archive with the founder's text.
     stages.mergeStages(ctx.db, workflowId, 'act', 'plan');
-    vault.syncSystem(ctx.db, ctx.graph);
+    vault.syncSystem(ctx.db, ctx.graph, { notes: ctx.notes });
     assert.equal(fs.existsSync(planFile), false);
     assert.match(fs.readFileSync(path.join(vault.dir, '_archive', 'Agent loop', 'Plan.md'), 'utf8'), /Never store PII/);
     // A note the user created by hand is never touched.
     const mine = path.join(vault.dir, 'Agent loop', 'My thoughts.md');
-    fs.writeFileSync(mine, '# Mine\n'); vault.syncSystem(ctx.db, ctx.graph);
+    fs.writeFileSync(mine, '# Mine\n'); vault.syncSystem(ctx.db, ctx.graph, { notes: ctx.notes });
     assert.equal(fs.readFileSync(mine, 'utf8'), '# Mine\n');
     const merged = mergeNote('---\ntags: [agent]\nname: X\n---\nhello', { front: { type: 'step', name: 'Y' }, managed: 'M' });
     assert.deepEqual(parseNote(merged).front, { tags: ['agent'], name: 'Y', type: 'step' });
@@ -363,4 +376,12 @@ test('system discovery: each workflow folder gets candidates without AI, and the
   assert.deepEqual(parsed.links, [{ from: 'web-server', to: 'email-helper', label: 'starts' }]);
   const prompt = system.systemPrompt({ graph, notes: { files: {} }, found });
   assert.doesNotMatch(prompt, /def triage_loop/, 'no source code is sent, only names and notes');
+});
+
+test('a Python package that lives elsewhere in a monorepo (src layout) resolves, but an ambiguous name does not', () => {
+  const files = ['packages/contracts/src/mla_contracts/__init__.py', 'packages/contracts/src/mla_contracts/pitch.py', 'orchestrator/src/cli.py', 'a/util/__init__.py', 'b/util/__init__.py'];
+  const ctx = project.resolutionContext(files);
+  assert.deepEqual(project.resolveImport('orchestrator/src/cli.py', { kind: 'module', spec: 'mla_contracts.pitch', names: ['parse_pitch'] }, ctx), ['packages/contracts/src/mla_contracts/pitch.py']);
+  assert.deepEqual(project.resolveImport('orchestrator/src/cli.py', { kind: 'module', spec: 'mla_contracts', names: ['pitch'] }, ctx), ['packages/contracts/src/mla_contracts/__init__.py', 'packages/contracts/src/mla_contracts/pitch.py']);
+  assert.deepEqual(project.resolveImport('orchestrator/src/cli.py', { kind: 'module', spec: 'util', names: [] }, ctx), [], 'two packages named util: no guess');
 });

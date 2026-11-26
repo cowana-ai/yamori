@@ -204,3 +204,55 @@ test('renaming a step keeps the name through a new map', { skip }, async () => {
     assert.ok(email.stages[1].pinned);
   } finally { ctx.cleanup(); }
 });
+
+test('the map shows shared code, a part opens to its files and how they use each other, and a file shows where it is used', { skip }, async () => {
+  const ctx = await setup();
+  try {
+    await ctx.send({ type: 'buildSystem' });
+    let state = ctx.last();
+    assert.deepEqual(state.system.shared.map(box => [box.folder, box.usedBy.sort()]), [['shared', ['email-helper', 'lead-scoring', 'web-server']]]);
+    await ctx.send({ type: 'openPart', id: 'email-helper' });
+    state = ctx.last();
+    const files = state.partDetail.files.map(file => file.file).sort();
+    assert.deepEqual(files, ['agents/email/inbox.py', 'agents/email/run.py', 'shared/llm.py']);
+    assert.ok(state.partDetail.files.find(file => file.file === 'agents/email/run.py').entry);
+    assert.deepEqual(state.partDetail.files.find(file => file.file === 'agents/email/inbox.py').steps.sort(), ['answer', 'read']);
+    assert.ok(state.partDetail.edges.some(edge => edge.from === 'agents/email/run.py' && edge.to === 'agents/email/inbox.py' && edge.names.includes('fetch_unread')));
+    await ctx.send({ type: 'openFile', file: 'agents/email/inbox.py' });
+    state = ctx.last();
+    assert.deepEqual(state.file.where.map(entry => entry.partName + ' › ' + entry.stageName).sort(), ['Email helper › Answer', 'Email helper › Read inbox']);
+    assert.ok(state.file.usedBy.some(entry => entry.file === 'agents/email/run.py'));
+    assert.match(state.file.purpose, /Purpose of agents\/email\/inbox\.py/);
+    await ctx.send({ type: 'openShared', id: 'code:shared' });
+    state = ctx.last();
+    assert.deepEqual(state.shared.fileList.map(file => file.file), ['shared/llm.py']);
+    assert.equal(state.part, undefined, 'opening shared code closes the part');
+    assert.equal(ctx.calls.length, 4, 'browsing the map calls no AI');
+  } finally { ctx.cleanup(); }
+});
+
+test('changes start from any box: a part narrows the search, a file goes straight to a preview, and every request is noted by itself', { skip }, async () => {
+  const saved = { ...timing };
+  Object.assign(timing, { delay: 10, idle: 30 });
+  const ctx = await setup();
+  try {
+    await ctx.send({ type: 'buildSystem' });
+    await ctx.send({ type: 'route', intent: 'retry failed replies', scope: { part: 'email-helper' } });
+    const routing = ctx.calls.at(-1);
+    assert.match(routing, /email-helper\/answer/); assert.doesNotMatch(routing, /lead-scoring\//, 'only the selected part is searched');
+    await ctx.send({ type: 'steerPreview', intent: 'retry failed replies', targets: [{ file: 'agents/email/inbox.py' }] });
+    assert.match(ctx.calls.at(-1), /SOURCE "agents\/email\/inbox\.py"/, 'a file target sends that file\'s functions');
+    assert.equal(ctx.last().steer.phase, 'preview');
+    await ctx.send({ type: 'steerApply' });
+    await new Promise(resolve => setTimeout(resolve, 60)); await ctx.item.scheduler.running;
+    const notes = path.join(ctx.root, '.yamori', 'notes');
+    const log = fs.readFileSync(path.join(notes, 'Changes', fs.readdirSync(path.join(notes, 'Changes'))[0]), 'utf8');
+    assert.match(log, /You asked: “retry failed replies” in agents\/email\/inbox\.py\. \*\*Applied\.\*\*\n {2}- Files: agents\/email\/inbox\.py/);
+    await ctx.send({ type: 'handToAgent', intent: 'log every failed reply', targets: [{ part: 'email-helper' }] });
+    const step = fs.readFileSync(path.join(notes, 'Email helper', 'Answer.md'), 'utf8');
+    assert.match(step, /## History\n\n- .*You asked: “log every failed reply” \(given to your agent\)/);
+    assert.match(fs.readFileSync(path.join(notes, 'System.md'), 'utf8'), /## Lately\n\n- .*You asked: “log every failed reply” \(given to your agent\)/);
+    assert.match(fs.readFileSync(path.join(notes, 'System.md'), 'utf8'), /```mermaid\nflowchart LR\n/);
+    assert.ok(fs.existsSync(path.join(notes, 'Code', 'agents', 'email', 'inbox.py.md')));
+  } finally { Object.assign(timing, saved); ctx.cleanup(); }
+});

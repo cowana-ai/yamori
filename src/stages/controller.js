@@ -99,7 +99,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   function sync(item) {
     const db = dbFor(item, false);
     if (!db || !db.workflows().length || !item.vault) return;
-    try { item.vault.syncSystem(db, item.entry.graph || { files: {} }); watchVault(item); }
+    try { item.vault.syncSystem(db, item.entry.graph || { files: {} }, { notes: item.entry.notes }); watchVault(item); }
     catch (error) { item.notice = 'Notes were not written: ' + error.message; }
   }
 
@@ -130,8 +130,9 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const base = { repo: path.basename(item.root), busy: item.busy, error: item.error, notice: item.notice, budget: budget(),
       vault: { obsidian: vault.obsidian, where: vault.obsidian ? path.basename(vault.vaultPath) + ' › Yamori › ' + vault.repo : '.yamori/notes in this project' } };
     if (!db || !db.workflows().length) return { ...base, estimate: estimateFor(item), system: undefined, activity: db ? activity(db) : undefined };
-    const view = system.systemView(db, graph);
+    const view = system.systemView(db, graph, item.entry.notes);
     if (item.workflowId && !view.parts.some(part => part.id === item.workflowId)) { item.workflowId = undefined; item.open = undefined; }
+    if (item.file && !graph.files[item.file]) item.file = undefined;
     const card = item.workflowId && item.open ? stages.stageView(db, graph, item.entry.explanations, item.workflowId, item.open) : undefined;
     if (card) { card.notes = vault.stageNotes(item.workflowId, card.id).text; card.part = item.workflowId; }
     const lineOf = (file, symbol) => { const def = stages.symbolsOf(graph.files[file]).find(entry => entry.name === symbol); return def ? def.start || def.line : 1; };
@@ -139,6 +140,9 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const queue = view.parts.flatMap(part => review.reviewQueue(db, part.id).map(change => ({ ...change, part_name: names.get(change.workflow_id),
       detail: change.detail && { ...change.detail, steps: (change.detail.steps || []).map(step => ({ ...step, line: lineOf(step.file, step.symbol) })) } }))).sort((a, b) => a.at < b.at ? -1 : 1);
     return { ...base, system: view, part: item.workflowId, card, queue, systemNotes: vault.systemNotes(),
+      partDetail: item.workflowId ? system.partDetail(db, graph, item.entry.notes, item.workflowId) : undefined,
+      shared: item.shared ? sharedDetail(item, view) : undefined,
+      file: item.file ? system.fileDetail(db, graph, item.entry.notes, item.file) : undefined,
       route: item.route, steer: item.steer && steerState(item.steer), activity: activity(db) };
   }
   function post(item) {
@@ -163,6 +167,16 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     return item.estimate && item.estimateKey === key ? item.estimate : { pending: true };
   }
 
+  // A shared-code box up close: its files and which parts use them.
+  function sharedDetail(item, view) {
+    const box = view.shared.find(entry => entry.id === item.shared);
+    if (!box) return undefined;
+    const graph = item.entry.graph, notes = item.entry.notes;
+    const files = Object.keys(graph.files).filter(file => system.inFolder(file, box.folder) && !graph.files[file].test).sort();
+    const set = new Set(files);
+    return { ...box, fileList: files.slice(0, 80).map(file => ({ file, name: file.split('/').at(-1), purpose: notes?.files?.[file]?.purpose || '' })),
+      edges: (graph.edges || []).filter(edge => set.has(edge.from) && set.has(edge.to)).map(edge => ({ from: edge.from, to: edge.to, names: (edge.names || []).slice(0, 4) })) };
+  }
   // The project panel hosts the System tab.
   function attach(entry, host) {
     const item = projectFor(entry);
@@ -208,28 +222,31 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       applied: value.applied ? value.applied.files.map(entry => entry.file) : [] };
   }
   const steerIO = item => ({ read: file => map.readSource(item.entry, file), write: (file, text) => map.writeSource(item.entry, file, text) });
-  async function route(item, intent) {
+  async function route(item, intent, scope) {
     const db = dbFor(item);
     const { provider, model, request: send } = await request('cheap');
     item.route = { intent, phase: 'routing' }; item.steer = undefined; post(item);
     try {
-      const result = await system.routeIntent({ db, graph: item.entry.graph, intent, notes: vaultFor(item).systemNotes(), request: send, run: createRun(db, { budget: budget(), trigger: 'system.route' }), provider, model });
+      const result = await system.routeIntent({ db, graph: item.entry.graph, intent, notes: vaultFor(item).systemNotes(), request: send, run: createRun(db, { budget: budget(), trigger: 'system.route' }), provider, model, scope: scope?.part && db.workflow(scope.part) ? { part: scope.part } : undefined });
       item.route = { ...result, phase: 'routed' };
     } catch (error) { item.route = undefined; throw error; }
   }
   async function steerPreview(item, intent, targets) {
     const db = dbFor(item), graph = item.entry.graph, vault = vaultFor(item);
-    const valid = (targets || []).filter(target => db.stage(target.part, target.stage));
+    const valid = (targets || []).filter(target => target.file ? !!graph.files[target.file] : db.stage(target.part, target.stage));
     if (!valid.length) throw new Error('Pick where the change goes first.');
-    const views = valid.map(target => stages.stageView(db, graph, item.entry.explanations, target.part, target.stage));
+    // A file target stands for its own functions.
+    const fileView = file => ({ id: 'file', name: file, gist: item.entry.notes?.files?.[file]?.purpose || '', input: '', output: '',
+      steps: stages.symbolsOf(graph.files[file]).filter(def => ['function', 'method', 'class'].includes(def.kind)).slice(0, 16).map(def => ({ file, symbol: def.name, line_start: def.start || def.line, line_end: def.end || def.line })) });
+    const views = valid.map(target => target.file ? fileView(target.file) : stages.stageView(db, graph, item.entry.explanations, target.part, target.stage));
     const view = { ...views[0], name: views.map(entry => entry.name).join(' + '), gist: views.map(entry => entry.name + ': ' + (entry.gist || '')).join(' '), steps: views.flatMap(entry => entry.steps) };
-    const notes = valid.map(target => vault.constraints(target.part, target.stage)).filter(Boolean).join('\n\n');
+    const notes = [...new Set(valid.flatMap(target => target.file ? stepsOfFile(db, target.file).map(step => vault.constraints(step.part, step.stage)).concat(stepsOfFile(db, target.file).length ? [] : [vault.systemNotes()]) : [vault.constraints(target.part, target.stage)]))].filter(Boolean).join('\n\n');
     item.steerController?.abort();
     const controller = item.steerController = new AbortController();
     const { provider, model, request: send } = await request('main');
     item.steer = { intent, targets: valid, phase: 'previewing' }; post(item);
     try {
-      const preview = await steer.previewSteer({ db, view, notes, intent, io: steerIO(item), request: send, run: createRun(db, { budget: budget(), trigger: 'system.steer' }), provider, model, workflowId: valid[0].part, signal: controller.signal });
+      const preview = await steer.previewSteer({ db, view, notes, intent, io: steerIO(item), request: send, run: createRun(db, { budget: budget(), trigger: 'system.steer' }), provider, model, workflowId: valid[0].part || stepsOfFile(db, valid[0].file)[0]?.part || null, signal: controller.signal });
       if (controller.signal.aborted) return;
       item.steer = { intent, targets: valid, phase: preview.files.length ? 'preview' : 'empty', preview, message: preview.files.length ? '' : preview.summary || 'No change was proposed.' };
     } catch (error) {
@@ -242,6 +259,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const dirty = preview.files.filter(file => map.isDirty(item.entry, file.file)).map(file => file.file);
     if (dirty.length) throw new Error('Save or revert ' + dirty.join(', ') + ' first: the preview is based on the saved file.');
     const applied = await steer.applyAtomic(preview, steerIO(item));
+    logRequest(item, item.steer.intent, item.steer.targets, 'applied', applied.files.map(file => file.file));
     item.steer = { ...item.steer, phase: 'applied', applied, preview: undefined };
     item.route = undefined;
     // The applied change goes through the normal update and review.
@@ -249,21 +267,32 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   }
   async function steerUndo(item) {
     const files = await steer.undoAtomic(item.steer?.applied, steerIO(item));
+    logRequest(item, item.steer.intent, item.steer.targets, 'undone', files);
     item.steer = { ...item.steer, phase: 'undone', applied: undefined, message: 'Undone: ' + files.join(', ') + ' are back as they were.' };
     for (const file of files) await saved(map.fileUri(item.entry, file));
   }
+  // Every request is remembered in the notes by itself: nothing to write by hand.
+  function logRequest(item, intent, targets, outcome, files = []) {
+    const db = dbFor(item), request = { intent: String(intent || ''), targets: targets || [], outcome, files };
+    if (!request.intent) return;
+    db.addRequest(request);
+    try { vaultFor(item).appendRequest(db, request); } catch { /* The request still shows in the History. */ }
+  }
+  const stepsOfFile = (db, file) => db.all('SELECT DISTINCT workflow_id AS part, stage_id AS stage FROM steps WHERE file = ?', file);
   // Leave the request for the next agent run instead (no AI call).
   function handToAgent(item, intent, targets) {
     const db = dbFor(item), vault = vaultFor(item), text = String(intent || '').trim();
     if (!text) throw new Error('Say what should change.');
-    const valid = (targets || []).filter(target => db.stage(target.part, target.stage));
-    if (valid.length) for (const target of valid) vault.addNote(db, target.part, target.stage, 'To do: ' + text, { author: 'You' });
+    const expanded = (targets || []).flatMap(target => target.file ? stepsOfFile(db, target.file) : target.part && !target.stage ? db.stages(target.part).map(stage => ({ part: target.part, stage: stage.id })) : [target]);
+    const valid = expanded.filter(target => db.stage(target.part, target.stage));
+    if (valid.length) for (const target of [...new Map(valid.map(target => [target.part + '/' + target.stage, target])).values()]) vault.addNote(db, target.part, target.stage, 'To do: ' + text, { author: 'You' });
     else vault.addSystemNote(db, 'To do: ' + text, { author: 'You' });
+    logRequest(item, text, valid.length ? valid : targets, 'given to your agent');
     item.route = undefined;
     item.steer = { intent: '', targets: valid, phase: 'saved', message: 'Saved as a to-do in ' + (valid.length ? 'the notes of ' + valid.map(target => db.stage(target.part, target.stage).name).join(', ') : 'the system notes') + '. Your agents read it before they work on that code.' };
   }
 
-  const MUTATIONS = new Set(['rename', 'pin', 'merge', 'move', 'decide', 'refresh', 'refreshStage', 'handToAgent']);
+  const MUTATIONS = new Set(['rename', 'pin', 'merge', 'move', 'decide', 'refresh', 'refreshStage', 'handToAgent', 'steerApply', 'steerUndo', 'markReviewed']);
   async function receive(item, value) {
     if (!value || typeof value.type !== 'string') return;
     await handle(item, value);
@@ -275,8 +304,10 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     switch (message.type) {
       case 'ready': break;
       case 'buildSystem': await buildSystem(item, { force: !!message.force }); break;
-      case 'openPart': item.workflowId = typeof message.id === 'string' ? message.id : undefined; item.open = undefined; if (item.workflowId) db().setMeta('last_workflow', item.workflowId); break;
-      case 'openStage': item.workflowId = part; item.open = typeof message.id === 'string' ? message.id : undefined; break;
+      case 'openPart': item.workflowId = typeof message.id === 'string' && message.id ? message.id : undefined; item.open = undefined; item.file = undefined; item.shared = undefined; if (item.workflowId) db().setMeta('last_workflow', item.workflowId); break;
+      case 'openStage': item.workflowId = part; item.open = typeof message.id === 'string' && message.id ? message.id : undefined; break;
+      case 'openFile': item.file = typeof message.file === 'string' && message.file ? message.file : undefined; break;
+      case 'openShared': item.shared = typeof message.id === 'string' && message.id ? message.id : undefined; item.workflowId = undefined; item.open = undefined; item.file = undefined; break;
       case 'refresh': await updateChanged(item, { trigger: 'system.update' }); break;
       case 'refreshStage': await updateChanged(item, { trigger: 'system.update', stageId: message.stage, workflows: [part] }); break;
       case 'jump': await map.reveal(item.entry, message.file, message.line); break;
@@ -325,7 +356,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
         break;
       }
       case 'notesSettings': await api.commands?.executeCommand?.('workbench.action.openSettings', 'yamori.obsidian'); break;
-      case 'route': await route(item, typeof message.intent === 'string' ? message.intent.trim() : ''); break;
+      case 'route': await route(item, typeof message.intent === 'string' ? message.intent.trim() : '', message.scope); break;
       case 'routeCancel': item.route = undefined; item.steer = undefined; item.steerController?.abort(); break;
       case 'steerPreview': await steerPreview(item, String(message.intent || '').trim(), message.targets); break;
       case 'steerApply': await steerApply(item); break;
@@ -350,7 +381,8 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const { provider, model, request: send } = await request('cheap');
     await busy(item, 'Finding the parts of your system…', async () => {
       const texts = await readTexts(item, system.readFiles(entry.graph));
-      const run = createRun(db, { budget: budget(), trigger: 'system.map' });
+      // You asked for the whole map after seeing its estimate: only the daily budget applies.
+      const run = createRun(db, { budget: { ...budget(), perRun: 0 }, trigger: 'system.map' });
       const result = await system.buildSystem({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, texts, request: send, run, provider, model, headSha: await head(item), project: path.basename(item.root), force,
         onProgress: text => { item.busy = text; post(item); } });
       item.notice = result.failed.length ? 'Some parts could not be mapped: ' + result.failed.map(entry => entry.part + ' (' + entry.reason + ')').join('; ') : result.calls ? '' : 'Nothing changed since the map was made: no AI call.';

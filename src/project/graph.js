@@ -14,6 +14,9 @@ const GRAMMARS = ['python', 'javascript', 'tsx', 'go', 'java', 'rust'];
 const GRAMMAR_FOR = { '.py': 'python', '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.ts': 'tsx', '.tsx': 'tsx', '.mts': 'tsx', '.cts': 'tsx', '.go': 'go', '.java': 'java', '.rs': 'rust' };
 const CONTEXT_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg']);
 const isContextFile = rel => CONTEXT_EXTENSIONS.has(posix.extname(rel).toLowerCase());
+// Over the file cap, code comes before docs and data, so a folder full of
+// Markdown or JSON (assets, content) never pushes code out of the map.
+const prioritizeFiles = rels => [...rels].sort((a, b) => (isContextFile(a) ? 1 : 0) - (isContextFile(b) ? 1 : 0) || (a < b ? -1 : a > b ? 1 : 0));
 const MAX_FILE_BYTES = 500000, MAX_FILES = 500, MAX_REFS = 600, MAX_PATH_STEPS = 15;
 // Version 2 adds definition end lines and test cases; older scans rebuild once.
 const GRAPH_VERSION = 2;
@@ -287,6 +290,9 @@ function resolveImport(from, imp, ctx) {
       }
     };
     const bases = dots ? [join(dir, ...Array(dots - 1).fill('..'))] : pythonRoots(from, ctx);
+    // A package installed from elsewhere in the repo (monorepo src layouts such as
+    // packages/x/src/pkg): the one folder that holds a package of that name.
+    if (!dots && rest.length) { const home = pythonPackageHome(ctx, rest[0]); if (home !== undefined) bases.push(home); }
     for (const base of bases) {
       if (base === undefined) continue;
       const target = rest.length ? module(base, rest) : undefined;
@@ -343,6 +349,22 @@ function resolveImport(from, imp, ctx) {
     for (const rel of ctx.files) if (rel.endsWith('/' + tail) || rel === tail) { hit(rel); break; }
   }
   return [...found];
+}
+function pythonPackageHome(ctx, name) {
+  if (!ctx.pythonHomes) {
+    ctx.pythonHomes = new Map();
+    for (const rel of ctx.files) {
+      const match = /^(?:(.*)\/)?([A-Za-z_][\w]*)\/__init__\.py$/.exec(rel);
+      if (!match) continue;
+      // Only a top-level package: its parent folder is not a package itself.
+      const parent = match[1] || '';
+      if (parent && ctx.files.has(parent + '/__init__.py')) continue;
+      if (!ctx.pythonHomes.has(match[2])) ctx.pythonHomes.set(match[2], new Set());
+      ctx.pythonHomes.get(match[2]).add(parent);
+    }
+  }
+  const homes = ctx.pythonHomes.get(name);
+  return homes && homes.size === 1 ? [...homes][0] : undefined;
 }
 function pythonRoots(from, ctx) {
   // Nearest enclosing folders first: monorepos import `src.app.x` relative to
@@ -1062,7 +1084,7 @@ async function locateProject(cwd, cacheRoot) {
 async function listSourceFiles(root) {
   const files = [];
   const walk = async rel => {
-    if (files.length > MAX_FILES) return;
+    if (files.length > MAX_FILES * 40) return;
     let entries;
     try { entries = await fs.readdir(path.join(root, rel), { withFileTypes: true }); } catch { return; }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -1072,7 +1094,7 @@ async function listSourceFiles(root) {
     }
   };
   await walk('');
-  return files.sort((a, b) => a.localeCompare(b));
+  return prioritizeFiles(files);
 }
 async function readInside(root, rel) {
   const real = await fs.realpath(path.join(root, ...rel.split('/'))), rootReal = await realOr(root), relative = path.relative(rootReal, real);
@@ -1097,7 +1119,7 @@ async function includeSourceFiles(root, graph, paths, indexer, read) {
 async function scanFolder(root, previous, indexer, key) {
   const rels = await listSourceFiles(root), limited = rels.length > MAX_FILES, manifests = {};
   for (const name of ['package.json', 'go.mod', 'Cargo.toml']) { try { manifests[name] = await fs.readFile(path.join(root, name), 'utf8'); } catch { /* none */ } }
-  const scanned = await scanFiles(rels.slice(0, MAX_FILES).map(rel => ({ rel, read: () => readInside(root, rel) })), previous, indexer);
+  const scanned = await scanFiles(prioritizeFiles(rels).slice(0, MAX_FILES).map(rel => ({ rel, read: () => readInside(root, rel) })), previous, indexer);
   return { ...buildGraph(scanned.records, manifests), scannedAt: Date.now(), limited, root: key || 'file://' + root };
 }
 // The guide's search: whole-word names (exact capitals) or any text (ignoring
@@ -1267,7 +1289,7 @@ function planParts(defs, text, startLine = 1, { maxParts = 6, minLines = 25 } = 
   return parts.map(part => ({ ...part, names: named.filter(item => item.line >= part.startLine && item.line <= part.endLine).map(item => item.name).slice(0, 16) }));
 }
 
-module.exports = { includeSourceFiles, gitInfo, sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
+module.exports = { prioritizeFiles, includeSourceFiles, gitInfo, sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
 
 // Build step: copy the tree-sitter runtime and the bundled grammars from the
 // pinned development dependency. Run `npm run build:parser` after updating it.
