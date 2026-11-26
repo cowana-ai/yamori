@@ -119,8 +119,15 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     catch (error) { void item.panel.webview.postMessage({ type: 'state', state: { error: error.message, workflows: [] } }); }
   }
 
+  // Code that changed while Yamori was closed: hash comparison only.
+  function markChanged(item) {
+    const db = dbFor(item, false), graph = item.entry.graph;
+    if (!db || !graph) return;
+    for (const workflow of db.workflows()) for (const file of stages.workflowStatus(db, graph, workflow.id).changedFiles) db.markStaleForFile(file);
+  }
   async function show(entry, { workflowId, stageId } = {}) {
     const item = projectFor(entry);
+    try { markChanged(item); } catch { /* The panel shows the error state. */ }
     if (workflowId) item.workflowId = workflowId;
     if (stageId) item.open = stageId;
     if (item.panel) { item.panel.reveal(item.panel.viewColumn); post(item); return item; }
@@ -325,6 +332,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   }
   async function updateChanged(item, { trigger, stageId, signal, workflows } = {}) {
     const db = dbFor(item), entry = item.entry;
+    markChanged(item);
     const targets = workflows || (item.workflowId ? [item.workflowId] : []);
     if (!targets.length) return { calls: 0 };
     const { provider, model, request: send } = await request('cheap');
@@ -353,6 +361,9 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   // --- saves: hash, mark stale, then (after the burst settles) update ---
   async function saved(uri) {
     if (uri?.scheme !== 'file' || !available()) return;
+    // Most saves are in projects without stages: one stat, no store load.
+    const root = map.rootFor?.(uri);
+    if (root && !fs.existsSync(dbPath(root)) && ![...projects.values()].some(item => item.db && uri.fsPath.startsWith(item.root + path.sep))) return;
     const entry = await map.entryForFile(uri).catch(() => undefined);
     if (!entry) return;
     const item = projectFor(entry), db = dbFor(item, false);
@@ -363,6 +374,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   }
   async function settled(item, files, signal) {
     const db = dbFor(item);
+    if (!item.entry.graph) await map.ensureGraph(item.entry);
     const entry = item.entry = await map.rescanFiles(item.entry, files);
     if (signal.aborted) return;
     const affected = new Set();

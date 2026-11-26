@@ -1334,6 +1334,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   let stageBaseProvider, stageProposals;
   const stageSupport = {
     entryFor, entryForFile,
+    rootFor: uri => api.workspace.getWorkspaceFolder?.(uri)?.uri?.fsPath,
     relative: (entry, uri) => relative(entry.root.fsPath, uri.fsPath),
     async ensureGraph(entry) { if (!entry.graph) await scan(entry); if (!entry.graph) throw new Error('This folder could not be mapped.'); return entry; },
     async writeNotes(entry) { await runNotes(entry); },
