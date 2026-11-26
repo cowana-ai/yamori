@@ -1,5 +1,12 @@
 # Changelog
 
+### 0.27.1 · 2026-11-26
+
+- **Saving updates changed pseudocode.** About two seconds after you save, Yamori rewrites only the blocks whose code changed and reuses the rest from the cache. You see removed steps in red and new steps in green without clicking **Update all**.
+- **Visible progress.** Blocks being updated show a spinner in File Flow and in their card. Opening a changed block shows it under File Flow, so the graph stays in view.
+- **Cost safety.** Rapid saves are combined into one update, and a newer save cancels an update in progress. Nothing runs automatically for files over 200 KB, during a git rebase or merge, or when it would exceed your daily token budget.
+- **Setting.** `yamori.autoRefresh` is `changedBlocks` by default. Use `off` to update only when you click **Update all**, or `wholeFile` to rewrite every block after a change.
+
 ### 0.27.0 · 2026-11-25
 
 - **Pseudocode generation uses fewer tokens.** In a pre-release comparison with Open VSX 0.26.19, generating pseudocode for a 302-line Python file used **59% fewer input tokens** (77,028 vs. 186,404, including cache reads and writes). Total tokens fell **51%**, and reported generation cost fell **36%** ($0.384 vs. $0.598). The benchmark used Sonnet for pseudocode, Haiku for the overview or gist, low effort, and refinement off.

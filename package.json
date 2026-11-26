@@ -2,7 +2,7 @@
   "name": "yamori",
   "displayName": "Yamori: Work in Pseudocode",
   "description": "Work in numbered pseudocode beside your editor: read, plan and edit steps; your agent updates the code. No API key: uses your Claude Code or Codex login. Python, JS/TS, Go, Rust and Java.",
-  "version": "0.27.0",
+  "version": "0.27.1",
   "publisher": "cowana-ai",
   "license": "MIT",
   "engines": {
