@@ -420,7 +420,7 @@
           "type": "object",
           "default": {
             "perRun": 60000,
-            "perDay": 400000
+            "perDay": 1500000
           },
           "properties": {
             "perRun": {
@@ -435,7 +435,7 @@
             }
           },
           "additionalProperties": false,
-          "markdownDescription": "Token budgets for stage work (mapping, updates, review summaries, agent requests). A run that would go over stops and shows **Needs update** instead of spending. Every call is listed in the stage screen's Activity."
+          "markdownDescription": "Token limits for AI work Yamori starts by itself (updates after you save, agent requests). A run that would go over stops and the step stays marked as changed. Input and output count fully; cache reads count a tenth, since they cost about a tenth. Mapping you start yourself, after seeing its estimate, is not limited. **AI use** lists every call with its tokens and cost."
         },
         "yamori.stages.autoUpdate": {
           "type": "boolean",

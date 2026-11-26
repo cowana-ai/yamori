@@ -13,7 +13,7 @@
 // - Bounded structured output with hard caps.
 const { BudgetExceeded, estimatePrompt } = require('./budget');
 
-const STAGE_PROMPT_VERSION = 4;
+const STAGE_PROMPT_VERSION = 5;
 const LIMITS = { what: 110, detail: 170, details: 4, deepCode: 42000, deepFunctionLines: 70, deepStages: 8, minStages: 3, maxStages: 7, name: 40, gist: 240, io: 90, summary: 160, stepsPerStage: 14, files: 30, symbolsPerFile: 40, excerptLines: 60 };
 
 const STAGES_SCHEMA = {
@@ -436,6 +436,33 @@ const PLUMBING = /(^|_)(log|logger|logging|trace|tracer|track|telemetry|metrics?
 // Helper folders (utils, config, settings…) are plumbing when they show up inside a step.
 const HELPER_DIRS = /(^|\/)(utils?|config|configs|settings|logging|helpers?|common|tracing)\//i;
 const trivial = node => node.kind === 'class' || node.end - node.line < 2 || PLUMBING.test(node.symbol) || /(_kwargs|_client|_configs?)$|^ainvoke$/.test(node.symbol) || HELPER_DIRS.test(node.file);
+// A step that only passes through to one function (an MCP tool registered as a
+// thin wrapper, a command handler) is replaced by the function that does the work.
+function unwrap(stagesList, tree, graph) {
+  const byKey = new Map(tree.nodes.map(node => [node.file + '#' + node.symbol, node]));
+  const byId = new Map(tree.nodes.map(node => [node.id, node]));
+  const taken = new Set(stagesList.flatMap(stage => (stage.steps || []).map(step => step.file + '#' + step.symbol)));
+  for (const stage of stagesList) {
+    if (!stage.steps) continue;
+    const out = [];
+    for (const step of stage.steps) {
+      let node = byKey.get(step.file + '#' + step.symbol), via;
+      for (let hop = 0; node && hop < 3; hop++) {
+        const real = node.calls.map(key => byId.get(key)).filter(child => child && !trivial(child));
+        if (node.end - node.line > 40 || real.length !== 1) break;
+        const next = real[0], key = next.file + '#' + next.symbol;
+        // Already a step elsewhere: keep this one as it is rather than empty a stage.
+        if (taken.has(key) && key !== step.file + '#' + step.symbol) break;
+        via ||= node.symbol; node = next;
+      }
+      const key = node.file + '#' + node.symbol;
+      if (via) { taken.add(key); out.push({ ...step, file: node.file, symbol: node.symbol, line_start: node.line, line_end: node.end, via }); }
+      else out.push(step);
+    }
+    stage.steps = out.filter((step, index) => out.findIndex(other => other.file === step.file && other.symbol === step.symbol) === index);
+  }
+  void graph;
+}
 function addSubSteps(stagesList, tree) {
   const byKey = new Map(tree.nodes.map(node => [node.file + '#' + node.symbol, node]));
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
@@ -487,11 +514,30 @@ async function generateDeep({ db, graph, explanations, entryFile, entrySymbol, w
   const parsed = parseStages(planned.raw, graph, treeFiles, { previous, pinnedSteps });
   // 1b. Sub-steps, without AI: what each step calls, from the call tree, so the
   // functions inside a step (a ranking helper, a judge, a retry) are on the map too.
+  // The planner decides structure only; step writers (or the cache) describe every step.
+  for (const stage of parsed.stages) for (const step of stage.steps || []) { step.what = null; step.details = []; }
+  unwrap(parsed.stages, tree, graph);
   addSubSteps(parsed.stages, tree);
   // 2. Step writers, in parallel, for functions whose code has no saved description.
+  const written = await describeSteps({ db, graph, explanations, texts, stagesList: parsed.stages, part, request, run, provider, model, workflowId, signal });
+  const calls = 1 + written.calls, failed = written.failed, reused = written.reused, jobs = { length: written.writers };
+  if (signal?.aborted) throw new Error('Cancelled.');
+  db.transaction(() => {
+    db.upsertWorkflow({ id: workflowId, entry_file: entryFile, entry_symbol: entrySymbol || '', base_sha: headSha || null });
+    db.replaceStages(workflowId, parsed.stages);
+    db.setFiles(workflowId, treeFiles.map(file => [file, graph.files[file].hash]));
+    for (const stage of parsed.stages) for (const step of stage.steps || []) db.setSnapshot(workflowId, step.file, step.symbol, pseudocodeFor(graph, explanations, step.file, step.symbol)?.text ?? null);
+    db.setMeta(versionKey(workflowId), currentVersion(model));
+    db.setMeta('fallback:' + workflowId, JSON.stringify({ files: treeFiles.length, functions: tree.nodes.length, writers: jobs.length, reused, failed, deep: true, at: new Date().toISOString() }));
+  });
+  return { workflowId, stages: db.stages(workflowId), calls, deep: true, functions: tree.nodes.length, reused, failed };
+}
+// Step writers for every step without a description: cached descriptions first,
+// then one cheap call per stage (10 functions at a time), in parallel.
+async function describeSteps({ db, graph, explanations, texts, stagesList, part, request, run, provider, model, workflowId, signal }) {
   const jobs = [];
   let reused = 0;
-  for (const stage of parsed.stages) {
+  for (const stage of stagesList) {
     const missing = [];
     for (const step of stage.steps || []) {
       const def = defFor(graph, step.file, step.symbol);
@@ -503,7 +549,7 @@ async function generateDeep({ db, graph, explanations, entryFile, entrySymbol, w
     }
     for (let i = 0; i < missing.length; i += MAX_PER_WRITER) jobs.push({ stage, items: missing.slice(i, i + MAX_PER_WRITER) });
   }
-  let calls = 1;
+  let calls = 0;
   const failed = [];
   await pool(jobs, WRITERS, async job => {
     if (signal?.aborted) return;
@@ -523,16 +569,27 @@ async function generateDeep({ db, graph, explanations, entryFile, entrySymbol, w
       }
     } catch (error) { failed.push(job.stage.name + ': ' + error.message); }
   });
-  if (signal?.aborted) throw new Error('Cancelled.');
+  // A wrapper's name stays as a note, so the tool or command name is still findable.
+  for (const stage of stagesList) for (const step of stage.steps || []) if (step.via && step.what && !(step.details || []).some(item => item.text.startsWith('Started as '))) step.details = [...(step.details || []).slice(0, LIMITS.details - 1), { kind: 'other', text: 'Started as ' + step.via }];
+  return { calls, failed, reused, writers: jobs.length };
+}
+// Describe the steps a part still has no description for (a writer was refused or failed). No re-planning.
+async function describeMissing({ db, graph, explanations, workflowId, request, run, provider, model, readText, signal, part }) {
+  const stagesList = db.stages(workflowId).map(stage => ({ ...stage, steps: db.steps(workflowId, stage.id) }));
+  const files = [...new Set(stagesList.flatMap(stage => stage.steps.filter(step => !step.what).map(step => step.file)))];
+  if (!files.length) return { calls: 0, failed: [], described: 0 };
+  const texts = new Map();
+  for (const file of files) { try { texts.set(file, await readText(file)); } catch { /* Left undescribed. */ } }
+  const missing = stagesList.map(stage => ({ ...stage, steps: stage.steps.filter(step => !step.what && texts.has(step.file)) })).filter(stage => stage.steps.length);
+  const result = await describeSteps({ db, graph, explanations, texts, stagesList: missing, part, request, run, provider, model, workflowId, signal });
   db.transaction(() => {
-    db.upsertWorkflow({ id: workflowId, entry_file: entryFile, entry_symbol: entrySymbol || '', base_sha: headSha || null });
-    db.replaceStages(workflowId, parsed.stages);
-    db.setFiles(workflowId, treeFiles.map(file => [file, graph.files[file].hash]));
-    for (const stage of parsed.stages) for (const step of stage.steps || []) db.setSnapshot(workflowId, step.file, step.symbol, pseudocodeFor(graph, explanations, step.file, step.symbol)?.text ?? null);
-    db.setMeta(versionKey(workflowId), currentVersion(model));
-    db.setMeta('fallback:' + workflowId, JSON.stringify({ files: treeFiles.length, functions: tree.nodes.length, writers: jobs.length, reused, failed, deep: true, at: new Date().toISOString() }));
+    for (const stage of stagesList) {
+      const done = missing.find(item => item.id === stage.id);
+      if (!done) continue;
+      db.setSteps(workflowId, stage.id, stage.steps.map(step => done.steps.find(item => item.position === step.position) || step));
+    }
   });
-  return { workflowId, stages: db.stages(workflowId), calls, deep: true, functions: tree.nodes.length, reused, failed };
+  return { calls: result.calls, failed: result.failed, described: missing.reduce((sum, stage) => sum + stage.steps.filter(step => step.what).length, 0) };
 }
 // What a deep map of one part sends, estimated locally: the plan plus the step writers.
 function estimateDeep({ graph, explanations, entryFile, entrySymbol, texts, scope, provider, model }) {
@@ -714,7 +771,7 @@ function workflowView(db, graph, workflowId) {
 }
 
 module.exports = {
-  addSubSteps, typedDetails, BEHAVIOR_KINDS, suggestEntries, generateDeep, estimateDeep, deepInput, deepPrompt, DEEP_SCHEMA, PLAN_SCHEMA, STEPS_SCHEMA, planPrompt, stepsPrompt, codeHash, STAGE_PROMPT_VERSION, LIMITS, STAGES_SCHEMA, REFRESH_SCHEMA, slug, symbolsOf, pseudocodeFor, workflowFiles, coarse, stageInput, stagesPrompt, refreshPrompt,
+  unwrap, describeMissing, describeSteps, addSubSteps, typedDetails, BEHAVIOR_KINDS, suggestEntries, generateDeep, estimateDeep, deepInput, deepPrompt, DEEP_SCHEMA, PLAN_SCHEMA, STEPS_SCHEMA, planPrompt, stepsPrompt, codeHash, STAGE_PROMPT_VERSION, LIMITS, STAGES_SCHEMA, REFRESH_SCHEMA, slug, symbolsOf, pseudocodeFor, workflowFiles, coarse, stageInput, stagesPrompt, refreshPrompt,
   parseStages, estimateWorkflow, workflowStatus, generateWorkflow, fileChanged, refreshStage, refreshStale,
   renameStage, pinStage, moveStep, mergeStages, stageView, workflowView, versionKey, currentVersion
 };

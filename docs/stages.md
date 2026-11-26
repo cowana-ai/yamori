@@ -85,7 +85,7 @@ Looking at the map, a step, its code or notes never calls AI: it reads `.yamori/
 After you save a file, Yamori compares its content hash. Only steps with code in that file are marked as changed. About two seconds after saves stop (longer while an agent edits several files, or at once when it says it is done), each affected step gets one cheap AI call with the step and the before/after of its changed functions, never the whole system. A source excerpt of one function is sent only when that file has neither current pseudocode nor a current AI note. Nothing runs during a git rebase or merge.
 
 - `yamori.stages.autoUpdate` (default on): turn off to wait for **Update**.
-- `yamori.tokenBudget` (`{ "perRun": 60000, "perDay": 400000 }`): a call that would go over is not made; the step stays marked as changed.
+- `yamori.tokenBudget` (`{ "perRun": 60000, "perDay": 1500000 }`): limits AI work Yamori starts by itself; a call that would go over is not made and the step stays marked as changed. Cache reads count a tenth, since they cost about a tenth. Mapping you start yourself, after its estimate, is logged but not limited. If a run ever leaves steps undescribed, the part says so and **Describe the missing steps** fills them in without re-planning.
 - **AI use** (top right) lists every call today: what it was for, model, input, cached and output tokens, and cost.
 
 Changing the AI model or Yamori's prompts does not redo the map by itself.

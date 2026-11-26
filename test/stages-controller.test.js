@@ -50,9 +50,9 @@ function fakeModel() {
     }
   }
 
-  const live = { now: 0, most: 0 };
-  const requestStructured = async ({ prompt }) => { calls.push(prompt); live.now++; live.most = Math.max(live.most, live.now); await new Promise(resolve => setTimeout(resolve, 2)); live.now--; return { raw: JSON.stringify(answer(prompt)), usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0 }, actualModel: /steer writer/.test(prompt) ? 'main-model' : 'cheap-model' }; };
-  return { calls, requestStructured, live };
+  const live = { now: 0, most: 0 }, fail = { writers: 0 };
+  const requestStructured = async ({ prompt }) => { if (fail.writers > 0 && /Yamori's step writer/.test(prompt)) { fail.writers--; throw new Error('daily budget reached'); } calls.push(prompt); live.now++; live.most = Math.max(live.most, live.now); await new Promise(resolve => setTimeout(resolve, 2)); live.now--; return { raw: JSON.stringify(answer(prompt)), usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0 }, actualModel: /steer writer/.test(prompt) ? 'main-model' : 'cheap-model' }; };
+  return { calls, requestStructured, live, fail };
 }
 
 async function setup({ obsidianConfig = '/nonexistent/obsidian.json', answers = {}, root: existing } = {}) {
@@ -94,7 +94,7 @@ async function setup({ obsidianConfig = '/nonexistent/obsidian.json', answers = 
   const last = () => posted.filter(message => message.type === 'stages').at(-1).state;
   const item = screen.projectFor(entry);
   const settle = async () => { while (item.estimating) await new Promise(resolve => setTimeout(resolve, 5)); };
-  return { root, entry, screen, posted, send, last, settle, settings, item, map, live: model.live, calls: model.calls, close() { screen.dispose(); closeStageDb(dbPath(root)); }, cleanup() { this.close(); fs.rmSync(root, { recursive: true, force: true }); } };
+  return { root, entry, screen, posted, send, last, settle, settings, item, map, live: model.live, fail: model.fail, calls: model.calls, close() { screen.dispose(); closeStageDb(dbPath(root)); }, cleanup() { this.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
 test('one click maps the whole system: every part, its steps in plain words, and how the parts connect', { skip }, async () => {
@@ -377,5 +377,23 @@ test('a part opens on how it works, old maps say so, and one click maps a part a
     assert.equal(ctx.last().system.parts.find(part => part.id === 'email-helper').outdated, false);
     assert.match(ctx.last().notice, /Mapped again/);
     assert.equal(ctx.calls.slice(before).filter(prompt => /Yamori's step writer/.test(prompt)).length, 0, 'unchanged functions reuse their descriptions');
+  } finally { ctx.cleanup(); }
+});
+
+test('when step writers are refused, the gap is shown and can be filled without re-planning', { skip }, async () => {
+  const ctx = await setup();
+  try {
+    ctx.fail.writers = 2;
+    await ctx.send({ type: 'buildSystem' });
+    let state = ctx.last();
+    const gaps = state.system.parts.reduce((sum, part) => sum + part.undescribed, 0);
+    assert.ok(gaps > 0, 'steps left without a description are counted');
+    assert.match(state.notice, /not described/);
+    const before = ctx.calls.length;
+    await ctx.send({ type: 'describeParts' });
+    state = ctx.last();
+    assert.equal(state.system.parts.reduce((sum, part) => sum + part.undescribed, 0), 0);
+    assert.match(state.notice, /^Described \d+ steps\.$/);
+    assert.equal(ctx.calls.slice(before).filter(prompt => /Yamori's planner|system mapper/.test(prompt)).length, 0, 'no re-planning');
   } finally { ctx.cleanup(); }
 });

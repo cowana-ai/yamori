@@ -398,3 +398,21 @@ test('sub-steps come from the call tree: what a step calls is nested under it, p
   assert.deepEqual(list[1].steps.map(step => step.symbol), ['save']);
   assert.deepEqual(stages.typedDetails(['plain text', { kind: 'decides', text: 'Eligible only if demand >= 0.5' }, { kind: 'weird', text: 'x' }]), [{ kind: 'other', text: 'plain text' }, { kind: 'decides', text: 'Eligible only if demand >= 0.5' }, { kind: 'other', text: 'x' }]);
 });
+
+test('thin wrappers give way to the function that does the work, keeping their name as a note', () => {
+  const node = (symbol, calls = [], lines = 10, file = 'a.py') => ({ id: file + '#' + symbol + ':1', file, symbol, kind: 'function', line: 1, end: 1 + lines, calls: calls.map(name => 'a.py#' + name + ':1') });
+  const tree = { nodes: [node('init_month', ['update_thread_id', 'init_month_tool'], 12), node('update_thread_id'), node('init_month_tool', ['build_month_brief', 'load_all_series'], 30), node('build_month_brief'), node('load_all_series'),
+    node('register', ['a_tool', 'b_tool'], 8), node('a_tool'), node('b_tool')] };
+  const list = [{ id: 'start', steps: [{ file: 'a.py', symbol: 'init_month' }, { file: 'a.py', symbol: 'register' }] }];
+  stages.unwrap(list, tree);
+  assert.deepEqual(list[0].steps.map(step => [step.symbol, step.via || null]), [['init_month_tool', 'init_month'], ['register', null]],
+    'the tool wrapper (plumbing aside, one real call) becomes its tool function; a function that calls two is kept');
+});
+
+test('the budget counts cache reads at a tenth, so cached prompts do not use up the day', () => {
+  const { StageDb } = require('../src/stages/db');
+  const db = new StageDb(':memory:');
+  db.logCall({ trigger: 't', input: 1000, cached: 9000, output: 500 });
+  assert.doesNotThrow(() => createRun(db, { budget: { perRun: 0, perDay: 3000 } }).check(500), '1000 + 500 + 900 = 2400 spent; 500 more fits in 3000');
+  assert.throws(() => createRun(db, { budget: { perRun: 0, perDay: 3000 } }).check(700), /daily budget \(2,400 of 3,000 used\)/);
+});

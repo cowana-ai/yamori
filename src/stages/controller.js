@@ -347,6 +347,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     switch (message.type) {
       case 'ready': break;
       case 'buildSystem': await buildSystem(item, { force: !!message.force }); break;
+      case 'describeParts': await describeParts(item, message.id ? [message.id] : system.systemView(dbFor(item), item.entry.graph || { files: {} }).parts.filter(part => part.undescribed).map(part => part.id)); break;
       case 'remapPart': await remapParts(item, [message.id || item.workflowId].filter(Boolean)); break;
       case 'upgradeParts': await remapParts(item, system.systemView(dbFor(item), item.entry.graph || { files: {} }).parts.filter(part => part.outdated).map(part => part.id)); break;
       case 'openPart': item.workflowId = typeof message.id === 'string' && message.id ? message.id : undefined; item.open = undefined; item.file = undefined; item.shared = undefined; if (item.workflowId) db().setMeta('last_workflow', item.workflowId); break;
@@ -431,19 +432,39 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const parts = ids.map(id => db.workflow(id)).filter(Boolean);
     if (!parts.length) return;
     const { provider, model, request: send } = await request('cheap');
-    const run = createRun(db, { budget: { ...budget(), perRun: 0 }, trigger: 'system.remap' });
+    const run = createRun(db, { budget: { perRun: 0, perDay: 0 }, trigger: 'system.remap' });
     let done = 0; const failed = [];
     await busy(item, 'Mapping ' + (parts.length === 1 ? (parts[0].name || parts[0].id) : parts.length + ' parts') + ' again…', async () => {
       await Promise.all(parts.map(async part => {
         try {
-          await stages.generateWorkflow({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, entryFile: part.entry_file, entrySymbol: part.entry_symbol, id: part.id, request: send, run, provider, model, headSha: await head(item), force: true,
+          const result = await stages.generateWorkflow({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, entryFile: part.entry_file, entrySymbol: part.entry_symbol, id: part.id, request: send, run, provider, model, headSha: await head(item), force: true,
             readText: file => map.readSource(entry, file), scope: system.areasOf(entry.graph).find(area => area.folder === part.folder)?.files, part: { name: part.name, does: part.summary } });
+          if (result.failed?.length) failed.push((part.name || part.id) + ': ' + result.failed.length + ' stage(s) not described (' + result.failed[0].replace(/^[^:]+: /, '').slice(0, 120) + ')');
         } catch (error) { failed.push((part.name || part.id) + ': ' + error.message); }
         item.busy = 'Mapped ' + (++done) + ' of ' + parts.length + '…'; post(item);
       }));
       sync(item);
     });
     item.notice = failed.length ? 'Not mapped: ' + failed.join('; ') : 'Mapped again: inner steps and key behaviors are on the diagrams.';
+  }
+  // Finish what a run left undescribed: only step writers, no re-planning.
+  async function describeParts(item, ids) {
+    const entry = item.entry = await map.ensureGraph(item.entry), db = dbFor(item);
+    const parts = ids.map(id => db.workflow(id)).filter(Boolean);
+    const { provider, model, request: send } = await request('cheap');
+    const run = createRun(db, { budget: { perRun: 0, perDay: 0 }, trigger: 'system.describe' });
+    let described = 0; const failed = [];
+    await busy(item, 'Describing the missing steps…', async () => {
+      await Promise.all(parts.map(async part => {
+        try {
+          const result = await stages.describeMissing({ db, graph: entry.graph, explanations: entry.explanations, workflowId: part.id, request: send, run, provider, model, readText: file => map.readSource(entry, file), part: { name: part.name, does: part.summary } });
+          described += result.described; failed.push(...result.failed.map(reason => (part.name || part.id) + ' · ' + reason));
+        } catch (error) { failed.push((part.name || part.id) + ': ' + error.message); }
+        post(item);
+      }));
+      sync(item);
+    });
+    item.notice = failed.length ? 'Described ' + described + ' steps; not done: ' + failed.slice(0, 3).join('; ') : 'Described ' + described + ' steps.';
   }
   async function buildSystem(item, { force = false, confirm = false } = {}) {
     const entry = item.entry = await map.ensureGraph(item.entry);
@@ -457,8 +478,8 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const { provider, model, request: send } = await request('cheap');
     await busy(item, 'Finding the parts of your system…', async () => {
       const texts = await readTexts(item, system.readFiles(entry.graph));
-      // You asked for the whole map after seeing its estimate: only the daily budget applies.
-      const run = createRun(db, { budget: { ...budget(), perRun: 0 }, trigger: 'system.map' });
+      // You asked for the map after seeing its estimate: it is logged, not capped.
+      const run = createRun(db, { budget: { perRun: 0, perDay: 0 }, trigger: 'system.map' });
       const result = await system.buildSystem({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, texts, request: send, run, provider, model, headSha: await head(item), project: path.basename(item.root), force,
         readText: file => map.readSource(entry, file),
         onProgress: text => { item.busy = text; post(item); } });

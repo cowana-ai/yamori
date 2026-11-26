@@ -206,6 +206,7 @@ async function buildSystem({ db, graph, notes, explanations, texts, request, run
       const result = await stages.generateWorkflow({ db, graph, notes, explanations, entryFile: part.entryFile, entrySymbol: part.entrySymbol, id: part.id, request, run, provider, model, headSha, signal, force: force && !!readText,
         ...(readText ? { readText, scope: scopeOf(part.folder), part: { name: part.name, does: part.summary } } : {}) });
       calls += result.calls;
+      if (result.failed?.length) failed.push({ part: part.name, reason: result.failed.length + ' stage' + (result.failed.length === 1 ? '' : 's') + ' not described (' + result.failed[0].replace(/^[^:]+: /, '').slice(0, 120) + ')' });
     } catch (error) { failed.push({ part: part.name, reason: error.message }); }
     onProgress('Mapping steps ' + (++done) + '/' + system.parts.length + '…');
   });
@@ -244,6 +245,8 @@ function systemView(db, graph, notes) {
       stages: view.stages.map(stage => ({ id: stage.id, name: stage.name, gist: stage.gist, stale: stage.stale, pending: stage.pending, plus: stage.plus, pinned: stage.pinned, files: stage.files.length })),
       // Made before inner steps and key behaviors were mapped: offer to map it again.
       outdated: !String(db.meta(stages.versionKey(workflow.id)) || '').startsWith(stages.STAGE_PROMPT_VERSION + '|'),
+      // Steps a step writer never described (refused or failed): offered to finish.
+      undescribed: db.steps(workflow.id).filter(step => !step.what).length,
       // How many key behaviors the part has: AI calls, decisions, points where it waits for you.
       behaviors: db.steps(workflow.id).reduce((counts, step) => { for (const item of step.details || []) counts[item.kind] = (counts[item.kind] || 0) + 1; return counts; }, {}),
       uses: links.filter(link => link.from === workflow.id).map(link => ({ to: link.to, label: link.label })),
