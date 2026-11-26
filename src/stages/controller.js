@@ -9,6 +9,7 @@ const { openStageDb, closeStageDb, dbPath, available, StageDbUnavailable } = req
 const { createRun, normalizeBudget, activity } = require('./budget');
 const stages = require('./generate');
 const { createStageScheduler } = require('./scheduler');
+const review = require('./review');
 const { stagesHTML } = require('../views/stages');
 
 function createStages({ api, context, map, setting, gitOperationInProgress, extensions = {} }) {
@@ -62,7 +63,9 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const status = item.workflowId ? stages.workflowStatus(db, graph, item.workflowId, item.lastModel) : {};
     const card = workflow && item.open ? stages.stageView(db, graph, item.entry.explanations, item.workflowId, item.open) : undefined;
     const extra = extensions.state?.(item, { db, graph, workflow, card }) || {};
-    return { ...base, workflows, workflow, card, outdated: !!status.outdated, activity: activity(db), ...extra };
+    const lineOf = (file, symbol) => { const def = stages.symbolsOf(graph.files[file]).find(item => item.name === symbol); return def ? def.start || def.line : 1; };
+    const queue = workflow ? review.reviewQueue(db, item.workflowId).map(change => ({ ...change, detail: change.detail && { ...change.detail, steps: (change.detail.steps || []).map(step => ({ ...step, line: lineOf(step.file, step.symbol) })) } })) : [];
+    return { ...base, workflows, workflow, card, queue, outdated: !!status.outdated, activity: activity(db), ...extra };
   }
   function post(item) {
     if (!item.panel) return;
@@ -119,6 +122,18 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
         if (!message.to) { newName = await api.window.showInputBox({ title: 'Name the new stage', prompt: 'The step moves into a new pinned stage after this one.' }); if (!newName?.trim()) break; }
         const target = stages.moveStep(db(), wf, { from: message.stage, position: message.position, to: message.to || undefined, newName });
         item.open = db().stage(wf, message.stage) ? message.stage : target;
+        break;
+      }
+      case 'decide': {
+        if (!['approved', 'rejected'].includes(message.status)) break;
+        const decided = review.decide(db(), Number(message.id), message.status, typeof message.why === 'string' ? message.why : '', { headSha: await head(item) });
+        await extensions.decided?.(item, decided);
+        break;
+      }
+      case 'markReviewed': review.markReviewed(db(), wf, await head(item)); break;
+      case 'diff': {
+        const change = db().change(Number(message.id));
+        if (change) await map.openDiff(item.entry, change.base_sha || db().workflow(change.workflow_id)?.base_sha, message.file, message.line);
         break;
       }
       default: await extensions.receive?.(item, message);

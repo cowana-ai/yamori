@@ -262,4 +262,4 @@ function inlineLayout(result, view, side) {
   return blocks;
 }
 
-module.exports = { validRef, comparison, relativePath, changedFiles, sourcePair, workingSnapshot, behaviorChanges, inlineLayout, compareBlockSteps };
+module.exports = { readBlob, validRef, comparison, relativePath, changedFiles, sourcePair, workingSnapshot, behaviorChanges, inlineLayout, compareBlockSteps };

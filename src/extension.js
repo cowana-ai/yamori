@@ -1331,6 +1331,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   }
   // What the stage screen needs from the project map: the same graph, notes
   // and pseudocode cache, without another scan or store.
+  let stageBaseProvider;
   const stageSupport = {
     entryFor, entryForFile,
     relative: (entry, uri) => relative(entry.root.fsPath, uri.fsPath),
@@ -1359,6 +1360,22 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       if (!PROVIDERS[provider]) throw new Error('Set up Claude Code or Codex first (Yamori: Set Up AI).');
       const main = connectionOptions(context.globalState, provider, api);
       return tier === 'main' ? main : { ...main, ...(await quickModel(provider, main.cliPath, api) || {}) };
+    },
+    // Code diff for a stage change: the file at the map's base commit against the working copy.
+    async openDiff(entry, base, rel, line) {
+      if (!entry.graph?.files[rel] && !rel) return;
+      const target = fileUri(entry, rel);
+      if (!base) { await reveal(entry, rel, line); return; }
+      if (!stageBaseProvider && api.workspace.registerTextDocumentContentProvider) {
+        stageBaseProvider = api.workspace.registerTextDocumentContentProvider('yamori-stage-base', { async provideTextDocumentContent(uri) {
+          const query = new URLSearchParams(uri.query);
+          return (await require('./project/diff-review').readBlob(query.get('root'), query.get('sha'), query.get('file')).catch(() => undefined)) ?? '';
+        } });
+        context.subscriptions.push(stageBaseProvider);
+      }
+      const left = api.Uri.from({ scheme: 'yamori-stage-base', path: '/' + rel, query: new URLSearchParams({ root: entry.root.fsPath, sha: base, file: rel }).toString() });
+      const at = Math.max(0, (Number(line) || 1) - 1);
+      await api.commands.executeCommand('vscode.diff', left, target, path.basename(rel) + ' · ' + base.slice(0, 7) + ' → working tree', { preview: true, selection: new api.Range(at, 0, at, 0) });
     },
     requestStructured
   };

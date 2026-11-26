@@ -3,6 +3,7 @@
 ### Unreleased
 
 - **Stages.** Map a workflow from its entry point into 3–7 named stages (for example Plan → Act → Evaluate), each with its steps across files, line links and cached pseudocode. Opening stages and cards never calls a model. Saving a file updates only the unpinned stages that use it, with one cheap-model call per stage after saves settle. Renamed, merged, split and pinned stages survive regeneration. `yamori.tokenBudget` caps each run and each day, and Activity lists every call with its tokens and cost. See [docs/stages.md](docs/stages.md).
+- **Stage review.** Behavior changes appear as one plain sentence per stage, then the pseudocode in red and green, then the code diff from the map's base commit. Approve or reject with an optional why; the next change is compared with what you accepted.
 
 ### 0.27.1 · 2026-11-26
 

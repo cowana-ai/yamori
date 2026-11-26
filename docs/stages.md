@@ -26,6 +26,14 @@ After you save a file, Yamori compares its content hash. Only unpinned stages wi
 
 **Regenerate all** re-clusters every unpinned stage with one call. Rerunning with no code change makes no call. Changing the model or the prompt marks the stages as made by an older version, but does not regenerate them.
 
+## Review
+
+When a stage update finds that behavior changed, it adds one plain sentence to the review queue (for example "Evaluate now retries twice before failing"). The graph shows a **±** badge on the stage, and the bar on top says how many changes wait.
+
+**Review** lists each change: the sentence first, then the pseudocode of each changed step in red and green, then **code diff**, which opens the file at the map's base commit beside the working copy. **Approve** or **Reject** asks for an optional "why", saved with the decision. Either way the next change of that step is compared with this version. When the queue is empty the workflow counts as reviewed; **Mark all seen** does that without deciding.
+
+Renames, formatting and refactors that keep behavior do not enter the queue.
+
 ## Storage
 
 `.yamori/yamori.db` (SQLite, git-ignored) holds workflows, stages, steps, file hashes, the review queue and the token ledger. It is derived from code and can be deleted; pinned stages are the only founder edits it keeps. Stages need the editor's built-in SQLite (VS Code 1.101 or newer).

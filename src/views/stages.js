@@ -170,8 +170,30 @@ function body() {
   html += activity() + graph() + reviewPanel() + card();
   return html;
 }
-function reviewBar() { return ''; }
-function reviewPanel() { return ''; }
+function reviewBar() {
+  const queue = state.queue || [];
+  if (!state.workflow) return '';
+  if (!queue.length) return '';
+  return '<div class="reviewbar"><b>' + queue.length + ' change' + (queue.length === 1 ? '' : 's') + ' to review</b><span class="muted">since ' + esc(state.workflow.reviewed_at ? state.workflow.reviewed_at.slice(0, 16).replace('T', ' ') : 'these stages were made') + '</span><span class="spacer" style="flex:1"></span>' +
+    '<button class="primary" data-act="review">' + (ui.review ? 'Hide review' : 'Review') + '</button><button class="link" data-act="markReviewed" title="Approve nothing, but count everything so far as seen">Mark all seen</button></div>';
+}
+function diffBlock(before, after) {
+  return '<pre class="diff">' + lineDiff(before || '', after || '').map(line => '<span class="' + line.kind + '">' + (line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  ') + esc(line.text) + '</span>').join('') + '</pre>';
+}
+function reviewPanel() {
+  const queue = state.queue || [];
+  if (!ui.review || !queue.length) return '';
+  return '<section class="card review" aria-label="Review changes"><h2>Review<span class="spacer"></span><button class="link" data-act="review">Close</button></h2>' + queue.map(change => {
+    const asking = ui.why?.id === change.id;
+    const steps = change.detail?.steps || [];
+    return '<div class="section" data-change="' + change.id + '"><h3>' + esc(change.stage_name) + ' · ' + esc(change.at.slice(0, 16).replace('T', ' ')) + '</h3>' +
+      '<p style="font-size:14px;margin:4px 0 8px">' + esc(change.summary) + '</p>' +
+      '<details' + (ui.expanded?.[change.id] ? ' open' : '') + ' data-expand="' + change.id + '"><summary>Pseudocode ± (' + steps.length + ' step' + (steps.length === 1 ? '' : 's') + ')</summary>' +
+      steps.map(step => '<div style="margin-top:8px"><span class="symbol">' + esc(step.symbol) + '</span> <button class="chip" data-act="diff" data-id="' + change.id + '" data-file="' + esc(step.file) + '" data-line="' + (step.line || 1) + '" title="Open the code diff">' + esc(step.file) + ' · code diff</button>' + diffBlock(step.before, step.after) + '</div>').join('') + '</details>' +
+      (asking ? '<div class="tools"><textarea id="why" placeholder="Why? (optional, saved with the decision)"></textarea><button class="primary" data-act="saveWhy">' + (ui.why.status === 'approved' ? 'Approve' : 'Reject') + '</button><button data-act="cancelWhy">Cancel</button></div>'
+        : '<div class="tools"><button class="primary" data-act="approve" data-id="' + change.id + '">Approve</button><button data-act="reject" data-id="' + change.id + '">Reject</button></div>') + '</div>';
+  }).join('') + '</section>';
+}
 function render() {
   document.getElementById('app').innerHTML = body();
   const select = document.getElementById('workflow');
@@ -195,7 +217,17 @@ document.addEventListener('change', event => {
   if (target.dataset?.act === 'move' && target.value) send('move', { stage: target.dataset.stage, position: Number(target.dataset.position), to: target.value === '__new' ? '' : target.value });
 });
 // Later milestones handle their own actions here; return true when handled.
-function handleAction() { return false; }
+function handleAction(act, target) {
+  switch (act) {
+    case 'review': ui.review = !ui.review; save(); render(); return true;
+    case 'approve': case 'reject': ui.why = { id: Number(target.dataset.id), status: act === 'approve' ? 'approved' : 'rejected' }; save(); render(); document.getElementById('why')?.focus(); return true;
+    case 'cancelWhy': ui.why = undefined; save(); render(); return true;
+    case 'saveWhy': send('decide', { id: ui.why.id, status: ui.why.status, why: document.getElementById('why')?.value || '' }); ui.why = undefined; save(); return true;
+    case 'diff': send('diff', { id: Number(target.dataset.id), file: target.dataset.file, line: Number(target.dataset.line) }); return true;
+  }
+  return false;
+}
+document.addEventListener('toggle', event => { const id = event.target.dataset?.expand; if (id) { ui.expanded = { ...(ui.expanded || {}), [id]: event.target.open }; save(); } }, true);
 window.addEventListener('message', event => {
   const message = event.data;
   if (message?.type !== 'state') return;

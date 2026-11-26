@@ -179,3 +179,35 @@ test('the scheduler coalesces an agent burst into one run and runs at once on do
     scheduler.dispose(); paused.dispose();
   } finally { Object.assign(timing, saved); }
 });
+
+test('review: approving moves the baseline, the queue empties into reviewed, and what_changed reads since the last review', { skip }, async () => {
+  const review = require('../src/stages/review');
+  const ctx = await setup();
+  const model = fakeModel(prompt => /Code behind one stage changed/.test(prompt)
+    ? { name: 'Plan', gist: 'g', input: 'a', output: 'b', steps: [{ file: 'agent/planner.py', symbol: 'plan' }], behaviorChanged: true, summary: 'Plan now drops empty steps.' }
+    : STAGES);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  stages.fileChanged(ctx.db, 'agent/planner.py', edit(ctx, 'agent/planner.py', 'plan', 'do plan v2'));
+  await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db) });
+  const [change] = review.reviewQueue(ctx.db, workflowId);
+  assert.equal(change.stage_name, 'Plan');
+  assert.equal(review.whatChanged(ctx.db, workflowId).changes.length, 1);
+  const decided = review.decide(ctx.db, change.id, 'approved', 'Empty steps confused the actor.', { headSha: 'def456' });
+  assert.equal(decided.status, 'approved'); assert.equal(decided.why, 'Empty steps confused the actor.'); assert.ok(decided.reviewed);
+  assert.equal(ctx.db.snapshot(workflowId, 'agent/planner.py', 'plan'), '## plan\ndo plan v2');
+  assert.equal(ctx.db.workflow(workflowId).base_sha, 'def456');
+  assert.throws(() => review.decide(ctx.db, change.id, 'rejected'), /already approved/);
+  // A later change of the same step is shown against what was accepted.
+  await new Promise(resolve => setTimeout(resolve, 5));
+  stages.fileChanged(ctx.db, 'agent/planner.py', edit(ctx, 'agent/planner.py', 'plan', 'do plan v3'));
+  await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db) });
+  assert.match(model.calls.at(-1).prompt, /do plan v2/);
+  const since = review.whatChanged(ctx.db, workflowId);
+  assert.equal(since.changes.length, 1); assert.equal(since.pending, 1);
+  assert.equal(review.whatChanged(ctx.db, workflowId, { sinceReview: false }).changes.length, 2);
+});
+
+test('the review diff marks removed and added pseudocode lines', () => {
+  const { lineDiff } = require('../src/views/stages');
+  assert.deepEqual(lineDiff('a\nb\nc', 'a\nB\nc\nd').map(line => line.kind + ':' + line.text), ['same:a', 'del:b', 'add:B', 'same:c', 'add:d']);
+});
