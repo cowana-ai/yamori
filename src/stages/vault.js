@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const START = '<!-- yamori:start -->', END = '<!-- yamori:end -->';
-const NOTES_HEADING = '## Notes';
+const NOTES_HEADING = '## Your notes';
 const MAX_NOTE = 4000;
 
 function vaultRoot({ vaultPath, root }) {
@@ -95,143 +95,177 @@ function codeLinks(file, line, root) {
   const query = 'file=' + encodeURIComponent(file) + '&line=' + (line || 1) + (root ? '&root=' + encodeURIComponent(root) : '');
   return '[open](vscode://cowana-ai.yamori/open?' + query + ') · [cursor](cursor://cowana-ai.yamori/open?' + query + ')';
 }
-const blockId = symbol => String(symbol).replace(/[^A-Za-z0-9-]/g, '-').toLowerCase();
-const filesNote = file => 'Files/' + file + '.md';
+const linkTo = (dir, file, label) => '[[' + posix(path.relative(dir, file)).replace(/\.md$/, '') + (label ? '|' + label : '') + ']]';
+const GENERATED = new Set(['system', 'part', 'step', 'stage', 'file', 'index']);
 
+// Notes a founder can read without knowing the code:
+//   System.md                 how the whole system works, its parts and links
+//   <Part>/<Part>.md          what one part does, its steps in order
+//   <Part>/<Step>.md          what one step does; code references folded away
+//   Changes/YYYY-MM-DD.md     what changed, what you decided and why
 class Vault {
   constructor({ vaultPath, root }) {
     this.root = root; this.vaultPath = vaultPath || '';
     this.dir = vaultRoot({ vaultPath, root });
     this.obsidian = !!vaultPath;
+    this.repo = path.basename(root);
   }
-  stageDir(workflowId) { return path.join(this.dir, 'Stages', safeName(workflowId)); }
-  // A stage note is found by its front matter, so a renamed file still matches.
-  findStageNote(workflowId, stageId) {
-    for (const file of listMarkdown(this.stageDir(workflowId))) {
-      const front = parseNote(readFile(file)).front;
-      if (front.type === 'stage' && front.workflow === workflowId && front.stage_id === stageId) return file;
-    }
-    return undefined;
+  systemFile() { return path.join(this.dir, 'System.md'); }
+  // Notes are found by their front matter, so renamed files and folders still match.
+  find(match) {
+    const entries = this.scan || listMarkdown(this.dir).map(file => [file, parseNote(readFile(file)).front]);
+    return entries.find(([, front]) => match(front))?.[0];
   }
-  stageNotePath(workflowId, stage) { return this.findStageNote(workflowId, stage.id) || path.join(this.stageDir(workflowId), safeName(stage.name) + '.md'); }
-  stageLink(workflowId, stage) { return '[[' + posix(path.relative(this.dir, this.stageNotePath(workflowId, stage))).replace(/\.md$/, '') + '|' + stage.name + ']]'; }
+  findStageNote(workflowId, stageId) { return this.find(front => (front.type === 'step' || front.type === 'stage') && front.workflow === workflowId && front.stage_id === stageId); }
+  findPartNote(workflowId) { return this.find(front => front.type === 'part' && front.workflow === workflowId); }
+  partName(db, workflowId) { const workflow = db.workflow(workflowId); return workflow?.name || workflow?.entry_symbol || workflowId; }
+  partDir(db, workflowId) { const existing = this.findPartNote(workflowId); return existing ? path.dirname(existing) : path.join(this.dir, safeName(this.partName(db, workflowId))); }
+  partNotePath(db, workflowId) { return this.findPartNote(workflowId) || path.join(this.partDir(db, workflowId), safeName(this.partName(db, workflowId)) + '.md'); }
+  stageNotePath(db, workflowId, stage) {
+    const found = this.findStageNote(workflowId, stage.id);
+    if (found) return found;
+    let file = path.join(this.partDir(db, workflowId), safeName(stage.name) + '.md');
+    if (file === this.partNotePath(db, workflowId)) file = file.replace(/\.md$/, ' (step).md');
+    return file;
+  }
+  write(file, front, managed, defaultFree) {
+    const before = readFile(file), updated = new Date().toISOString();
+    const keep = before ? parseNote(before).front.updated || updated : updated;
+    let text = mergeNote(before, { front: { ...front, updated: keep }, managed, ...(defaultFree ? { defaultFree } : {}) });
+    if (before !== undefined && text !== before) text = mergeNote(before, { front: { ...front, updated }, managed, ...(defaultFree ? { defaultFree } : {}) });
+    writeIfChanged(file, text);
+    return file;
+  }
 
-  // Write every managed section of a workflow. Returns the files written.
-  syncWorkflow(db, graph, notes, workflowId) {
-    const workflow = db.workflow(workflowId);
-    if (!workflow) return [];
-    const written = [], updated = new Date().toISOString();
-    const list = db.stages(workflowId), fileStages = new Map();
-    for (const stage of list) {
-      const steps = db.steps(workflowId, stage.id);
-      const files = [...new Set(steps.map(step => step.file))];
-      for (const step of steps) { if (!fileStages.has(step.file)) fileStages.set(step.file, []); fileStages.get(step.file).push({ stage, step }); }
-      const managed = [
-        '# ' + stage.name, '',
-        stage.gist ? '> ' + stage.gist + '\n' : '',
-        '**In:** ' + (stage.input || '—') + ' → **Out:** ' + (stage.output || '—'), '',
-        '## Steps', '',
-        ...steps.map((step, index) => (index + 1) + '. `' + step.symbol + '` · [[' + filesNote(step.file).replace(/\.md$/, '') + '#^' + blockId(step.symbol) + '|' + step.file + ']] · ' + codeLinks(step.file, step.line_start, this.obsidian ? this.root : undefined)),
-        '', '_Managed by Yamori: this section is rewritten when the stage changes. Write below it._'
-      ].filter(line => line !== null).join('\n');
-      const file = this.stageNotePath(workflowId, stage);
-      const before = readFile(file);
-      const front = { type: 'stage', workflow: workflowId, stage_id: stage.id, name: stage.name, files, updated: before ? parseNote(before).front.updated || updated : updated };
-      let text = mergeNote(before, { front, managed });
-      if (text !== before && before !== undefined) text = mergeNote(before, { front: { ...front, updated }, managed });
-      if (writeIfChanged(file, text)) written.push(file);
-      db.setMeta('vault:name:' + workflowId + ':' + stage.id, stage.name);
-    }
-    // File notes: the AI note, the file's story across stages and backlinks.
-    for (const [file, uses] of [...fileStages].sort(([a], [b]) => a < b ? -1 : 1)) {
-      const note = notes?.files?.[file];
-      const managed = [
-        '# ' + file, '',
-        note?.purpose ? '> ' + note.purpose + '\n' : '',
-        note?.role ? '**Role:** ' + note.role + '\n' : '',
-        '## In stages', '',
-        ...uses.map(({ stage, step }) => '- `' + step.symbol + '` in ' + this.stageLink(workflowId, stage) + ' · ' + codeLinks(file, step.line_start, this.obsidian ? this.root : undefined) + ' ^' + blockId(step.symbol)),
-        '', '_Managed by Yamori. Write below it._'
-      ].join('\n');
-      const target = path.join(this.dir, ...filesNote(file).split('/'));
-      const before = readFile(target), front = { type: 'file', path: file, workflow: workflowId, updated: before ? parseNote(before).front.updated || updated : updated };
-      let text = mergeNote(before, { front, managed });
-      if (text !== before && before !== undefined) text = mergeNote(before, { front: { ...front, updated }, managed });
-      if (writeIfChanged(target, text)) written.push(target);
-    }
-    this.archiveOrphans(db, workflowId);
-    this.writeIndex(db);
-    return written;
+  // Rewrite every managed section. Pure file IO; returns the files it owns.
+  syncSystem(db, graph, options = {}) {
+    // One read of every note's front matter for the whole sync.
+    this.scan = listMarkdown(this.dir).map(file => [file, parseNote(readFile(file)).front]);
+    try { return this.syncAll(db, graph, options); } finally { this.scan = undefined; }
   }
-  writeIndex(db) {
-    const lines = ['# ' + path.basename(this.root), ''];
-    for (const workflow of db.workflows()) {
-      lines.push('## ' + workflow.id + ' (' + workflow.entry_file + (workflow.entry_symbol ? ' › ' + workflow.entry_symbol : '') + ')', '');
-      for (const stage of db.stages(workflow.id)) {
-        const files = [...new Set(db.steps(workflow.id, stage.id).map(step => step.file))];
-        lines.push('- ' + this.stageLink(workflow.id, stage) + (files.length ? ': ' + files.map(file => '[[' + filesNote(file).replace(/\.md$/, '') + '|' + file + ']]').join(', ') : ''));
-      }
-      lines.push('');
+  syncAll(db, graph, { summary = db.meta('system_summary') || '' } = {}) {
+    const owned = new Set(), workflows = db.workflows(), links = db.links();
+    const name = id => this.partName(db, id);
+    for (const workflow of workflows) {
+      const list = db.stages(workflow.id), partFile = this.partNotePath(db, workflow.id), dir = path.dirname(partFile);
+      list.forEach((stage, index) => {
+        const steps = db.steps(workflow.id, stage.id), file = this.stageNotePath(db, workflow.id, stage);
+        const prev = list[index - 1], next = list[index + 1];
+        const code = steps.map(step => '> - ' + (step.what ? step.what + ': ' : '') + '`' + step.symbol + '` in ' + step.file + ' · ' + codeLinks(step.file, step.line_start, this.obsidian ? this.root : undefined)).join('\n');
+        const managed = [
+          '# ' + stage.name, '',
+          'Step ' + (index + 1) + ' of ' + list.length + ' in ' + linkTo(this.dir, partFile, name(workflow.id)), '',
+          stage.gist ? '**What it does:** ' + stage.gist : '',
+          '**Takes:** ' + (stage.input || '—') + ' → **Gives:** ' + (stage.output || '—'),
+          [prev ? '**Before:** ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, prev), prev.name) : '', next ? '**Next:** ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, next), next.name) : ''].filter(Boolean).join(' · '), '',
+          steps.some(step => step.what) ? '**How:**\n' + steps.filter(step => step.what).map((step, n) => (n + 1) + '. ' + step.what).join('\n') + '\n' : '',
+          '> [!note]- Where this is in the code', code || '> (no code linked)', '',
+          '_Yamori keeps this part up to date. Write your notes below: why it works this way, what must never change. Your agents read them._'
+        ].filter(line => line !== '').join('\n');
+        this.write(file, { type: 'step', part: name(workflow.id), workflow: workflow.id, stage_id: stage.id, name: stage.name }, managed);
+        db.setMeta('vault:name:' + workflow.id + ':' + stage.id, stage.name);
+        owned.add(file);
+      });
+      const uses = links.filter(link => link.from === workflow.id).map(link => '- It ' + link.label + ' ' + linkTo(this.dir, this.partNotePath(db, link.to), name(link.to)));
+      const usedBy = links.filter(link => link.to === workflow.id).map(link => '- ' + linkTo(this.dir, this.partNotePath(db, link.from), name(link.from)) + ' ' + link.label + ' it');
+      const managed = ['# ' + name(workflow.id), '',
+        workflow.summary || '', '',
+        '## How it works', '',
+        ...list.map((stage, index) => (index + 1) + '. ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, stage), stage.name) + (stage.gist ? ': ' + stage.gist : '')), '',
+        uses.length || usedBy.length ? '## Works with\n\n' + [...uses, ...usedBy].join('\n') + '\n' : '',
+        '_Starts at `' + workflow.entry_symbol + '` in ' + workflow.entry_file + '. Write your notes about this part below._'].join('\n').replace(/\n{3,}/g, '\n\n');
+      this.write(partFile, { type: 'part', workflow: workflow.id, name: name(workflow.id) }, managed);
+      owned.add(partFile); void dir;
     }
-    const file = path.join(this.dir, 'Index.md');
-    writeIfChanged(file, mergeNote(readFile(file), { front: { type: 'index' }, managed: lines.join('\n'), defaultFree: '\n' }));
+    const managed = ['# How ' + this.repo + ' works', '', summary || '', '',
+      '## Parts', '',
+      ...workflows.map(workflow => '- ' + linkTo(this.dir, this.partNotePath(db, workflow.id), name(workflow.id)) + (workflow.summary ? ': ' + workflow.summary : '')), '',
+      links.length ? '## How they work together\n\n' + links.map(link => '- ' + linkTo(this.dir, this.partNotePath(db, link.from), name(link.from)) + ' ' + link.label + ' ' + linkTo(this.dir, this.partNotePath(db, link.to), name(link.to))).join('\n') + '\n' : '',
+      'What changed and what you decided: the notes in Changes/.', '',
+      '_Yamori keeps this part up to date. Write notes about the whole system below; your agents read them before any change._'].join('\n').replace(/\n{3,}/g, '\n\n');
+    owned.add(this.write(this.systemFile(), { type: 'system', repo: this.repo }, managed));
+    this.archiveOrphans(owned);
+    return [...owned];
   }
-  // Generated notes whose stage is gone move to _archive/. Nothing is deleted.
-  archiveOrphans(db, workflowId) {
-    const live = new Set(db.stages(workflowId).map(stage => stage.id)), moved = [];
-    for (const file of listMarkdown(this.stageDir(workflowId))) {
+  // Kept for callers that sync one workflow: the whole system is cheap to write.
+  syncWorkflow(db, graph) { return this.syncSystem(db, graph); }
+  // Generated notes Yamori no longer writes move to _archive/. Nothing is deleted;
+  // notes you created yourself (no managed section) are never touched.
+  archiveOrphans(owned) {
+    const moved = [];
+    for (const file of listMarkdown(this.dir)) {
+      if (owned.has(file) || file.startsWith(path.join(this.dir, 'Changes') + path.sep)) continue;
       const parsed = parseNote(readFile(file));
-      if (parsed.front.type !== 'stage' || parsed.managed === undefined || parsed.front.workflow !== workflowId || live.has(parsed.front.stage_id)) continue;
+      if (!GENERATED.has(parsed.front.type) || parsed.managed === undefined) continue;
       const target = path.join(this.dir, '_archive', path.relative(this.dir, file));
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.renameSync(file, fs.existsSync(target) ? target.replace(/\.md$/, ' ' + Date.now() + '.md') : target);
       moved.push(file);
     }
+    // Folders left empty by a move go too.
+    for (const entry of fs.readdirSync(this.dir, { withFileTypes: true })) if (entry.isDirectory() && entry.name !== '_archive') removeEmpty(path.join(this.dir, entry.name));
     return moved;
   }
 
   // --- reading the free sections (zero model calls) ---
   stageNotes(workflowId, stageId) {
     const file = this.findStageNote(workflowId, stageId);
-    if (!file) return { text: '', file: undefined };
-    return { text: freeText(parseNote(readFile(file))), file };
+    return file ? { text: freeText(parseNote(readFile(file))), file } : { text: '', file: undefined };
   }
-  // A rename in the note's front matter becomes a pinned override.
+  systemNotes() { const text = readFile(this.systemFile()); return text === undefined ? '' : freeText(parseNote(text)); }
+  partNotes(workflowId) { const file = this.findPartNote(workflowId); return file ? freeText(parseNote(readFile(file))) : ''; }
+  // Everything an agent must respect for one step: system, part and step notes.
+  constraints(workflowId, stageId) {
+    return [['Whole system', this.systemNotes()], ['This part', this.partNotes(workflowId)], ['This step', this.stageNotes(workflowId, stageId).text]].filter(([, text]) => text).map(([label, text]) => label + ':\n' + text).join('\n\n');
+  }
+  // A rename in a note's front matter becomes a pinned override.
   renames(db, workflowId) {
     const out = [];
-    for (const file of listMarkdown(this.stageDir(workflowId))) {
+    for (const file of listMarkdown(this.dir)) {
       const front = parseNote(readFile(file)).front;
-      if (front.type !== 'stage' || front.workflow !== workflowId || typeof front.name !== 'string' || !front.name.trim()) continue;
+      if (!['step', 'stage'].includes(front.type) || front.workflow !== workflowId || typeof front.name !== 'string' || !front.name.trim()) continue;
       const stage = db.stage(workflowId, front.stage_id), written = db.meta('vault:name:' + workflowId + ':' + front.stage_id);
       if (stage && written !== undefined && front.name.trim() !== written && front.name.trim() !== stage.name) out.push({ stageId: stage.id, name: front.name.trim() });
     }
     return out;
   }
-  // Append to a stage's free section (the card's note box, or MCP add_note).
-  addNote(db, workflowId, stageId, text, { author = 'You', at = new Date() } = {}) {
+  appendTo(file, text, author, at) {
     const clean = String(text || '').replace(/\r/g, '').trim().slice(0, MAX_NOTE);
     if (!clean) throw new Error('Write a note first.');
-    const stage = db.stage(workflowId, stageId);
-    if (!stage) throw new Error(`No stage "${stageId}" in workflow "${workflowId}".`);
-    let file = this.findStageNote(workflowId, stageId);
-    if (!file) { this.syncWorkflow(db, { files: {} }, {}, workflowId); file = this.findStageNote(workflowId, stageId); }
     let current = readFile(file);
     if (!new RegExp('^' + NOTES_HEADING + '\\s*$', 'm').test(parseNote(current).after)) current = current.replace(/\s*$/, '\n\n' + NOTES_HEADING + '\n');
     const lines = clean.split('\n');
-    const entry = '- ' + at.toISOString().slice(0, 10) + ' · ' + author.replace(/[\n\r]/g, ' ').slice(0, 60) + ': ' + lines[0] + (lines.length > 1 ? '\n' + lines.slice(1).map(line => '  ' + line).join('\n') : '');
+    const entry = '- ' + at.toISOString().slice(0, 10) + ' · ' + String(author).replace(/[\n\r]/g, ' ').slice(0, 60) + ': ' + lines[0] + (lines.length > 1 ? '\n' + lines.slice(1).map(line => '  ' + line).join('\n') : '');
     writeIfChanged(file, current.replace(/\s*$/, '\n') + entry + '\n');
     return file;
   }
-  // The change log: every decision with its sentence, stage link and why.
+  // Append to a step's notes (the card's note box, or MCP add_note).
+  addNote(db, workflowId, stageId, text, { author = 'You', at = new Date() } = {}) {
+    if (!db.stage(workflowId, stageId)) throw new Error(`No step "${stageId}" in "${workflowId}".`);
+    let file = this.findStageNote(workflowId, stageId);
+    if (!file) { this.syncSystem(db, { files: {} }); file = this.findStageNote(workflowId, stageId); }
+    return this.appendTo(file, text, author, at);
+  }
+  addSystemNote(db, text, { author = 'You', at = new Date() } = {}) {
+    if (!fs.existsSync(this.systemFile())) this.syncSystem(db, { files: {} });
+    return this.appendTo(this.systemFile(), text, author, at);
+  }
+  // The change log in plain words: what changed, where, the decision and why.
   appendChange(db, change, { at = new Date() } = {}) {
     const stage = db.stage(change.workflow_id, change.stage_id) || { id: change.stage_id, name: change.stage_id };
     const day = at.toISOString().slice(0, 10), file = path.join(this.dir, 'Changes', day + '.md');
-    let text = readFile(file) ?? '---\ntype: changes\ndate: ' + day + '\n---\n# Changes · ' + day + '\n\n';
-    text = text.replace(/\s*$/, '\n') + '- ' + at.toISOString().slice(11, 16) + ' · ' + this.stageLink(change.workflow_id, stage) + ' · **' + change.status + '** · ' + change.summary +
-      (change.why ? '\n  - Why: ' + change.why.replace(/\n+/g, ' ') : '') + (change.base_sha || change.head_sha ? '\n  - Commits: ' + [change.base_sha, change.head_sha].filter(Boolean).map(sha => sha.slice(0, 7)).join('…') : '') + '\n';
+    let text = readFile(file) ?? '---\ntype: changes\ndate: ' + day + '\n---\n# What changed on ' + day + '\n\n';
+    const where = this.partName(db, change.workflow_id) + ' › ' + linkTo(this.dir, this.stageNotePath(db, change.workflow_id, stage), stage.name);
+    text = (text.endsWith('\n\n') ? text : text.replace(/\s*$/, '\n')) + '- ' + at.toISOString().slice(11, 16) + ' · ' + where + ': ' + change.summary + ' **' + (change.status === 'approved' ? 'Approved' : change.status === 'rejected' ? 'Rejected' : change.status) + '.**' +
+      (change.why ? '\n  - Why: ' + change.why.replace(/\n+/g, ' ') : '') + '\n';
     writeIfChanged(file, text);
     return file;
   }
+}
+function removeEmpty(dir) {
+  let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) if (entry.isDirectory()) removeEmpty(path.join(dir, entry.name));
+  try { if (!fs.readdirSync(dir).length) fs.rmdirSync(dir); } catch { /* Not empty. */ }
 }
 
 module.exports = { Vault, vaultRoot, parseNote, mergeNote, freeText, safeName, START, END, codeLinks };

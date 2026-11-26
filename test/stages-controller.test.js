@@ -5,42 +5,55 @@ const project = require('../src/project/graph');
 const { available, closeStageDb, dbPath } = require('../src/stages/db');
 const { createStages } = require('../src/stages/controller');
 const { timing } = require('../src/stages/scheduler');
-const generate = require('../src/stages/generate');
 
 const skip = !available() && 'node:sqlite is not available in this runtime';
-const FIXTURE = path.join(__dirname, 'fixtures', 'agent-repo');
+const FIXTURE = path.join(__dirname, 'fixtures', 'multi-repo');
 
-function fakeApi(answers = {}) {
-  const posted = [], settings = {};
-  const api = {
-    ViewColumn: { Active: -1, One: 1, Beside: -2 },
-    ConfigurationTarget: { Global: 1 },
-    workspace: { getConfiguration: () => ({ update: async (key, value) => { settings[key] = value; } }) },
-    env: { openExternal: async uri => { posted.push({ external: String(uri) }); return true; } },
-    Uri: { parse: text => text, file: file => ({ fsPath: file }) },
-    window: {
-      showQuickPick: async items => answers.quickPick ? answers.quickPick(await items) : (await items)[0],
-      showInformationMessage: async () => answers.info ?? 'Generate',
-      showWarningMessage: async () => answers.warning,
-      showInputBox: async () => answers.input,
-      activeTextEditor: undefined
+// A stand-in AI that answers each Yamori prompt the way a model would.
+function fakeModel() {
+  const calls = [];
+  const candidate = (prompt, file, fn) => new RegExp('"id":"(c\\d+)","file":"' + file.replace(/\//g, '\\/') + '","function":"' + fn + '"').exec(prompt)?.[1];
+  const answer = prompt => {
+    if (/system mapper/.test(prompt)) return { summary: 'Two AI helpers answer email and score leads; a web server starts them.', parts: [
+      { name: 'Web server', summary: 'Starts the helpers when a request comes in.', entry: candidate(prompt, 'server/app.py', 'main') },
+      { name: 'Email helper', summary: 'Reads unread email and answers it.', entry: candidate(prompt, 'agents/email/run.py', 'triage_loop') },
+      { name: 'Lead scoring', summary: 'Scores sales leads and saves the scores.', entry: candidate(prompt, 'agents/sales/pipeline.py', 'score_leads') }],
+      links: [{ from: 'Web server', to: 'Email helper', label: 'starts' }, { from: 'Web server', to: 'Lead scoring', label: 'starts' }] };
+    if (/Code behind one stage changed/.test(prompt)) return { name: 'Answer', gist: 'Writes and sends replies, twice if needed.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email' }], behaviorChanged: true, summary: 'Replies are now sent twice when the first try fails.' };
+    if (/Yamori's router/.test(prompt)) return { targets: ['email-helper/answer'], explanation: 'Retrying belongs where replies are sent, in the Email helper.' };
+    if (/steer writer/.test(prompt)) return { summary: 'Replies are retried once.', edits: [{ file: 'agents/email/inbox.py', startLine: 6, endLine: 6, replacement: '    print(message, answer) or print(message, answer)', why: 'Retry once.' }] };
+    if (/stage mapper/.test(prompt)) {
+      const entry = /WORKFLOW ENTRY: (\{.*\})/.exec(prompt)[1];
+      if (/email/.test(entry)) return { stages: [
+        { id: 'read', name: 'Read inbox', gist: 'Gets unread email.', input: 'mailbox', output: 'unread email', steps: [{ file: 'agents/email/inbox.py', symbol: 'fetch_unread', what: 'Gets the unread email' }] },
+        { id: 'answer', name: 'Answer', gist: 'Writes and sends replies.', input: 'unread email', output: 'sent replies', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Answers each unread email' }, { file: 'agents/email/inbox.py', symbol: 'reply', what: 'Sends the reply' }] },
+        { id: 'write', name: 'Write text', gist: 'Asks AI for the words.', input: 'prompt', output: 'text', steps: [{ file: 'shared/llm.py', symbol: 'complete', what: 'Asks the AI to write' }] }] };
+      if (/sales/.test(entry)) return { stages: [
+        { id: 'load', name: 'Load leads', gist: 'Reads leads.', input: 'CRM', output: 'leads', steps: [{ file: 'agents/sales/crm.py', symbol: 'load_leads', what: 'Reads the leads' }] },
+        { id: 'score', name: 'Score', gist: 'Scores each lead.', input: 'leads', output: 'scores', steps: [{ file: 'agents/sales/pipeline.py', symbol: 'score_leads', what: 'Scores each lead' }] },
+        { id: 'save', name: 'Save scores', gist: 'Stores scores.', input: 'scores', output: 'saved', steps: [{ file: 'agents/sales/crm.py', symbol: 'save_score', what: 'Saves a score' }] }] };
+      return { stages: [
+        { id: 'receive', name: 'Receive request', gist: 'Takes a web request.', input: 'request', output: 'path', steps: [{ file: 'server/app.py', symbol: 'main', what: 'Starts the server' }] },
+        { id: 'route', name: 'Pick helper', gist: 'Starts the right helper.', input: 'path', output: 'helper run', steps: [{ file: 'server/app.py', symbol: 'handle_request', what: 'Picks the helper for the path' }] },
+        { id: 'respond', name: 'Respond', gist: 'Returns the result.', input: 'helper run', output: 'response', steps: [{ file: 'agents/email/run.py', symbol: 'triage_loop', what: 'Runs the email helper' }] }] };
     }
+    throw new Error('Unexpected prompt: ' + prompt.slice(0, 80));
   };
-  const host = { postMessage: message => { posted.push(message); return Promise.resolve(true); } };
-  return { api, posted, host, settings };
+  const requestStructured = async ({ prompt }) => { calls.push(prompt); return { raw: JSON.stringify(answer(prompt)), usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0 }, actualModel: /steer writer/.test(prompt) ? 'main-model' : 'cheap-model' }; };
+  return { calls, requestStructured };
 }
 
-async function setup(answers, { obsidianConfig = '/nonexistent/obsidian.json' } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yamori-stages-'));
-  fs.cpSync(FIXTURE, root, { recursive: true });
+async function setup({ obsidianConfig = '/nonexistent/obsidian.json', answers = {}, root: existing } = {}) {
+  const root = existing || fs.mkdtempSync(path.join(os.tmpdir(), 'yamori-system-'));
+  if (!existing) fs.cpSync(FIXTURE, root, { recursive: true });
   const graph = await project.scanFolder(root, undefined, new project.Indexer());
   const notes = { files: Object.fromEntries(Object.entries(graph.files).map(([rel, file]) => [rel, { hash: file.hash, purpose: 'Purpose of ' + rel, role: 'core', terms: [] }])) };
   const entry = { root: { fsPath: root, toString: () => 'file://' + root }, graph, notes, explanations: {} };
-  const calls = [];
+  const model = fakeModel(), posted = [], settings = {};
   const map = {
-    entryFor: async () => entry, entryForFile: async () => entry,
+    entryFor: async () => entry, entryForFile: async () => entry, rootFor: () => root,
     relative: (_entry, uri) => path.relative(root, uri.fsPath).split(path.sep).join('/'),
-    ensureGraph: async value => value, writeNotes: async () => {},
+    ensureGraph: async value => value,
     rescanFiles: async (value, files) => { value.graph = await project.includeSourceFiles(root, value.graph, files, new project.Indexer()); return value; },
     readSource: async (_entry, rel) => fs.readFileSync(path.join(root, rel), 'utf8'),
     reveal: async () => {}, openFlow: async () => {}, gitHead: async () => 'abc123', showStages: async () => {},
@@ -48,161 +61,146 @@ async function setup(answers, { obsidianConfig = '/nonexistent/obsidian.json' } 
     isDirty: () => false, openProposed: async () => {},
     writeSource: async (_entry, rel, text) => fs.writeFileSync(path.join(root, rel), text),
     connection: async tier => ({ provider: 'claude', model: tier === 'main' ? 'main-model' : 'cheap-model' }),
-    requestStructured: async ({ prompt }) => {
-      calls.push(prompt);
-      if (/steer writer/.test(prompt)) return { raw: JSON.stringify({ summary: 'Act retries a failed step once.', edits: [{ file: 'agent/actor.py', startLine: 9, endLine: 9, replacement: '    return call_tool("search", step) or call_tool("search", step)', why: 'Retry once.' }] }), usage: { input: 3000, output: 200 }, actualModel: 'main-model' };
-      const refresh = /Code behind one stage changed/.test(prompt);
-      const value = refresh
-        ? { name: 'Act', gist: 'Run steps.', input: 'steps', output: 'results', steps: [{ file: 'agent/actor.py', symbol: 'act' }, { file: 'agent/actor.py', symbol: 'run_step' }], behaviorChanged: true, summary: 'Act now runs every step twice.' }
-        : { stages: [
-          { id: 'plan', name: 'Plan', gist: 'g', input: 'goal', output: 'steps', steps: [{ file: 'agent/planner.py', symbol: 'plan' }] },
-          { id: 'act', name: 'Act', gist: 'g', input: 'steps', output: 'results', steps: [{ file: 'agent/actor.py', symbol: 'act' }, { file: 'agent/actor.py', symbol: 'run_step' }] },
-          { id: 'evaluate', name: 'Evaluate', gist: 'g', input: 'results', output: 'verdict', steps: [{ file: 'agent/evaluator.py', symbol: 'evaluate' }] }] };
-      return { raw: JSON.stringify(value), usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0 }, actualModel: refresh ? 'cheap-model' : 'cheap-model' };
-    }
+    requestStructured: model.requestStructured
   };
-  const { api, posted, host, settings } = fakeApi(answers);
+  const api = {
+    ViewColumn: { Beside: -2 }, ConfigurationTarget: { Global: 1 },
+    workspace: { getConfiguration: () => ({ update: async (key, value) => { settings[key] = value; } }), openTextDocument: async uri => uri },
+    env: { openExternal: async uri => { posted.push({ external: String(uri) }); return true; } },
+    Uri: { parse: text => text, file: file => ({ fsPath: file }) },
+    window: { showQuickPick: async items => (await items)[0], showInformationMessage: async () => answers.info, showWarningMessage: async () => answers.warning, showInputBox: async () => answers.input, showTextDocument: async () => {} }
+  };
   const values = new Map(), context = { globalState: { get: key => values.get(key), update: async (key, value) => values.set(key, value) } };
   const screen = createStages({ api, context, map, setting: (name, fallback) => settings[name] ?? fallback, gitOperationInProgress: async () => false, obsidianConfig });
+  const host = { postMessage: message => { posted.push(message); return Promise.resolve(true); } };
   screen.attach(entry, host);
   const send = message => screen.message(entry, message);
   const last = () => posted.filter(message => message.type === 'stages').at(-1).state;
-  return { root, entry, screen, posted, send, last, settings, calls, cleanup() { screen.dispose(); closeStageDb(dbPath(root)); fs.rmSync(root, { recursive: true, force: true }); } };
+  const item = screen.projectFor(entry);
+  const settle = async () => { while (item.estimating) await new Promise(resolve => setTimeout(resolve, 5)); };
+  return { root, entry, screen, posted, send, last, settle, settings, item, calls: model.calls, close() { screen.dispose(); closeStageDb(dbPath(root)); }, cleanup() { this.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
-test('from an entry point to a stage graph, then a save updates only the affected stage once', { skip }, async () => {
-  const saved = { ...timing };
-  Object.assign(timing, { delay: 10, idle: 30 });
-  const ctx = await setup({ quickPick: items => items.find(item => item.symbol === 'run_agent') || { label: 'run_agent', file: 'main.py', symbol: 'run_agent' } });
+test('one click maps the whole system: every part, its steps in plain words, and how the parts connect', { skip }, async () => {
+  const ctx = await setup();
   try {
-    await ctx.send({ type: 'map', file: 'main.py', symbol: 'run_agent' });
-    assert.equal(ctx.calls.length, 1);
-    assert.ok(fs.existsSync(path.join(ctx.root, '.yamori', 'yamori.db')));
-    assert.match(fs.readFileSync(path.join(ctx.root, '.yamori', '.gitignore'), 'utf8'), /yamori\.db/);
-    let state = ctx.screen.state(ctx.screen.projectFor(ctx.entry));
-    assert.deepEqual(state.workflow.stages.map(stage => stage.name), ['Plan', 'Act', 'Evaluate']);
-    assert.equal(state.activity.total.calls, 1);
-    // Without a vault, notes go to .yamori/notes/.
-    assert.ok(fs.existsSync(path.join(ctx.root, '.yamori', 'notes', 'Stages', 'run-agent', 'Act.md')));
-    // Opening a card is a read: no model call. The note box writes the free section.
-    await ctx.send({ type: 'openStage', id: 'act' });
-    await ctx.send({ type: 'addNote', stage: 'act', text: 'Tools must be idempotent.' });
-    state = ctx.last();
-    assert.equal(state.card.id, 'act'); assert.equal(state.card.steps[0].symbol, 'act');
-    assert.match(state.card.notes, /You: Tools must be idempotent\./);
-    assert.equal(ctx.calls.length, 1);
-    // An edit to the actor: one call for the Act stage only.
-    fs.appendFileSync(path.join(ctx.root, 'agent', 'actor.py'), '\n\ndef retry(step):\n    return run_step(step)\n');
-    await ctx.screen.saved({ scheme: 'file', fsPath: path.join(ctx.root, 'agent', 'actor.py') });
-    await new Promise(resolve => setTimeout(resolve, 60));
-    await ctx.screen.projectFor(ctx.entry).scheduler.running;
-    assert.equal(ctx.calls.length, 2);
-    state = ctx.screen.state(ctx.screen.projectFor(ctx.entry));
-    const act = state.workflow.stages.find(stage => stage.id === 'act');
-    assert.equal(act.stale, false); assert.equal(act.plus, 1);
-    assert.equal(state.workflow.pending, 1);
-    // Saving an untracked file never wakes the scheduler.
-    fs.writeFileSync(path.join(ctx.root, 'notes.txt'), 'x');
-    await ctx.screen.saved({ scheme: 'file', fsPath: path.join(ctx.root, 'notes.txt') });
-    assert.deepEqual(ctx.screen.projectFor(ctx.entry).scheduler.pending, []);
-    // Running "from entry" again with nothing changed: zero calls.
-    await ctx.send({ type: 'map', file: 'main.py', symbol: 'run_agent' });
-    assert.equal(ctx.calls.length, 2);
-  } finally { Object.assign(timing, saved); ctx.cleanup(); }
-});
-
-test('rename from the card pins the stage', { skip }, async () => {
-  const ctx = await setup({ input: 'Use tools' });
-  try {
-    await ctx.send({ type: 'map', file: 'main.py', symbol: 'run_agent' });
-    await ctx.send({ type: 'rename', stage: 'act' });
-    const db = ctx.screen.dbFor(ctx.screen.projectFor(ctx.entry));
-    const act = db.stage('run-agent', 'act');
-    assert.equal(act.name, 'Use tools'); assert.ok(act.pinned);
-    assert.equal(generate.workflowView(db, ctx.entry.graph, 'run-agent').stages[1].pinned, true);
+    ctx.screen.state(ctx.item); await ctx.settle();
+    const before = ctx.screen.state(ctx.item);
+    assert.equal(before.system, undefined);
+    assert.ok(before.estimate.tokens > 0); assert.equal(before.estimate.calls, 5, 'one call for the parts, one per folder that may hold a part');
+    assert.equal(ctx.calls.length, 0, 'the estimate needs no AI');
+    assert.equal(fs.existsSync(path.join(ctx.root, '.yamori', 'notes')), false, 'nothing is written before mapping');
+    await ctx.send({ type: 'buildSystem' });
+    assert.equal(ctx.calls.length, 4, 'one system call and one call per part');
+    const state = ctx.last();
+    assert.deepEqual(state.system.parts.map(part => part.name), ['Web server', 'Email helper', 'Lead scoring']);
+    assert.match(state.system.summary, /web server starts them/);
+    const email = state.system.parts.find(part => part.name === 'Email helper');
+    assert.deepEqual(email.stages.map(stage => stage.name), ['Read inbox', 'Answer', 'Write text']);
+    assert.deepEqual(email.usedBy, [{ from: 'web-server', label: 'starts' }]);
+    assert.deepEqual(email.entry, { file: 'agents/email/run.py', symbol: 'triage_loop' });
+    // A step in plain words; code only on request.
+    await ctx.send({ type: 'openStage', part: 'email-helper', id: 'answer' });
+    const card = ctx.last().card;
+    assert.deepEqual(card.steps.map(step => step.what), ['Answers each unread email', 'Sends the reply']);
+    assert.equal(ctx.calls.length, 4, 'opening a step calls no AI');
+    // Readable notes: a system note, a note per part, a note per step.
+    const notes = path.join(ctx.root, '.yamori', 'notes');
+    const systemNote = fs.readFileSync(path.join(notes, 'System.md'), 'utf8');
+    assert.match(systemNote, /# How .* works/); assert.match(systemNote, /\[\[Web server\/Web server\|Web server\]\] starts \[\[Email helper\/Email helper\|Email helper\]\]/);
+    const stepNote = fs.readFileSync(path.join(notes, 'Email helper', 'Answer.md'), 'utf8');
+    assert.match(stepNote, /Step 2 of 3 in \[\[Email helper\/Email helper\|Email helper\]\]/);
+    assert.match(stepNote, /\*\*How:\*\*\n1\. Answers each unread email\n2\. Sends the reply/);
+    assert.match(stepNote, /> \[!note\]- Where this is in the code/);
+    // Mapping again with the same files: no AI.
+    await ctx.send({ type: 'buildSystem' });
+    assert.equal(ctx.calls.length, 4);
   } finally { ctx.cleanup(); }
 });
 
-test('steer from the card: preview, apply to disk, review the result, then undo', { skip }, async () => {
+test('a save updates only the parts it touches, and the review lists changes across parts', { skip }, async () => {
   const saved = { ...timing };
   Object.assign(timing, { delay: 10, idle: 30 });
-  const ctx = await setup({});
+  const ctx = await setup();
   try {
-    await ctx.send({ type: 'map', file: 'main.py', symbol: 'run_agent' });
-    const send = ctx.send;
-    await send({ type: 'openStage', id: 'act' });
-    await send({ type: 'steerPreview', stage: 'act', intent: 'retry failed steps' });
+    await ctx.send({ type: 'buildSystem' });
+    fs.appendFileSync(path.join(ctx.root, 'agents', 'email', 'run.py'), '\n\ndef retry(message):\n    return triage_loop()\n');
+    await ctx.screen.saved({ scheme: 'file', fsPath: path.join(ctx.root, 'agents', 'email', 'run.py') });
+    await new Promise(resolve => setTimeout(resolve, 60)); await ctx.item.scheduler.running;
+    const refreshes = ctx.calls.filter(prompt => /Code behind one stage changed/.test(prompt));
+    assert.equal(refreshes.length, 2, 'the email step and the server step that runs it, nothing else');
+    const state = ctx.screen.state(ctx.item);
+    assert.deepEqual([...new Set(state.queue.map(change => change.part_name))].sort(), ['Email helper', 'Web server']);
+    assert.equal(state.system.parts.find(part => part.name === 'Lead scoring').pending, 0);
+    await ctx.send({ type: 'decide', id: state.queue[0].id, status: 'approved', why: 'Mail servers drop replies.' });
+    const log = fs.readdirSync(path.join(ctx.root, '.yamori', 'notes', 'Changes'));
+    assert.match(fs.readFileSync(path.join(ctx.root, '.yamori', 'notes', 'Changes', log[0]), 'utf8'), /Replies are now sent twice when the first try fails\. \*\*Approved\.\*\*\n {2}- Why: Mail servers drop replies\./);
+  } finally { Object.assign(timing, saved); ctx.cleanup(); }
+});
+
+test('steering from the top: find where a request goes, preview it, apply, undo, or give it to the agent', { skip }, async () => {
+  const saved = { ...timing };
+  Object.assign(timing, { delay: 10, idle: 30 });
+  const ctx = await setup();
+  try {
+    await ctx.send({ type: 'buildSystem' });
+    await ctx.send({ type: 'addSystemNote', text: 'Never send the same email twice to a customer.' });
+    await ctx.send({ type: 'route', intent: 'retry failed replies' });
     let state = ctx.last();
-    assert.equal(state.steer.phase, 'preview'); assert.equal(state.steer.files[0].file, 'agent/actor.py');
-    assert.ok(state.steer.files[0].hunks.some(line => line.kind === 'add' && /or call_tool/.test(line.text)));
-    const call = state.activity.calls.find(row => row.trigger === 'stages.steer');
-    assert.equal(call.model, 'main-model', 'steer uses the main model');
-    const file = path.join(ctx.root, 'agent', 'actor.py'), original = fs.readFileSync(file, 'utf8');
-    await send({ type: 'steerApply' });
-    assert.match(fs.readFileSync(file, 'utf8'), /or call_tool/);
-    await new Promise(resolve => setTimeout(resolve, 60)); await ctx.screen.projectFor(ctx.entry).scheduler.running;
-    state = ctx.screen.state(ctx.screen.projectFor(ctx.entry));
-    assert.equal(state.queue.length, 1, 'the applied change enters review'); assert.equal(state.queue[0].stage_id, 'act');
-    await send({ type: 'openStage', id: 'act' });
-    await send({ type: 'steerUndo' });
+    assert.deepEqual(state.route.targets.map(target => target.partName + ' › ' + target.stageName), ['Email helper › Answer']);
+    assert.match(state.route.explanation, /Email helper/);
+    assert.match(ctx.calls.at(-1), /Never send the same email twice/, 'system notes reach the router');
+    await ctx.send({ type: 'steerPreview', intent: 'retry failed replies', targets: [{ part: 'email-helper', stage: 'answer' }] });
+    state = ctx.last();
+    assert.equal(state.steer.phase, 'preview'); assert.equal(state.steer.files[0].file, 'agents/email/inbox.py');
+    assert.match(ctx.calls.at(-1), /Never send the same email twice/, 'system notes are constraints on the change');
+    const file = path.join(ctx.root, 'agents', 'email', 'inbox.py'), original = fs.readFileSync(file, 'utf8');
+    await ctx.send({ type: 'steerApply' });
+    assert.match(fs.readFileSync(file, 'utf8'), /or print/);
+    await new Promise(resolve => setTimeout(resolve, 60)); await ctx.item.scheduler.running;
+    await ctx.send({ type: 'steerUndo' });
     assert.equal(fs.readFileSync(file, 'utf8'), original);
-    assert.equal(ctx.last().steer.phase, 'undone');
-    // Leaving the intent for an agent writes a note and calls no model.
-    const before = ctx.calls.length;
-    await send({ type: 'steerIntent', stage: 'act', intent: 'Prefer cached tool results.' });
-    assert.equal(ctx.calls.length, before);
-    assert.match(ctx.last().card.notes, /Intent for the next run: Prefer cached tool results\./);
+    const count = ctx.calls.length;
+    await ctx.send({ type: 'handToAgent', intent: 'log every failed reply', targets: [{ part: 'email-helper', stage: 'answer' }] });
+    assert.equal(ctx.calls.length, count, 'handing over calls no AI');
+    await ctx.send({ type: 'openStage', part: 'email-helper', id: 'answer' });
+    assert.match(ctx.last().card.notes, /You: To do: log every failed reply/);
   } finally { Object.assign(timing, saved); ctx.cleanup(); }
 });
 
-test('the Stages tab finds the main workflow by itself, and the command maps it with one confirmation', { skip }, async () => {
-  const ctx = await setup({ info: 'Generate' });
-  try {
-    const item = ctx.screen.projectFor(ctx.entry);
-    ctx.screen.state(item);
-    while (item.suggesting) await new Promise(resolve => setTimeout(resolve, 5));
-    const [first] = ctx.screen.state(item).suggestions;
-    assert.equal(first.symbol, 'run_agent'); assert.equal(first.file, 'main.py');
-    assert.ok(first.tokens > 0); assert.equal(first.missingNotes, 0); assert.equal(first.mapped, false);
-    assert.equal(ctx.calls.length, 0, 'finding the entry point calls no AI');
-    await ctx.screen.fromEntry(ctx.entry);
-    assert.equal(ctx.calls.length, 1);
-    const state = ctx.screen.state(item);
-    assert.equal(state.workflow.entry_symbol, 'run_agent'); assert.equal(state.suggestions[0].mapped, true);
-  } finally { ctx.cleanup(); }
-});
-
-test('Obsidian: a project inside a vault uses it with no setup; otherwise one click moves the notes into the vault you use', { skip }, async () => {
+test('Obsidian connects by itself, and notes written before move into the vault', { skip }, async () => {
   const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'yamori-obsidian-'));
   fs.mkdirSync(path.join(vault, '.obsidian'));
   const config = path.join(vault, 'obsidian.json');
-  fs.writeFileSync(config, JSON.stringify({ vaults: { a: { path: path.join(vault, 'gone'), ts: 9 }, b: { path: vault, ts: 5, open: true } } }));
-  const ctx = await setup({}, { obsidianConfig: config });
+  fs.writeFileSync(config, JSON.stringify({ vaults: { gone: { path: path.join(vault, 'gone'), ts: 9 }, mine: { path: vault, ts: 5, open: true } } }));
+  // Without Obsidian, notes start in the project.
+  const first = await setup({ obsidianConfig: path.join(vault, 'missing.json') });
+  await first.send({ type: 'buildSystem' });
+  await first.send({ type: 'addNote', part: 'email-helper', stage: 'answer', text: 'Keep replies short.' });
+  assert.equal(first.last().vault.obsidian, false);
+  assert.ok(fs.existsSync(path.join(first.root, '.yamori', 'notes', 'Email helper', 'Answer.md')));
+  first.close();
+  // Once Obsidian has a vault open: no click, the notes move there.
+  const again = await setup({ obsidianConfig: config, root: first.root });
   try {
-    await ctx.send({ type: 'map', file: 'main.py', symbol: 'run_agent' });
-    await ctx.send({ type: 'openStage', id: 'act' });
-    await ctx.send({ type: 'addNote', stage: 'act', text: 'Keep tools idempotent.' });
-    let state = ctx.last();
-    assert.equal(state.vault.obsidian, false);
-    assert.deepEqual(state.vault.offer, { name: path.basename(vault), path: vault });
-    await ctx.send({ type: 'useVault' });
-    assert.equal(ctx.settings['obsidian.vaultPath'], vault);
-    const moved = path.join(vault, 'Yamori', path.basename(ctx.root), 'Stages', 'run-agent', 'Act.md');
-    assert.match(fs.readFileSync(moved, 'utf8'), /Keep tools idempotent\./);
-    assert.equal(fs.existsSync(path.join(ctx.root, '.yamori', 'notes')), false);
-    state = ctx.last();
-    assert.equal(state.vault.obsidian, true); assert.equal(state.vault.offer, undefined);
-    assert.match(state.card.notes, /Keep tools idempotent/);
-    await ctx.send({ type: 'openNote', stage: 'act' });
-    assert.match(ctx.posted.find(message => message.external).external, /^obsidian:\/\/open\?path=/);
-  } finally { ctx.cleanup(); fs.rmSync(vault, { recursive: true, force: true }); }
-  // A project that already lives in a vault needs nothing.
-  const inside = await setup({});
+    const state = again.screen.state(again.item);
+    assert.equal(state.vault.obsidian, true); assert.match(state.vault.where, new RegExp(path.basename(vault) + ' › Yamori › '));
+    const moved = path.join(vault, 'Yamori', path.basename(again.root), 'Email helper', 'Answer.md');
+    assert.match(fs.readFileSync(moved, 'utf8'), /Keep replies short\./);
+    assert.equal(fs.existsSync(path.join(again.root, '.yamori', 'notes')), false);
+    await again.send({ type: 'openNote', part: 'email-helper', stage: 'answer' });
+    assert.match(again.posted.find(message => message.external).external, /^obsidian:\/\/open\?path=/);
+  } finally { again.cleanup(); fs.rmSync(vault, { recursive: true, force: true }); }
+});
+
+test('renaming a step keeps the name through a new map', { skip }, async () => {
+  const ctx = await setup({ answers: { input: 'Reply' } });
   try {
-    fs.mkdirSync(path.join(inside.root, '.obsidian'));
-    await inside.send({ type: 'map', file: 'main.py', symbol: 'run_agent' });
-    await inside.send({ type: 'openStage', id: 'plan' });
-    assert.equal(inside.last().vault.obsidian, true);
-    assert.ok(fs.existsSync(path.join(inside.root, 'Yamori', path.basename(inside.root), 'Stages', 'run-agent', 'Plan.md')));
-  } finally { inside.cleanup(); }
+    await ctx.send({ type: 'buildSystem' });
+    await ctx.send({ type: 'rename', part: 'email-helper', stage: 'answer' });
+    await ctx.send({ type: 'buildSystem', force: true });
+    const email = ctx.last().system.parts.find(part => part.id === 'email-helper');
+    assert.deepEqual(email.stages.map(stage => stage.name), ['Read inbox', 'Reply', 'Write text']);
+    assert.ok(email.stages[1].pinned);
+  } finally { ctx.cleanup(); }
 });

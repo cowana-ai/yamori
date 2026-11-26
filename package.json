@@ -37,7 +37,8 @@
         "yamori.planModel",
         "yamori.tokenBudget",
         "yamori.stages.autoUpdate",
-        "yamori.obsidian.vaultPath"
+        "yamori.obsidian.vaultPath",
+        "yamori.obsidian.auto"
       ]
     }
   },
@@ -146,15 +147,15 @@
       },
       {
         "command": "yamori.stages.open",
-        "title": "Yamori: Open Stages"
+        "title": "Yamori: Open System Map"
       },
       {
         "command": "yamori.stages.fromEntry",
-        "title": "Yamori: Map My Workflow as Stages"
+        "title": "Yamori: Map How This Project Works"
       },
       {
         "command": "yamori.stages.regenerate",
-        "title": "Yamori: Regenerate Stages"
+        "title": "Yamori: Map the System Again"
       }
     ],
     "menus": {
@@ -438,7 +439,12 @@
         "yamori.obsidian.vaultPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Folder of your Obsidian vault. Stage notes, file notes and the change log go to `<vault>/Yamori/<repo>/`. Empty: they go to `.yamori/notes/` in the project. Yamori rewrites only the section between `<!-- yamori:start -->` and `<!-- yamori:end -->`; what you write elsewhere is never overwritten."
+          "markdownDescription": "Obsidian vault for system notes. Empty (default): Yamori uses the vault this project is in, or else the vault Obsidian has open or opened last; with neither, notes go to `.yamori/notes/`. Notes go to `<vault>/Yamori/<repo>/`. Yamori rewrites only the section between `<!-- yamori:start -->` and `<!-- yamori:end -->`."
+        },
+        "yamori.obsidian.auto": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Find your Obsidian vault automatically for system notes. Off: notes stay in `.yamori/notes/` unless `yamori.obsidian.vaultPath` is set."
         }
       }
     },
@@ -454,7 +460,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js && node --check src/stages/db.js && node --check src/stages/budget.js && node --check src/stages/generate.js && node --check src/stages/scheduler.js && node --check src/stages/controller.js && node --check src/stages/review.js && node --check src/stages/vault.js && node --check src/stages/mcp-tools.js && node --check src/stages/steer.js && node --check src/views/stages.js",
+    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js && node --check src/stages/db.js && node --check src/stages/budget.js && node --check src/stages/generate.js && node --check src/stages/scheduler.js && node --check src/stages/controller.js && node --check src/stages/review.js && node --check src/stages/vault.js && node --check src/stages/mcp-tools.js && node --check src/stages/steer.js && node --check src/views/stages.js && node --check src/stages/system.js",
     "build:validation": "node src/ai/schemas.js",
     "build:parser": "node src/project/graph.js",
     "package": "npx --yes @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/cowana-ai/yamori/blob/main --baseImagesUrl https://raw.githubusercontent.com/cowana-ai/yamori/main"

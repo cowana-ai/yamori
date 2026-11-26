@@ -212,70 +212,68 @@ test('the review diff marks removed and added pseudocode lines', () => {
   assert.deepEqual(lineDiff('a\nb\nc', 'a\nB\nc\nd').map(line => line.kind + ':' + line.text), ['same:a', 'del:b', 'add:B', 'same:c', 'add:d']);
 });
 
-test('vault: managed sections are rewritten, free sections survive, renames pin, orphans move to _archive, decisions reach the change log', { skip }, async () => {
+test('vault: readable system, part and step notes; managed parts rewritten, your text kept, renames pinned, orphans archived, decisions logged', { skip }, async () => {
   const fs = require('node:fs'), os = require('node:os');
   const { Vault, parseNote, mergeNote } = require('../src/stages/vault');
   const review = require('../src/stages/review');
   const ctx = await setup(), model = fakeModel(prompt => /Code behind one stage changed/.test(prompt)
-    ? { name: 'Act', gist: 'g', input: 'a', output: 'b', steps: [{ file: 'agent/actor.py', symbol: 'act' }], behaviorChanged: true, summary: 'Act now runs steps in parallel.' } : STAGES);
+    ? { name: 'Act', gist: 'g', input: 'a', output: 'b', steps: [{ file: 'agent/actor.py', symbol: 'act', what: 'Runs the steps' }], behaviorChanged: true, summary: 'Act now runs steps in parallel.' } : STAGES);
   const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  ctx.db.setPart(workflowId, { name: 'Agent loop', summary: 'Plans, acts and checks the result.', folder: '(root)', position: 0 });
+  ctx.db.setMeta('system_summary', 'An agent that works toward a goal.');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yamori-vault-'));
   try {
-    // Without a vault: .yamori/notes/ in the project.
-    const local = new Vault({ root });
-    assert.equal(local.dir, path.join(root, '.yamori', 'notes'));
+    assert.equal(new Vault({ root }).dir, path.join(root, '.yamori', 'notes'));
     const vault = new Vault({ root, vaultPath: path.join(root, 'vault') });
     assert.equal(vault.dir, path.join(root, 'vault', 'Yamori', path.basename(root)));
-    vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    vault.syncSystem(ctx.db, ctx.graph);
+    assert.match(fs.readFileSync(vault.systemFile(), 'utf8'), /# How .* works\n\nAn agent that works toward a goal\.\n\n## Parts\n\n- \[\[Agent loop\/Agent loop\|Agent loop\]\]: Plans, acts and checks the result\./);
+    assert.match(fs.readFileSync(path.join(vault.dir, 'Agent loop', 'Agent loop.md'), 'utf8'), /## How it works\n\n1\. \[\[Agent loop\/Plan\|Plan\]\]: Turn the goal into steps\./);
     const planFile = vault.findStageNote(workflowId, 'plan');
-    assert.ok(planFile.endsWith(path.join('Stages', workflowId, 'Plan.md')));
+    assert.equal(planFile, path.join(vault.dir, 'Agent loop', 'Plan.md'));
     let text = fs.readFileSync(planFile, 'utf8');
-    assert.match(text, /^---\ntype: stage\nworkflow: run-agent\nstage_id: plan\nname: Plan\nfiles: \[agent\/planner\.py\]/);
-    assert.match(text, /vscode:\/\/cowana-ai\.yamori\/open\?file=agent%2Fplanner\.py&line=4/); assert.match(text, /cursor:\/\/cowana-ai\.yamori\/open/);
-    assert.match(text, /\[\[Files\/agent\/planner\.py#\^plan\|agent\/planner\.py\]\]/);
-    assert.ok(fs.existsSync(path.join(vault.dir, 'Files', 'agent', 'planner.py.md')));
-    assert.match(fs.readFileSync(path.join(vault.dir, 'Index.md'), 'utf8'), /\[\[Stages\/run-agent\/Plan\|Plan\]\]/);
-    // A founder note in Obsidian and an agent note via the card/MCP.
-    fs.writeFileSync(planFile, text.replace('## Notes\n', '## Notes\n\nNever store PII in prompts.\n'));
+    assert.match(text, /^---\ntype: step\npart: Agent loop\nworkflow: run-agent\nstage_id: plan\nname: Plan/);
+    assert.match(text, /Step 1 of 3 in \[\[Agent loop\/Agent loop\|Agent loop\]\]/);
+    assert.match(text, /\*\*Next:\*\* \[\[Agent loop\/Act\|Act\]\]/);
+    assert.match(text, /> - `plan` in agent\/planner\.py · \[open\]\(vscode:\/\/cowana-ai\.yamori\/open\?file=agent%2Fplanner\.py&line=4/);
+    // Founder notes in Obsidian and from the card/MCP.
+    fs.writeFileSync(planFile, text.replace('## Your notes\n', '## Your notes\n\nNever store PII in prompts.\n'));
     vault.addNote(ctx.db, workflowId, 'plan', 'Keep plans under 10 steps.', { author: 'Claude Code', at: new Date('2026-11-26T10:00:00Z') });
     assert.equal(vault.stageNotes(workflowId, 'plan').text, 'Never store PII in prompts.\n- 2026-11-26 · Claude Code: Keep plans under 10 steps.');
-    // Re-export after a regeneration never removes it; edits inside the managed section are restored.
-    fs.writeFileSync(planFile, fs.readFileSync(planFile, 'utf8').replace('**In:**', '**Hacked In:**'));
+    vault.addSystemNote(ctx.db, 'All AI calls go through the budget.', { at: new Date('2026-11-26T10:00:00Z') });
+    assert.match(vault.constraints(workflowId, 'plan'), /^Whole system:\n- 2026-11-26 · You: All AI calls go through the budget\.\n\nThis step:\nNever store PII/);
+    // Edits inside the managed part are restored; free text survives.
+    fs.writeFileSync(planFile, fs.readFileSync(planFile, 'utf8').replace('**Takes:**', '**Hacked:**'));
     ctx.db.updateStage(workflowId, 'plan', { gist: 'New gist.' });
-    vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    vault.syncSystem(ctx.db, ctx.graph);
     text = fs.readFileSync(planFile, 'utf8');
-    assert.match(text, /> New gist\./); assert.doesNotMatch(text, /Hacked/);
+    assert.match(text, /\*\*What it does:\*\* New gist\./); assert.doesNotMatch(text, /Hacked/);
     assert.match(text, /Never store PII in prompts\./); assert.match(text, /Keep plans under 10 steps\./);
-    // A rename in front matter becomes a pinned override (no model call).
+    // A rename in front matter becomes a pinned override (no AI).
     fs.writeFileSync(planFile, text.replace('name: Plan\n', 'name: Think ahead\n'));
     const renames = vault.renames(ctx.db, workflowId);
     assert.deepEqual(renames, [{ stageId: 'plan', name: 'Think ahead' }]);
     stages.renameStage(ctx.db, workflowId, 'plan', renames[0].name);
-    vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    vault.syncSystem(ctx.db, ctx.graph);
     assert.deepEqual(vault.renames(ctx.db, workflowId), []);
-    assert.ok(ctx.db.stage(workflowId, 'plan').pinned);
     assert.equal(model.calls.length, 1);
-    // An approved change lands in Changes/<date>.md with its sentence and why.
+    // A decision lands in Changes/<date>.md in plain words.
     stages.fileChanged(ctx.db, 'agent/actor.py', edit(ctx, 'agent/actor.py', 'act', 'do act in parallel'));
     await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db) });
     const [change] = review.reviewQueue(ctx.db, workflowId);
-    const decided = review.decide(ctx.db, change.id, 'approved', 'Faster on big inboxes.');
-    const log = vault.appendChange(ctx.db, decided, { at: new Date('2026-11-26T14:02:00Z') });
-    assert.ok(log.endsWith(path.join('Changes', '2026-11-26.md')));
-    assert.match(fs.readFileSync(log, 'utf8'), /14:02 · \[\[Stages\/run-agent\/Act\|Act\]\] · \*\*approved\*\* · Act now runs steps in parallel\.\n {2}- Why: Faster on big inboxes\./);
-    // A stage that disappears: its note moves to _archive with the founder's text.
+    const log = vault.appendChange(ctx.db, review.decide(ctx.db, change.id, 'approved', 'Faster on big inboxes.'), { at: new Date('2026-11-26T14:02:00Z') });
+    assert.match(fs.readFileSync(log, 'utf8'), /# What changed on 2026-11-26\n\n- 14:02 · Agent loop › \[\[Agent loop\/Act\|Act\]\]: Act now runs steps in parallel\. \*\*Approved\.\*\*\n {2}- Why: Faster on big inboxes\./);
+    // A step that disappears: its note moves to _archive with the founder's text.
     stages.mergeStages(ctx.db, workflowId, 'act', 'plan');
-    vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    vault.syncSystem(ctx.db, ctx.graph);
     assert.equal(fs.existsSync(planFile), false);
-    const archived = path.join(vault.dir, '_archive', 'Stages', workflowId, 'Plan.md');
-    assert.match(fs.readFileSync(archived, 'utf8'), /Never store PII/);
+    assert.match(fs.readFileSync(path.join(vault.dir, '_archive', 'Agent loop', 'Plan.md'), 'utf8'), /Never store PII/);
     // A note the user created by hand is never touched.
-    const mine = path.join(vault.stageDir(workflowId), 'My thoughts.md');
-    fs.writeFileSync(mine, '# Mine\n'); vault.syncWorkflow(ctx.db, ctx.graph, ctx.notes, workflowId);
+    const mine = path.join(vault.dir, 'Agent loop', 'My thoughts.md');
+    fs.writeFileSync(mine, '# Mine\n'); vault.syncSystem(ctx.db, ctx.graph);
     assert.equal(fs.readFileSync(mine, 'utf8'), '# Mine\n');
-    // User front matter keys survive a merge.
-    const merged = mergeNote('---\ntags: [agent]\nname: X\n---\nhello', { front: { type: 'stage', name: 'Y' }, managed: 'M' });
-    assert.deepEqual(parseNote(merged).front, { tags: ['agent'], name: 'Y', type: 'stage' });
+    const merged = mergeNote('---\ntags: [agent]\nname: X\n---\nhello', { front: { type: 'step', name: 'Y' }, managed: 'M' });
+    assert.deepEqual(parseNote(merged).front, { tags: ['agent'], name: 'Y', type: 'step' });
     assert.match(merged, /<!-- yamori:end -->\n\nhello$/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -342,4 +340,27 @@ test('without cached pseudocode a refresh compares the function at the base comm
   assert.match(prompt, /"before":"\(not recorded\)"/, 'a step without any baseline says so');
   const [change] = ctx.db.changes(workflowId);
   assert.ok(change.detail.steps.every(step => step.before === '' && step.after === ''), 'source is never stored in the change log');
+});
+
+test('system discovery: each workflow folder gets candidates without AI, and the AI may only pick among them', async () => {
+  const fs = require('node:fs');
+  const system = require('../src/stages/system');
+  const root = path.join(__dirname, 'fixtures', 'multi-repo');
+  const graph = await project.scanFolder(root, undefined, new project.Indexer());
+  assert.deepEqual(system.areasOf(graph).map(area => area.folder), ['agents/email', 'agents/sales', 'server', 'shared']);
+  const texts = new Map(system.readFiles(graph).map(file => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
+  const found = system.candidates(graph, texts);
+  const best = folder => found.find(item => item.folder === folder);
+  assert.equal(best('agents/email').symbol, 'triage_loop'); assert.equal(best('agents/sales').symbol, 'score_leads'); assert.equal(best('server').symbol, 'main');
+  const id = (file, symbol) => found.find(item => item.file === file && item.symbol === symbol).id;
+  const parsed = system.parseSystem(JSON.stringify({ summary: 'S', parts: [
+    { name: 'Email helper', summary: 'Answers email.', entry: id('agents/email/run.py', 'triage_loop') },
+    { name: 'Invented', summary: 'x', entry: 'c999' },
+    { name: 'Twice', summary: 'x', entry: id('agents/email/run.py', 'triage_loop') },
+    { name: 'Web server', summary: 'Serves.', entry: id('server/app.py', 'main') }],
+    links: [{ from: 'Web server', to: 'Email helper', label: 'starts' }, { from: 'Web server', to: 'Nobody', label: 'x' }] }), found);
+  assert.deepEqual(parsed.parts.map(part => part.name), ['Email helper', 'Web server'], 'made-up or repeated entry points are dropped');
+  assert.deepEqual(parsed.links, [{ from: 'web-server', to: 'email-helper', label: 'starts' }]);
+  const prompt = system.systemPrompt({ graph, notes: { files: {} }, found });
+  assert.doesNotMatch(prompt, /def triage_loop/, 'no source code is sent, only names and notes');
 });

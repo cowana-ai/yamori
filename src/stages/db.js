@@ -11,7 +11,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -90,6 +90,12 @@ CREATE TABLE IF NOT EXISTS model_calls (
   estimated     INTEGER NOT NULL DEFAULT 0,
   note          TEXT
 );
+CREATE TABLE IF NOT EXISTS part_links (
+  from_id TEXT NOT NULL,
+  to_id   TEXT NOT NULL,
+  label   TEXT,
+  PRIMARY KEY (from_id, to_id)
+);
 CREATE INDEX IF NOT EXISTS steps_by_file ON steps(file);
 CREATE INDEX IF NOT EXISTS changes_by_status ON changes(workflow_id, status);
 CREATE INDEX IF NOT EXISTS calls_by_day ON model_calls(day);
@@ -123,7 +129,14 @@ class StageDb {
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;');
     if (file !== ':memory:') { try { this.db.exec('PRAGMA journal_mode = WAL;'); } catch { /* Read-only media keeps the default journal. */ } }
     this.db.exec(SCHEMA);
-    if (!this.meta('schema_version')) this.setMeta('schema_version', String(SCHEMA_VERSION));
+    // v2: a workflow is a named part of the system; a step says in plain words what it does.
+    this.addColumns('workflows', { name: 'TEXT', summary: 'TEXT', folder: 'TEXT', position: 'INTEGER' });
+    this.addColumns('steps', { what: 'TEXT' });
+    this.setMeta('schema_version', String(SCHEMA_VERSION));
+  }
+  addColumns(table, columns) {
+    const have = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+    for (const [name, type] of Object.entries(columns)) if (!have.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
   }
   close() { try { this.db.close(); } catch { /* Already closed. */ } }
   prepare(sql) {
@@ -148,7 +161,10 @@ class StageDb {
   setMeta(key, value) { this.run('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value == null ? null : String(value)); }
 
   // --- workflows ---
-  workflows() { return this.all('SELECT * FROM workflows ORDER BY id'); }
+  workflows() { return this.all('SELECT * FROM workflows ORDER BY COALESCE(position, 1000000), id'); }
+  setPart(id, { name, summary, folder, position }) { this.run('UPDATE workflows SET name = ?, summary = ?, folder = ?, position = ? WHERE id = ?', name ?? null, summary ?? null, folder ?? null, position ?? null, id); }
+  links() { return this.all('SELECT from_id AS "from", to_id AS "to", label FROM part_links ORDER BY from_id, to_id'); }
+  setLinks(links) { this.transaction(() => { this.run('DELETE FROM part_links'); for (const link of links) this.run('INSERT OR REPLACE INTO part_links (from_id, to_id, label) VALUES (?, ?, ?)', link.from, link.to, link.label ?? null); }); }
   workflow(id) { return this.get('SELECT * FROM workflows WHERE id = ?', id); }
   upsertWorkflow({ id, entry_file, entry_symbol, generated_at = now(), base_sha = null }) {
     this.run(`INSERT INTO workflows (id, entry_file, entry_symbol, generated_at, base_sha) VALUES (?, ?, ?, ?, ?)
@@ -160,6 +176,7 @@ class StageDb {
       this.run('DELETE FROM steps WHERE workflow_id = ?', id);
       this.run('DELETE FROM snapshots WHERE workflow_id = ?', id);
       this.run('DELETE FROM changes WHERE workflow_id = ?', id);
+      this.run('DELETE FROM part_links WHERE from_id = ? OR to_id = ?', id, id);
       this.run('DELETE FROM workflows WHERE id = ?', id);
     });
   }
@@ -214,8 +231,8 @@ class StageDb {
   }
   setSteps(workflowId, stageId, steps) {
     this.run('DELETE FROM steps WHERE workflow_id = ? AND stage_id = ?', workflowId, stageId);
-    steps.forEach((step, position) => this.run('INSERT INTO steps (workflow_id, stage_id, position, file, symbol, line_start, line_end) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      workflowId, stageId, position, step.file, step.symbol, step.line_start ?? null, step.line_end ?? null));
+    steps.forEach((step, position) => this.run('INSERT INTO steps (workflow_id, stage_id, position, file, symbol, line_start, line_end, what) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      workflowId, stageId, position, step.file, step.symbol, step.line_start ?? null, step.line_end ?? null, step.what ?? null));
   }
   updateStage(workflowId, id, fields) {
     const allowed = ['name', 'gist', 'input', 'output', 'pinned', 'stale', 'position'];
