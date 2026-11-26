@@ -13,7 +13,7 @@
 // - Bounded structured output with hard caps.
 const { BudgetExceeded, estimatePrompt } = require('./budget');
 
-const STAGE_PROMPT_VERSION = 3;
+const STAGE_PROMPT_VERSION = 4;
 const LIMITS = { what: 110, detail: 170, details: 4, deepCode: 42000, deepFunctionLines: 70, deepStages: 8, minStages: 3, maxStages: 7, name: 40, gist: 240, io: 90, summary: 160, stepsPerStage: 14, files: 30, symbolsPerFile: 40, excerptLines: 60 };
 
 const STAGES_SCHEMA = {

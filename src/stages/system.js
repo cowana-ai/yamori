@@ -242,6 +242,8 @@ function systemView(db, graph, notes) {
     return { id: workflow.id, name: workflow.name || workflow.entry_symbol || workflow.id, summary: workflow.summary || '', folder: workflow.folder || '', entry: { file: workflow.entry_file, symbol: workflow.entry_symbol },
       files: own.length, reviewed_at: workflow.reviewed_at, pending: view.pending, stale: view.stages.filter(stage => stage.stale).length,
       stages: view.stages.map(stage => ({ id: stage.id, name: stage.name, gist: stage.gist, stale: stage.stale, pending: stage.pending, plus: stage.plus, pinned: stage.pinned, files: stage.files.length })),
+      // Made before inner steps and key behaviors were mapped: offer to map it again.
+      outdated: !String(db.meta(stages.versionKey(workflow.id)) || '').startsWith(stages.STAGE_PROMPT_VERSION + '|'),
       // How many key behaviors the part has: AI calls, decisions, points where it waits for you.
       behaviors: db.steps(workflow.id).reduce((counts, step) => { for (const item of step.details || []) counts[item.kind] = (counts[item.kind] || 0) + 1; return counts; }, {}),
       uses: links.filter(link => link.from === workflow.id).map(link => ({ to: link.to, label: link.label })),
@@ -270,6 +272,11 @@ function systemView(db, graph, notes) {
   return { ...systemStatus(db, graph), parts, links, codeLinks, shared: [...shared.values()].sort((a, b) => b.usedBy.length - a.usedBy.length || byPath(a.folder, b.folder)) };
 }
 
+// One part as it works: every stage with its steps, sub-steps and behaviors. Pure reads.
+function partFlow(db, graph, workflowId) {
+  return db.stages(workflowId).map(stage => ({ id: stage.id, name: stage.name, gist: stage.gist, input: stage.input, output: stage.output, stale: stage.stale,
+    steps: db.steps(workflowId, stage.id).map(step => { const def = stages.symbolsOf(graph.files[step.file]).find(item => item.name === step.symbol); return { ...step, line_start: def ? def.start || def.line : step.line_start }; }) }));
+}
 // One part up close: its files, what each is for, which step it serves, how the
 // files import each other, and what they use from outside. Pure reads.
 const MAX_PART_FILES = 80;
@@ -360,4 +367,4 @@ async function routeIntent({ db, graph, intent, notes, request, run, provider, m
   return { intent: intent.trim(), targets, explanation: clip(value.explanation, 300), question: targets.length ? '' : clip(value.question, 200) };
 }
 
-module.exports = { partDetail, fileDetail, inFolder, SYSTEM_SCHEMA, ROUTE_SCHEMA, SYSTEM_PROMPT_VERSION, areasOf, candidates, readFiles, systemPrompt, parseSystem, estimateSystem, buildSystem, systemStatus, systemView, routeIntent, signature };
+module.exports = { partFlow, partDetail, fileDetail, inFolder, SYSTEM_SCHEMA, ROUTE_SCHEMA, SYSTEM_PROMPT_VERSION, areasOf, candidates, readFiles, systemPrompt, parseSystem, estimateSystem, buildSystem, systemStatus, systemView, routeIntent, signature };

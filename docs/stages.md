@@ -30,7 +30,11 @@ The map is a graph you can pan, zoom (scroll or + / −) and **Fit**. Drag any b
 - **Shared code** (for example a contracts package several parts import) is its own dashed box, linked to every part that uses it. Click it for its files and how they use each other.
 - Parts with no links sit in a row underneath.
 
-Click a part to open it below the map, which stays in view:
+Click a part to open it below the map. It opens on **How it works**: every stage as a column, its steps top to bottom with what they call indented under them, and key behaviors on every box (◆ decisions and ⚠ stop conditions written out, badges for AI calls, files written, fallbacks and more). Click a box for everything about that step. **Files** is the second tab.
+
+A part mapped by an older version of Yamori says so, with **Map this part again**; the top of the tab offers **Upgrade all parts**. Functions whose code did not change keep their saved descriptions, so this is mostly the planner's cost.
+
+Inside a part:
 
 - **Its files, step by step**: one column per step in the order the work happens, then the code it uses from other folders. The helper files the steps use are folded into one box; click it to show them. Colors are steps. Click a file and its links light up.
 - **A file** shows what it is for, which steps of which parts use it, its pseudocode block by block when Yamori already wrote it (no AI call; each block's line range opens Read there), what it uses and what uses it, and its functions.

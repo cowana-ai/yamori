@@ -358,3 +358,24 @@ test('notes bring themselves up to date when Yamori opens, with nothing to press
     assert.ok(ctx.screen.state(ctx.item).vault.lastSync.notes > 5);
   } finally { ctx.cleanup(); }
 });
+
+test('a part opens on how it works, old maps say so, and one click maps a part again', { skip }, async () => {
+  const ctx = await setup();
+  try {
+    await ctx.send({ type: 'buildSystem' });
+    assert.ok(ctx.last().system.parts.every(part => !part.outdated));
+    await ctx.send({ type: 'openPart', id: 'email-helper' });
+    const flow = ctx.last().partFlow;
+    assert.deepEqual(flow.map(stage => stage.name), ['Read inbox', 'Answer', 'Write text']);
+    assert.deepEqual(flow[1].steps.map(step => step.symbol), ['triage_loop', 'reply']);
+    // A map made by an older mapper is flagged, and remapping it brings it up to date.
+    const db = ctx.screen.dbFor(ctx.item);
+    db.setMeta('workflow:email-helper:version', '3|cheap-model');
+    assert.equal(ctx.screen.state(ctx.item).system.parts.find(part => part.id === 'email-helper').outdated, true);
+    const before = ctx.calls.length;
+    await ctx.send({ type: 'remapPart', id: 'email-helper' });
+    assert.equal(ctx.last().system.parts.find(part => part.id === 'email-helper').outdated, false);
+    assert.match(ctx.last().notice, /Mapped again/);
+    assert.equal(ctx.calls.slice(before).filter(prompt => /Yamori's step writer/.test(prompt)).length, 0, 'unchanged functions reuse their descriptions');
+  } finally { ctx.cleanup(); }
+});

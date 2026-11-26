@@ -127,6 +127,12 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-kind, body[data-p
 #stages-view .st-behaviors { list-style: none; margin: 8px 0 0; padding: 0; }
 #stages-view .st-behaviors li { padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--read-border) 50%, transparent); }
 #stages-view .st-flow-detail { border-color: var(--read-ink); }
+#stages-view .st-upgrade { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 10px 0; padding: 10px 12px; border: 1px solid oklch(75% .14 75); background: color-mix(in srgb, oklch(75% .14 75) 10%, var(--read-surface)); }
+#stages-view .st-tabs { display: flex; gap: 4px; align-items: center; margin: 12px 0 4px; border-bottom: 1px solid var(--read-border); }
+#stages-view .st-tabs button { border: 1px solid transparent; border-bottom: 0; padding: 6px 14px; font-size: 13px; }
+#stages-view .st-tabs button.on { border-color: var(--read-border); background: var(--read-surface); font-weight: 700; }
+#stages-view .st-flowhead { box-sizing: border-box; height: 100%; display: flex; align-items: flex-end; padding-bottom: 4px; font: 700 12px/1.3 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .03em; border-bottom: 3px solid var(--read-border); cursor: pointer; overflow: hidden; }
+#stages-view .st-flowhead.on { color: var(--read-link, var(--read-ink)); }
 body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[data-palette="paper"] #stages-view .st-decision { color: oklch(45% .12 75); }
 #stages-view .st-foot { margin-top: 18px; }
 #stages-view { --st-c0: oklch(70% .13 250); --st-c1: oklch(72% .14 150); --st-c2: oklch(75% .14 75); --st-c3: oklch(68% .15 20); --st-c4: oklch(70% .13 300); --st-c5: oklch(74% .11 200); --st-c6: oklch(72% .13 110); }
@@ -435,8 +441,13 @@ function mountStages(root, post) {
       h('div', { class: 'st-row st-legend' }, muted('Steps:'), part.stages.map((stage, index) => act('openStage', { part: part.id, id: state.card?.id === stage.id ? '' : stage.id }, (index + 1) + '. ' + stage.name,
         { class: 'st-step' + (state.card?.id === stage.id ? ' open' : '') + (stage.stale ? ' stale' : '') + (stage.pending ? ' changed' : ''), style: 'border-left: 4px solid ' + stepColor(part.id, stage.id), title: stage.gist || '' }))),
       part.usedBy.length || part.uses.length ? h('p', { class: 'st-muted' }, [...part.usedBy.map(entry => partName(entry.from) + ' ' + entry.label + ' it'), ...part.uses.map(entry => 'it ' + entry.label + ' ' + partName(entry.to))].join(' · ')) : undefined,
-      filesGraph(part, detail),
-      detail.hidden ? h('p', { class: 'st-muted' }, plural(detail.hidden, 'more file') + ' in ' + detail.folder + ' are not shown.') : undefined,
+      part.outdated ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, 'This part was mapped before inner steps and key behaviors.'), ' ', muted('Map it again to see what every step calls, its decisions, AI calls and files on the diagram. About 1–2 minutes and a few cents with the cheap model.')),
+        go('remapPart', { id: part.id }, 'Map this part again', { disabled: !!state.busy })) : undefined,
+      h('div', { class: 'st-tabs', role: 'tablist' },
+        act('partTab', { tab: 'flow' }, 'How it works', { role: 'tab', 'aria-selected': String(ui.partTab !== 'files'), class: ui.partTab !== 'files' ? 'on' : '' }),
+        act('partTab', { tab: 'files' }, 'Files', { role: 'tab', 'aria-selected': String(ui.partTab === 'files'), class: ui.partTab === 'files' ? 'on' : '' }),
+        spacer(), part.outdated ? undefined : link('remapPart', { id: part.id }, 'Map this part again', { title: 'Re-plan the stages; unchanged functions reuse their saved descriptions' })),
+      ui.partTab === 'files' ? [filesGraph(part, detail), detail.hidden ? h('p', { class: 'st-muted' }, plural(detail.hidden, 'more file') + ' in ' + detail.folder + ' are not shown.') : undefined] : partFlowView(part),
       stepCard(), fileCard());
   }
   // Files arranged by the part's steps, left to right in the order the work happens:
@@ -509,8 +520,7 @@ function mountStages(root, post) {
     return h('div', { class: 'st-detail' },
       h('h2', {}, h('span', { class: 'st-swatch', style: 'background:' + stepColor(part, stage.id) }), stage.name, stage.stale ? h('span', { class: 'st-badge stale' }, 'changed') : undefined, spacer(), link('openStage', { part, id: '' }, 'Close')),
       h('div', { class: 'st-story' }, h('b', {}, 'Does'), h('span', {}, stage.gist || '—'), h('b', {}, 'Takes'), h('span', {}, stage.input || '—'), h('b', {}, 'Gives'), h('span', {}, stage.output || '—')),
-      stage.steps.length ? section('How it works', h('p', { class: 'st-muted st-hint' }, 'Each box is a step; boxes under it are what it calls. Badges are key behaviors. Click a box for its file.'), stageFlow(part, stage)) : undefined,
-      stage.steps.length ? h('details', { open: !!ui.expanded['list:' + stage.id], data: { expand: 'list:' + stage.id } }, h('summary', {}, 'All steps and behaviors as a list'),
+      stage.steps.length ? h('details', { open: ui.expanded['list:' + stage.id] !== false, data: { expand: 'list:' + stage.id } }, h('summary', {}, 'Every step and behavior in this stage'),
         h('ul', { class: 'st-how' }, stage.steps.map(step => h('li', { style: 'margin-left:' + (step.depth || 0) * 22 + 'px' },
           h('span', { class: 'st-how-what' }, step.what || step.symbol), ' ', muted(step.symbol), ' ', link('openFile', { file: step.file }, fileName(step.file), { title: 'Show this file' }),
           step.details?.length ? h('ul', { class: 'st-how-details' }, step.details.map(detail => h('li', {}, behaviorChip(detail.kind), ' ', detail.text))) : undefined)))) : undefined,
@@ -526,6 +536,44 @@ function mountStages(root, post) {
       }))) : undefined,
       section('Notes on this step', stage.notes ? h('pre', {}, stage.notes) : h('p', { class: 'st-muted' }, 'Yamori adds what you change and decide here. Add a rule of your own if you like; your agents read these before they touch this code.'),
         h('div', { class: 'st-tools' }, h('textarea', { id: 'st-note', 'aria-label': 'Add a note', placeholder: 'Optional: a rule or reason…', value: ui.noteDraft || '' }), act('addNote', id, 'Add'), link('openNote', id, state.vault?.obsidian ? 'Open in Obsidian' : 'Open notes file'))));
+  }
+  // The whole part as it works: each stage a column, its steps down the column with
+  // what they call indented under them, and key behaviors on every box.
+  function partFlowView(part) {
+    const flow = state.partFlow || [], W = 236, GX = 70, GY = 12, HEAD = 46;
+    const lines = (text, per) => Math.min(3, Math.ceil(String(text || '').length / per));
+    const decisionsOf = step => (step.details || []).filter(item => item.kind === 'decides' || item.kind === 'stops').slice(0, 3);
+    const height = step => 38 + 17 * lines(step.what || step.symbol, 26) + decisionsOf(step).reduce((sum, item) => sum + 4 + 15 * Math.min(2, lines(item.text, 30)), 0) + (step.details?.length ? 24 : 0);
+    const nodes = [], edges = [];
+    let previousLast;
+    flow.forEach((stage, c) => {
+      const x = c * (W + GX);
+      nodes.push({ id: 'head:' + stage.id, fixed: true, x, y: 0, w: W, h: HEAD - 8, content: h('div', { class: 'st-flowhead' + (state.card?.id === stage.id ? ' on' : ''), data: { act: 'openStage', part: part.id, id: state.card?.id === stage.id ? '' : stage.id }, style: 'border-bottom-color:' + stepColor(part.id, stage.id), title: stage.gist || '' }, (c + 1) + '. ' + stage.name) });
+      let y = HEAD, lastTop;
+      stage.steps.forEach((step, index) => {
+        const key = 'p:' + stage.id + ':' + index, id = 'n:' + stage.id + ':' + index, indent = (step.depth || 0) * 14, h2 = height(step);
+        nodes.push({ id, x: x + indent, y, w: W - indent, h: h2, content: flowBox(step, key, stepColor(part.id, stage.id)) });
+        if (!step.depth) { if (lastTop) edges.push({ from: lastTop, to: id }); else if (previousLast) edges.push({ from: previousLast, to: id }); lastTop = id; }
+        else { const parent = [...nodes].reverse().find(node => node.id.startsWith('n:' + stage.id + ':') && node !== nodes.at(-1) && node.depth === step.depth - 1); if (parent) edges.push({ from: parent.id, to: id, soft: true }); }
+        nodes.at(-1).depth = step.depth || 0;
+        y += h2 + GY;
+      });
+      previousLast = lastTop;
+    });
+    if (!nodes.length) return h('p', { class: 'st-muted' }, 'No steps mapped yet.');
+    const width = flow.length * (W + GX) - GX, tall = Math.max(...nodes.map(node => node.y + node.h));
+    const picked = ui.flowStep?.startsWith('p:') ? (() => { const [, stageId, index] = ui.flowStep.split(':'); return flow.find(stage => stage.id === stageId)?.steps[Number(index)]; })() : undefined;
+    return [h('p', { class: 'st-muted st-hint' }, 'Stages left to right; each stage\'s steps top to bottom, with what they call indented under them. Badges are key behaviors; ◆ decisions and ⚠ stop conditions are written on the boxes. Click a box for everything about it.'),
+      graphView('pflow:' + part.id, { nodes, edges, width, height: tall, minHeight: 360, maxHeight: 760, minZoom: 0.7, label: 'How ' + part.name + ' works' }), picked ? flowStepDetail(picked) : undefined];
+  }
+  function flowBox(step, key, color) {
+    const decisionsOf = (step.details || []).filter(item => item.kind === 'decides' || item.kind === 'stops').slice(0, 3);
+    return h('div', { class: 'st-node flowstep' + (step.depth ? ' sub' : '') + (ui.flowStep === key ? ' selected' : ''), data: { act: 'flowStep', key }, role: 'button', tabindex: 0, style: step.depth ? undefined : 'border-left: 4px solid ' + color,
+      title: step.symbol + ' · ' + step.file + ':' + (step.line_start || '') + (step.details?.length ? '\n\n' + step.details.map(item => (KIND[item.kind] || item.kind) + ': ' + item.text).join('\n') : '') },
+      h('b', {}, step.what || step.symbol),
+      decisionsOf.map(item => h('div', { class: 'st-decision' + (item.kind === 'stops' ? ' stops' : '') }, (item.kind === 'stops' ? '⚠ ' : '◆ ') + item.text)),
+      step.details?.length ? h('div', { class: 'st-node-kinds' }, chips(step.details)) : undefined,
+      h('div', { class: 'st-node-meta' }, step.symbol + ' · ' + fileName(step.file)));
   }
   // A stage as a diagram: its steps left to right, what each calls stacked under it,
   // and key behaviors (decisions, AI calls, waiting for you, files written) on every box.
@@ -565,7 +613,7 @@ function mountStages(root, post) {
       caller ? h('p', { class: 'st-muted' }, 'Called by: ' + (caller.what || caller.symbol)) : undefined,
       step.details?.length ? h('ul', { class: 'st-behaviors' }, step.details.map(item => h('li', {}, behaviorChip(item.kind), ' ', item.text))) : h('p', { class: 'st-muted' }, 'No key behaviors recorded for this step.'));
   }
-  const stagesStep = key => state.card?.steps.find(step => step.file + '#' + step.symbol === key);
+  const stagesStep = key => [...(state.card?.steps || []), ...(state.partFlow || []).flatMap(stage => stage.steps)].find(step => step.file + '#' + step.symbol === key);
   function fileCard() {
     const file = state.file;
     if (!file) return undefined;
@@ -711,7 +759,9 @@ function mountStages(root, post) {
       state.error ? h('p', { class: 'st-error' }, state.error) : undefined,
       state.busy ? h('p', { class: 'st-notice' }, state.busy) : undefined,
       state.notice ? h('p', { class: 'st-notice' }, state.notice) : undefined,
-      sys?.newFiles ? h('p', { class: 'st-notice' }, 'Files were added or removed since the map was made. ', link('buildSystem', {}, 'Update the map')) : undefined];
+      sys?.newFiles ? h('p', { class: 'st-notice' }, 'Files were added or removed since the map was made. ', link('buildSystem', {}, 'Update the map')) : undefined,
+      sys && sys.parts.some(part => part.outdated) ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, plural(sys.parts.filter(part => part.outdated).length, 'part') + ' mapped the old way.'), ' ', muted('Map them again to see inner steps, decisions, AI calls and files on the diagrams. A few cents with the cheap model; unchanged functions are reused.')),
+        go('upgradeParts', {}, 'Upgrade all parts', { disabled: !!state.busy })) : undefined];
     if (!sys) return [header(), h('div', { class: 'st-top st-plain' }, notices), activity(), empty()];
     return [header(), notesPanel(), h('div', { class: 'st-top' }, sys.summary ? h('p', { class: 'st-summary' }, sys.summary) : undefined, notices, reviewBar(), state.terminalChat ? chatBar() : steerBox()),
       activity(), reviewPanel(), systemGraph(),
@@ -746,6 +796,7 @@ function mountStages(root, post) {
       case 'zoom': { const v = ui.views[data.key]; const canvas = target.closest('.st-canvas'); if (!v || !canvas) return; const w = canvas.clientWidth / 2, hh = canvas.clientHeight / 2, k = Math.max(0.15, Math.min(2.5, v.k * Number(data.by))); ui.views[data.key] = { ...v, k, x: w - (w - v.x) * k / v.k, y: hh - (hh - v.y) * k / v.k }; canvas.querySelector('.st-world')?.setAttribute('transform', 'translate(' + ui.views[data.key].x + ' ' + ui.views[data.key].y + ') scale(' + k + ')'); return; }
       case 'fit': target.closest('.st-canvas')?.fit?.(); return;
       case 'allSupport': ui.allSupport = !ui.allSupport; render(); return;
+      case 'partTab': ui.partTab = data.tab; render(); return;
       case 'flowStep': ui.flowStep = ui.flowStep === data.key || !data.key ? undefined : data.key; render(); return;
       case 'resetLayout': if (state.layouts) delete state.layouts[data.key]; delete ui.views[data.key]; send('layout', { key: data.key, reset: true }); render(); return;
       case 'fullGraph': ui.full = ui.full === data.key ? undefined : data.key; render(); return;

@@ -155,6 +155,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       detail: change.detail && { ...change.detail, steps: (change.detail.steps || []).map(step => ({ ...step, line: lineOf(step.file, step.symbol) })) } }))).sort((a, b) => a.at < b.at ? -1 : 1);
     return { ...base, system: view, part: item.workflowId, card, queue, systemNotes: vault.systemNotes(),
       partDetail: item.workflowId ? system.partDetail(db, graph, item.entry.notes, item.workflowId) : undefined,
+      partFlow: item.workflowId ? system.partFlow(db, graph, item.workflowId) : undefined,
       shared: item.shared ? sharedDetail(item, view) : undefined,
       file: item.file ? system.fileDetail(db, graph, item.entry.notes, item.file, item.entry.explanations) : undefined,
       route: item.route, steer: item.steer && steerState(item.steer), activity: activity(db) };
@@ -346,6 +347,8 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     switch (message.type) {
       case 'ready': break;
       case 'buildSystem': await buildSystem(item, { force: !!message.force }); break;
+      case 'remapPart': await remapParts(item, [message.id || item.workflowId].filter(Boolean)); break;
+      case 'upgradeParts': await remapParts(item, system.systemView(dbFor(item), item.entry.graph || { files: {} }).parts.filter(part => part.outdated).map(part => part.id)); break;
       case 'openPart': item.workflowId = typeof message.id === 'string' && message.id ? message.id : undefined; item.open = undefined; item.file = undefined; item.shared = undefined; if (item.workflowId) db().setMeta('last_workflow', item.workflowId); break;
       case 'openStage': item.workflowId = part; item.open = typeof message.id === 'string' && message.id ? message.id : undefined; break;
       case 'openFile': item.file = typeof message.file === 'string' && message.file ? message.file : undefined; break;
@@ -422,6 +425,26 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   }
 
   // --- mapping the whole system ---
+  // Map one part (or every outdated part) again, deeply, keeping the parts as they are.
+  async function remapParts(item, ids) {
+    const entry = item.entry = await map.ensureGraph(item.entry), db = dbFor(item);
+    const parts = ids.map(id => db.workflow(id)).filter(Boolean);
+    if (!parts.length) return;
+    const { provider, model, request: send } = await request('cheap');
+    const run = createRun(db, { budget: { ...budget(), perRun: 0 }, trigger: 'system.remap' });
+    let done = 0; const failed = [];
+    await busy(item, 'Mapping ' + (parts.length === 1 ? (parts[0].name || parts[0].id) : parts.length + ' parts') + ' again…', async () => {
+      await Promise.all(parts.map(async part => {
+        try {
+          await stages.generateWorkflow({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, entryFile: part.entry_file, entrySymbol: part.entry_symbol, id: part.id, request: send, run, provider, model, headSha: await head(item), force: true,
+            readText: file => map.readSource(entry, file), scope: system.areasOf(entry.graph).find(area => area.folder === part.folder)?.files, part: { name: part.name, does: part.summary } });
+        } catch (error) { failed.push((part.name || part.id) + ': ' + error.message); }
+        item.busy = 'Mapped ' + (++done) + ' of ' + parts.length + '…'; post(item);
+      }));
+      sync(item);
+    });
+    item.notice = failed.length ? 'Not mapped: ' + failed.join('; ') : 'Mapped again: inner steps and key behaviors are on the diagrams.';
+  }
   async function buildSystem(item, { force = false, confirm = false } = {}) {
     const entry = item.entry = await map.ensureGraph(item.entry);
     const db = dbFor(item);
