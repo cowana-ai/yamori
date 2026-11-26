@@ -329,7 +329,32 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   const maps = new Map(), listeners = new Set();
   const visibleSourceEditors = (api.window.visibleTextEditors || []).filter(editor => editor.document?.uri?.scheme === 'file');
   let lastSourceEditor = api.window.activeTextEditor || (visibleSourceEditors.length === 1 ? visibleSourceEditors[0] : undefined);
-  const editorListener = api.window.onDidChangeActiveTextEditor?.(editor => { if (editor?.document?.uri?.scheme === 'file') lastSourceEditor = editor; });
+  const editorListener = api.window.onDidChangeActiveTextEditor?.(editor => { if (editor?.document?.uri?.scheme === 'file') lastSourceEditor = editor; noteEditor(editor); });
+  // What the founder is looking at, for their agent session (MCP get_view): the
+  // editor, Yamori Read, the panel tab and the System selection. Local file only.
+  function noteView(entry, patch) {
+    if (!entry?.store) return;
+    entry.view = { ...(entry.view || {}), ...patch };
+    clearTimeout(entry.viewTimer);
+    entry.viewTimer = setTimeout(() => {
+      const value = { at: new Date().toISOString(), project: path.basename(entry.root.fsPath), ...entry.view };
+      void fs.mkdir(entry.store.dir, { recursive: true }).then(() => fs.writeFile(path.join(entry.store.dir, 'view.json'), JSON.stringify(value))).catch(() => {});
+    }, 250);
+  }
+  const mappedEntry = uri => uri?.scheme === 'file' ? [...maps.values()].filter(entry => entry.store && relative(entry.root.fsPath, uri.fsPath)).sort((a, b) => b.root.fsPath.length - a.root.fsPath.length)[0] : undefined;
+  let selectionTimer;
+  function noteEditor(editor) {
+    const doc = editor?.document, entry = mappedEntry(doc?.uri);
+    if (!entry) return;
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(() => {
+      const selection = editor.selection, line = (selection?.active?.line ?? 0) + 1;
+      const text = selection && !selection.isEmpty && doc.getText ? doc.getText(selection).slice(0, 2000) : '';
+      noteView(entry, { editor: { file: relative(entry.root.fsPath, doc.uri.fsPath), line, ...(text ? { selected: text, selectedLines: [selection.start.line + 1, selection.end.line + 1] } : {}), language: doc.languageId, ...(doc.isDirty ? { unsaved: true } : {}) } });
+    }, 200);
+  }
+  const selectionListener = api.window.onDidChangeTextEditorSelection?.(event => { if (event.textEditor?.document?.uri?.scheme === 'file') noteEditor(event.textEditor); });
+  if (selectionListener) context.subscriptions?.push(selectionListener);
   if (editorListener) context.subscriptions?.push(editorListener);
   async function editorContext(entry) {
     const active = api.window.activeTextEditor;
@@ -396,6 +421,18 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     }
     post(entry);
   }
+  // The agent asked to show something in Yamori (MCP show_in_yamori).
+  async function showRequest(entry) {
+    const request = await cache.json(entry.store.file('show'));
+    if (!request?.token || request.token === entry.lastShowToken) return;
+    entry.lastShowToken = request.token;
+    const rel = typeof request.file === 'string' && entry.graph?.files[request.file] ? request.file : undefined;
+    if (request.tab === 'read' && rel) { await openFile(fileUri(entry, rel), Number.isInteger(request.line) ? { line: request.line } : {}); return; }
+    if (request.tab === 'system') { await stagesHost?.reveal(entry, { part: request.part, step: request.step, file: rel }); return; }
+    entry.viewRequest = { view: request.tab === 'plan' ? 'plan' : 'map', token: Date.now() };
+    if (rel) entry.focus = { id: rel, token: Date.now() };
+    ensurePanel(entry); post(entry);
+  }
   // The deepest mapped folder containing a file, else its workspace folder.
   async function entryForFile(uri) {
     if (uri?.scheme !== 'file') return undefined;
@@ -411,6 +448,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       const reload = {};
       require('node:fs').mkdirSync(entry.store.dir, { recursive: true, mode: 0o700 });
       entry.storeWatch = require('node:fs').watch(entry.store.dir, (event, name) => {
+        if (name === 'show.json') { clearTimeout(reload[name]); reload[name] = setTimeout(() => void showRequest(entry).catch(() => {}), 80); return; }
         if (!['explanations.json', 'graph.json', 'notes.json', 'plan.json'].includes(name)) return;
         clearTimeout(reload[name]);
         reload[name] = setTimeout(async () => {
@@ -465,7 +503,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   }
   function stateOf(entry) {
     const graph = entry.graph, notes = entry.notes;
-    const base = { projectName: path.basename(entry.root.fsPath), git: entry.git ? { name: entry.git.name, detached: entry.git.detached, root: entry.git.root } : undefined, readingPalette: context.globalState.get('readingPalette', 'auto'), busy: !!entry.busy, notesBusy: !!entry.notesController, autoNotes: setting(api, 'autoNotes', true) !== false, waitingForAI: !!entry.waitingForAI, progress: entry.progress, error: entry.error, notes: counts(entry),
+    const base = { terminalChat: setting(api, 'chatInTerminal', true) !== false, agentSession: !!agentSessions?.alive(entry), projectName: path.basename(entry.root.fsPath), git: entry.git ? { name: entry.git.name, detached: entry.git.detached, root: entry.git.root } : undefined, readingPalette: context.globalState.get('readingPalette', 'auto'), busy: !!entry.busy, notesBusy: !!entry.notesController, autoNotes: setting(api, 'autoNotes', true) !== false, waitingForAI: !!entry.waitingForAI, progress: entry.progress, error: entry.error, notes: counts(entry),
       ...(entry.focus ? { focus: entry.focus.id, focusToken: entry.focus.token } : {}), ...(entry.viewRequest ? { view: entry.viewRequest.view, viewToken: entry.viewRequest.token } : {}) };
     if (!graph) return { ...base, folders: [], guide: { folder: '', steps: [] }, map: { boxes: [], nodes: [], edges: [] }, files: 0, links: 0 };
     const known = new Set(Object.keys(graph.files));
@@ -1195,6 +1233,8 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     switch (message.type) {
       case 'ready': post(entry); break;
       case 'stages': await stagesHost?.message(entry, message.message); break;
+      case 'viewChanged': noteView(entry, { tab: { start: 'Files', map: 'Map', plan: 'Plan', stages: 'System' }[message.view] }); break;
+      case 'agentSession': await agentSessions?.open(entry, { prefill: typeof message.prefill === 'string' ? message.prefill : '' }); break;
       case 'readCurrent': await api.commands.executeCommand?.('yamori.read'); break;
       case 'openFile': if (file) await openFile(fileUri(entry, file)); break;
       case 'revealSource': if (file) await reveal(entry, file, message.line); break;
@@ -1334,10 +1374,14 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   }
   // What the stage screen needs from the project map: the same graph, notes
   // and pseudocode cache, without another scan or store.
-  let stageBaseProvider, stageProposals, stagesHost;
+  let stageBaseProvider, stageProposals, stagesHost, agentSessions;
   const stageSupport = {
     entryFor, entryForFile,
-    // The Stages tab of this panel.
+    noteView: (entry, patch) => noteView(entry, patch),
+    openAgentSession: (entry, options) => agentSessions?.open(entry, options),
+    agentSessionAlive: entry => !!agentSessions?.alive(entry),
+    chatInTerminal: () => setting(api, 'chatInTerminal', true) !== false,
+    // The System tab of this panel.
     async showStages(entry) { entry.viewRequest = { view: 'stages', token: Date.now() }; ensurePanel(entry); post(entry); },
     rootFor: uri => api.workspace.getWorkspaceFolder?.(uri)?.uri?.fsPath,
     relative: (entry, uri) => relative(entry.root.fsPath, uri.fsPath),
@@ -1409,7 +1453,8 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     requestStructured
   };
   return {
-    stageSupport, setStages(host) { stagesHost = host; for (const entry of maps.values()) if (entry.panel) host.attach(entry, entry.panel.webview); },
+    stageSupport, setAgentSessions(value) { agentSessions = value; }, noteRead(uri) { const entry = mappedEntry(uri); if (entry) noteView(entry, { read: { file: relative(entry.root.fsPath, uri.fsPath) } }); },
+    setStages(host) { stagesHost = host; for (const entry of maps.values()) if (entry.panel) host.attach(entry, entry.panel.webview); },
     askSelection: (selected, question) => runSelection(selected, question, 'chat'),
     async show(folderUri, focusUri, view = 'start') {
       const root = folderUri || (focusUri && api.workspace.getWorkspaceFolder?.(focusUri)?.uri) || api.workspace.workspaceFolders?.[0]?.uri;
@@ -1647,6 +1692,62 @@ const current = JSON.parse(fs.readFileSync(path.join(__dirname, 'current.json'),
 require(path.join(current.extension, 'src', 'project', 'mcp.js')).main(process.argv.slice(2), { cache: current.cache });
 `);
   return { launcher, runtime: process.execPath, env: { ELECTRON_RUN_AS_NODE: '1' } };
+}
+// One agent session per project in the VS Code terminal: Claude Code or Codex,
+// connected to Yamori's MCP server, told to look at what the founder has open
+// and to plan onto Yamori's canvas. It survives closing Yamori's panels; with
+// Claude Code the same conversation resumes after a restart.
+const SESSION_RULES = `You are the founder's agent for this project, started from Yamori. Yamori shows them how the system works (System map), plans on a canvas (Plan), and pseudocode beside the code (Read).
+- When they say this, here, that, or what I'm looking at, call the yamori get_view tool first: it tells you the file, lines, selection, Read file, and the System part, step or file they have open.
+- To explain how things fit together, use list_stages and get_stage; notes there are the founder's rules, follow them.
+- When they ask for a plan, write it with save_plan so it appears on Yamori's Plan canvas, then call show_in_yamori with tab "plan". Do not edit code until they approve.
+- After you explain a part, step or file, you may call show_in_yamori to bring it into view.
+- After a run that edited code, call done once.
+Keep answers short and plain; the founder may not read code.`;
+function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
+  const open = new Map();
+  const name = entry => 'Yamori chat · ' + path.basename(entry.root.fsPath);
+  const alive = entry => {
+    const known = open.get(entry.root.toString());
+    if (known && !known.exitStatus) return known;
+    // A terminal VS Code restored after a reload: same name, same project.
+    return (api.window.terminals || []).find(terminal => terminal.name === name(entry) && !terminal.exitStatus);
+  };
+  // A Claude Code conversation exists once it has a transcript on disk.
+  const claudeTranscript = id => { try { const dir = path.join(os.homedir(), '.claude', 'projects'); return require('node:fs').readdirSync(dir).some(folder => require('node:fs').existsSync(path.join(dir, folder, id + '.jsonl'))); } catch { return false; } };
+  async function start(entry) {
+    const provider = PROVIDERS[context.globalState.get('provider')] ? context.globalState.get('provider') : 'claude';
+    const { model, cliPath } = connectionOptions(context.globalState, provider, api);
+    const binary = await find(provider, cliPath);
+    const launcher = await writeLauncher(context, api);
+    const server = { command: launcher.runtime, args: [launcher.launcher], env: { ELECTRON_RUN_AS_NODE: '1' } };
+    let args;
+    if (provider === 'claude') {
+      const key = 'agentSession:' + entry.root.toString();
+      let id = context.globalState.get(key);
+      const resume = id && claudeTranscript(id);
+      if (!resume) { id = require('node:crypto').randomUUID(); await context.globalState.update(key, id); }
+      args = [...(resume ? ['--resume', id] : ['--session-id', id]), '--append-system-prompt', SESSION_RULES, '--mcp-config', JSON.stringify({ mcpServers: { yamori: { type: 'stdio', ...server } } }), ...(model ? ['--model', model] : [])];
+    } else {
+      args = ['-c', 'developer_instructions=' + JSON.stringify(SESSION_RULES), '-c', 'mcp_servers.yamori.command=' + JSON.stringify(server.command), '-c', 'mcp_servers.yamori.args=' + JSON.stringify(server.args), '-c', 'mcp_servers.yamori.env={ELECTRON_RUN_AS_NODE="1"}', ...(model ? ['--model', model] : [])];
+    }
+    const launch = cliLaunch(binary, args);
+    const terminal = api.window.createTerminal({ name: name(entry), cwd: entry.root.fsPath, shellPath: launch.command, shellArgs: launch.args, env: launch.env, isTransient: false });
+    open.set(entry.root.toString(), terminal);
+    return terminal;
+  }
+  return {
+    alive: entry => !!alive(entry),
+    async open(entry, { prefill = '' } = {}) {
+      if (api.workspace.isTrusted === false) throw new Error('Trust this workspace to start an agent session.');
+      if (!api.window.createTerminal) throw new Error('The integrated terminal is unavailable.');
+      const existing = alive(entry), terminal = existing || await start(entry);
+      terminal.show(false);
+      // Puts words on the agent's prompt without sending them; you finish the question.
+      if (prefill) setTimeout(() => terminal.sendText(prefill, false), existing ? 0 : 2500);
+      return terminal;
+    }
+  };
 }
 // Everything Connect changes, described before anything is changed: only the
 // registration of Yamori's knowledge server with each CLI.
@@ -1988,7 +2089,7 @@ async function activate(context) {
         recordExplanation: (snapshot, level, value) => projectMap.recordExplanation(snapshot, level, value),
         savedPseudocode: (snapshot, level) => projectMap.savedPseudocode(snapshot, level),
         knownNames: snapshot => projectMap.knownNames(snapshot),
-        active(value, panel) { activeReader = value; if (panel.viewColumn) readingColumn = panel.viewColumn; void value.showSource().catch(() => {}); },
+        active(value, panel) { activeReader = value; if (panel.viewColumn) readingColumn = panel.viewColumn; void value.showSource().catch(() => {}); const uri = value.snapshot?.()?.uri; if (uri?.startsWith('file:')) projectMap.noteRead(vscode.Uri.parse(uri)); },
         closed(value) { if (readers.get(key) === value) readers.delete(key); if (activeReader === value) activeReader = undefined; if (!readers.size) readingColumn = undefined; }
       });
       readers.set(key, reader);
@@ -2107,6 +2208,9 @@ async function activate(context) {
   });
   context.subscriptions.push({ dispose: () => stageScreen.dispose() });
   projectMap.setStages(stageScreen);
+  const agentSessions = createAgentSessions(context);
+  projectMap.setAgentSessions(agentSessions);
+  command('yamori.agentSession', async () => agentSessions.open(await stageEntry()));
   const stageEntry = async () => {
     const uri = (vscode.window.activeTextEditor || lastEditor)?.document?.uri;
     const entry = uri?.scheme === 'file' ? await projectMap.stageSupport.entryForFile(uri) : undefined;
@@ -3956,4 +4060,4 @@ function createReader(context, navigation) {
   };
   return reader;
 }
-module.exports = { createSelectionQuestions, connectAgents, agentPlan, stripRulesBlock, stripHooks, writeLauncher, hoverMarkdown, createProjectMap, createSetup, setupView, setupTerminal, connectionOptions, chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext };
+module.exports = { createAgentSessions, SESSION_RULES, createSelectionQuestions, connectAgents, agentPlan, stripRulesBlock, stripHooks, writeLauncher, hoverMarkdown, createProjectMap, createSetup, setupView, setupTerminal, connectionOptions, chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext };

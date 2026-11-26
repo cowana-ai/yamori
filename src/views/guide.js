@@ -713,6 +713,9 @@ body[data-chat-focused="true"] #canvas, body[data-chat-focused="true"] #drawer, 
 .conversation-project { display:flex; align-items:center; flex-shrink:0; gap:12px; padding:3px 0 12px; color:var(--read-ink); font:13px/1.4 ui-monospace,monospace; }
 .conversation-project .conversation-branch { color:var(--read-muted); font:11px ui-monospace,monospace; background:transparent; border:1px solid var(--read-border); padding:4px 7px; max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
  ${STAGES_STYLE}
+#plan-panel .plan-chatbar { display:flex !important; position:fixed; left:20px; right:20px; bottom:12px; align-items:center; gap:14px; padding:10px 14px; background:var(--read-surface); border:1px solid var(--read-border); z-index:8; font-size:12px; color:var(--read-muted); }
+#plan-panel .plan-chatbar .plan-chatbar-text { flex:1; }
+#plan-panel:not([data-inspecting="true"]) > .plan-chatbar { display:flex !important; }
 body[data-view="stages"] .search, body[data-view="stages"] #rescan { display:none; }
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${LOGO}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
@@ -772,7 +775,9 @@ let state = {}, view = { x: 40, y: 40, k: 1 }, current = 'map', viewToken, focus
 let positions = new Map(), byId = new Map(), boxes = new Map(), nodeElements = new Map(), boxElements = new Map(), edgeElements = [];
 const size = () => ({ width: canvas.clientWidth || 800, height: canvas.clientHeight || 600 });
 const fileName = id => id.split('/').at(-1);
+let viewReported = false;
 function show(name) {
+  if (viewReported) send('viewChanged', { view: name });
   const stagesNow = name === 'stages';
   $('tab-stages').setAttribute('aria-selected', String(stagesNow)); $('stages-view').hidden = !stagesNow; document.body.setAttribute('data-view', stagesNow ? 'stages' : '');
   if (stagesNow) {
@@ -1531,9 +1536,17 @@ function drawPlan() {
   }
   toolbar.append(ai); terminal.append(toolbar, transcript);
   const live = node('div', busy?.reply || '', 'terminal-stream'); live.hidden = !busy?.reply; live.setAttribute('role', 'status'); live.setAttribute('aria-label', 'Agent reply, streaming'); terminal.append(live);
-  terminal.append(composer); panel.append(terminal);
+  terminal.append(composer);
+  // Chat lives in the VS Code terminal: one agent session that sees what you have
+  // open and writes plans onto this canvas. Only a slim bar stays here.
+  if (state.terminalChat) {
+    const bar = node('section', undefined, 'plan-chatbar'); bar.setAttribute('aria-label', 'Your agent session');
+    bar.append(node('span', 'Ask, plan or change things with your agent in the VS Code terminal. It sees what you have open, and plans it saves show up on this canvas.', 'plan-chatbar-text'));
+    const open = node('button', state.agentSession ? 'Show chat' : 'Open chat in terminal', 'go'); open.addEventListener('click', () => send('agentSession'));
+    bar.append(open); panel.append(bar); document.documentElement.style.setProperty?.('--plan-terminal-height', '56px');
+  } else panel.append(terminal);
   const submit = () => { const text = goal.value.trim(); if (!text || busy && !info.question) return; pendingGoal = ''; goal.value = ''; if (info.question) send('planAnswer', { answer: text }); else if (mode === 'plan') send(plan?.goal ? 'planChat' : 'planGoal', plan?.goal ? { text } : { goal: text }); else send('projectMessage', { text, mode }); };
-  attachTerminal(terminal, messages, info);
+  if (!state.terminalChat) attachTerminal(terminal, messages, info);
   planComposer = goal; sizePlanComposer(goal);
   if (focusedGoal) { goal.focus?.(); if (caret?.[0] !== undefined) goal.setSelectionRange?.(...caret); }
   goal.addEventListener('keydown', event => {
@@ -1978,6 +1991,7 @@ window.addEventListener('message', event => {
 showDetails(false);
 show('map');
 send('ready');
+viewReported = true;
 </script></body></html>`;
 }
 module.exports = { mapHTML, edgePath, fitTransform, neighbourSet, relativeTime, byFolder, proposalKind, planPseudocodeDiff, planIdeaGraph, planFilePathLines, planFileHeight, planCanvasLayout };

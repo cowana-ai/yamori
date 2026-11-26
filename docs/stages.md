@@ -14,7 +14,7 @@ Mapping again with the same files makes no AI call. When files are added or remo
 
 ## Read it
 
-The map is a graph you can drag, zoom (scroll or + / −) and **Fit**. **⤢ Enlarge** fills the panel with it (Esc or **Exit full view** to go back), **✕** closes it, and dragging its bottom edge makes it taller:
+The map is a graph you can pan, zoom (scroll or + / −) and **Fit**. Drag any box to move it; its arrows follow, and it stays there (per graph) until **Reset layout**. **⤢ Enlarge** fills the panel with it (Esc or **Exit full view** to go back), **✕** closes it, and dragging its bottom edge makes it taller:
 
 - **Parts** are boxes with what they do and their steps in order. Arrows say how parts work together ("asks to research each topic"); dashed arrows are code one part uses from another.
 - **Shared code** (for example a contracts package several parts import) is its own dashed box, linked to every part that uses it. Click it for its files and how they use each other.
@@ -26,14 +26,13 @@ Click a part to open it below the map, which stays in view:
 - **A file** shows what it is for, which steps of which parts use it, its pseudocode block by block when Yamori already wrote it (no AI call; each block's line range opens Read there), what it uses and what uses it, and its functions.
 - **A step** shows what it does, takes and gives, and how; **Show functions** lists the code behind it, with **Move to…** another step. **Rename**, **Merge with…** and **Keep as is** fix the grouping; updates keep your changes.
 
-## Steer it
+## Chat, plan and change things in the terminal
 
-Type what should change in **What should change in …** and click **Find where** (one small AI call). The box follows what you have open: the whole system, or only the part you opened. Yamori says which steps it touches and why; untick any you disagree with. Then:
+**Chat** (top of the System tab), **Open chat in terminal** (in System and in Plan), or **Yamori: Chat with Your Agent in the Terminal** opens one agent session for the project in the VS Code terminal: Claude Code or Codex, whichever Yamori uses. It stays open while you work; with Claude Code the same conversation resumes after VS Code restarts. You can enlarge the System map and chat beside it.
 
-- **Preview the change**: one AI call with your main model. It sends only those steps' code, and your notes (system, part and step) as rules. **Apply** writes every file or none; **Undo** puts them back. The change then shows up in Review.
-- **Give it to my agent**: no AI call. The request is saved as a to-do in those steps' notes, which Claude Code, Codex and Cursor read before they touch that code.
+The session is connected to Yamori and knows what you are looking at: the file, line and selected text in the editor, the file open in Read, the Yamori tab, and the part, step or file you selected in the System map (MCP `get_view`). So "why does this retry?" works without naming the file. It reads the map and your notes (`list_stages`, `get_stage`), writes plans onto Yamori's **Plan** canvas (`save_plan`), and can bring a part, step, file or plan into view in Yamori (`show_in_yamori`). **Ask in terminal…** on a step or file opens the session with that step or file already on the prompt.
 
-From a step or a file, **Change this step…** or **Change this file…** skips the search and goes straight to a preview of that code.
+`yamori.chatInTerminal` (default on): turn it off to use the chat inside the Plan tab and the **What should change** box in System instead.
 
 ## Review
 

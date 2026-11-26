@@ -38,7 +38,8 @@
         "yamori.tokenBudget",
         "yamori.stages.autoUpdate",
         "yamori.obsidian.vaultPath",
-        "yamori.obsidian.auto"
+        "yamori.obsidian.auto",
+        "yamori.chatInTerminal"
       ]
     }
   },
@@ -156,6 +157,10 @@
       {
         "command": "yamori.stages.regenerate",
         "title": "Yamori: Map the System Again"
+      },
+      {
+        "command": "yamori.agentSession",
+        "title": "Yamori: Chat with Your Agent in the Terminal"
       }
     ],
     "menus": {
@@ -445,6 +450,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Find your Obsidian vault automatically for system notes. Off: notes stay in `.yamori/notes/` unless `yamori.obsidian.vaultPath` is set."
+        },
+        "yamori.chatInTerminal": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Chat, plan and ask for changes with your own Claude Code or Codex session in the VS Code terminal (one per project, it stays open). It sees what you have open in the editor and in Yamori, and plans it saves appear on the Plan canvas. Off: use the chat inside the Plan tab and the request box in System."
         }
       }
     },
@@ -460,7 +470,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js && node --check src/stages/db.js && node --check src/stages/budget.js && node --check src/stages/generate.js && node --check src/stages/scheduler.js && node --check src/stages/controller.js && node --check src/stages/review.js && node --check src/stages/vault.js && node --check src/stages/mcp-tools.js && node --check src/stages/steer.js && node --check src/views/stages.js && node --check src/stages/system.js",
+    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js && node --check src/stages/db.js && node --check src/stages/budget.js && node --check src/stages/generate.js && node --check src/stages/scheduler.js && node --check src/stages/controller.js && node --check src/stages/review.js && node --check src/stages/vault.js && node --check src/stages/mcp-tools.js && node --check src/stages/steer.js && node --check src/views/stages.js && node --check src/stages/system.js && node --check src/project/session-tools.js",
     "build:validation": "node src/ai/schemas.js",
     "build:parser": "node src/project/graph.js",
     "package": "npx --yes @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/cowana-ai/yamori/blob/main --baseImagesUrl https://raw.githubusercontent.com/cowana-ai/yamori/main"

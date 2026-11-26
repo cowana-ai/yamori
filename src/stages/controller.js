@@ -131,7 +131,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (!available()) return { unavailable: new StageDbUnavailable().message };
     const graph = item.entry.graph || { files: {} };
     const db = dbFor(item, false), vault = vaultFor(item);
-    const base = { repo: path.basename(item.root), busy: item.busy, error: item.error, notice: item.notice, budget: budget(),
+    const base = { terminalChat: map.chatInTerminal ? map.chatInTerminal() : false, agentSession: !!map.agentSessionAlive?.(item.entry), layouts: layoutsFor(item), repo: path.basename(item.root), busy: item.busy, error: item.error, notice: item.notice, budget: budget(),
       vault: { obsidian: vault.obsidian, where: vault.obsidian ? path.basename(vault.vaultPath) + ' › Yamori › ' + vault.repo : '.yamori/notes in this project', dir: vault.dir, lastSync: item.lastSync } };
     if (!db || !db.workflows().length) return { ...base, estimate: estimateFor(item), system: undefined, activity: db ? activity(db) : undefined };
     const view = system.systemView(db, graph, item.entry.notes);
@@ -203,10 +203,35 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     post(item);
     return item;
   }
+  // What the founder has selected here, for their agent session (get_view).
+  function noteSelection(item) {
+    const db = dbFor(item, false);
+    const part = item.workflowId && db?.workflow(item.workflowId), stage = part && item.open ? db.stage(part.id, item.open) : undefined;
+    map.noteView?.(item.entry, { system: part || item.file || item.shared ? {
+      ...(part ? { part: part.name || part.id, partId: part.id, partDoes: part.summary || undefined } : {}),
+      ...(stage ? { step: stage.name, stepId: stage.id, stepDoes: stage.gist || undefined, stepFiles: [...new Set(db.steps(part.id, stage.id).map(step => step.file))] } : {}),
+      ...(item.file ? { file: item.file } : {}), ...(item.shared ? { sharedCode: item.shared.replace(/^code:/, '') } : {}) } : { overview: true } });
+  }
+  // The agent asked to show a part, step or file (MCP show_in_yamori).
+  async function reveal(entry, { part, step, file } = {}) {
+    const item = projectFor(entry), db = dbFor(item, false);
+    const key = value => String(value || '').trim().toLowerCase();
+    const found = db && part ? db.workflows().find(workflow => workflow.id === part || key(workflow.name) === key(part)) : undefined;
+    const stage = found && step ? db.stages(found.id).find(entry => entry.id === step || key(entry.name) === key(step)) : undefined;
+    item.workflowId = found?.id; item.open = stage?.id; item.file = file; item.shared = undefined;
+    noteSelection(item);
+    await show(entry);
+  }
+  // Boxes you dragged keep their place (per graph), until you reset them.
+  function layoutsFor(item) {
+    const db = dbFor(item, false);
+    if (!db) return {};
+    try { return JSON.parse(db.meta('layouts') || '{}'); } catch { return {}; }
+  }
   // A message from the System tab: errors show in the tab.
   async function message(entry, value) {
     const item = projectFor(entry);
-    try { item.error = ''; await receive(item, value); }
+    try { item.error = ''; await receive(item, value); if (['openPart', 'openStage', 'openFile', 'openShared'].includes(value?.type)) noteSelection(item); }
     catch (error) { item.error = error.message; }
     post(item);
   }
@@ -370,6 +395,15 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       case 'steerCancel': item.steerController?.abort(); item.steer = undefined; break;
       case 'steerDiff': { const file = item.steer?.preview?.files.find(entry => entry.file === message.file); if (file) await map.openProposed(item.entry, file.file, file.after, item.steer.preview.summary); break; }
       case 'handToAgent': handToAgent(item, message.intent, message.targets); break;
+      case 'agentSession': await map.openAgentSession?.(item.entry, { prefill: typeof message.prefill === 'string' ? message.prefill.slice(0, 300) : '' }); break;
+      case 'layout': {
+        const layouts = layoutsFor(item), key = String(message.key || '').slice(0, 200);
+        if (!key) break;
+        if (message.reset) delete layouts[key];
+        else if (typeof message.id === 'string' && Number.isFinite(message.x) && Number.isFinite(message.y)) layouts[key] = { ...(layouts[key] || {}), [message.id]: { x: Math.round(message.x), y: Math.round(message.y) } };
+        dbFor(item).setMeta('layouts', JSON.stringify(layouts));
+        break;
+      }
       default: await extensions.receive?.(item, message);
     }
   }
@@ -457,7 +491,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
 
   return {
     show: async (entry, options) => show(await map.ensureGraph(entry), options),
-    attach, detach, message,
+    attach, detach, message, reveal,
     // Command palette: map the whole system, with one confirmation.
     fromEntry: async entry => { const item = projectFor(entry); await show(entry); await buildSystem(item, { confirm: true }); post(item); },
     regenerate: async entry => { const item = projectFor(entry); await show(entry); await buildSystem(item, { force: true }); post(item); },

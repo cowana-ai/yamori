@@ -61,7 +61,11 @@ async function setup({ obsidianConfig = '/nonexistent/obsidian.json', answers = 
     isDirty: () => false, openProposed: async () => {},
     writeSource: async (_entry, rel, text) => fs.writeFileSync(path.join(root, rel), text),
     connection: async tier => ({ provider: 'claude', model: tier === 'main' ? 'main-model' : 'cheap-model' }),
-    requestStructured: model.requestStructured
+    requestStructured: model.requestStructured,
+    views: [], sessions: [],
+    noteView(_entry, patch) { this.views.push(patch); },
+    openAgentSession(_entry, options) { this.sessions.push(options); },
+    agentSessionAlive: () => false, chatInTerminal: () => true
   };
   const api = {
     ViewColumn: { Beside: -2 }, ConfigurationTarget: { Global: 1 },
@@ -78,7 +82,7 @@ async function setup({ obsidianConfig = '/nonexistent/obsidian.json', answers = 
   const last = () => posted.filter(message => message.type === 'stages').at(-1).state;
   const item = screen.projectFor(entry);
   const settle = async () => { while (item.estimating) await new Promise(resolve => setTimeout(resolve, 5)); };
-  return { root, entry, screen, posted, send, last, settle, settings, item, calls: model.calls, close() { screen.dispose(); closeStageDb(dbPath(root)); }, cleanup() { this.close(); fs.rmSync(root, { recursive: true, force: true }); } };
+  return { root, entry, screen, posted, send, last, settle, settings, item, map, calls: model.calls, close() { screen.dispose(); closeStageDb(dbPath(root)); }, cleanup() { this.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
 test('one click maps the whole system: every part, its steps in plain words, and how the parts connect', { skip }, async () => {
@@ -276,5 +280,35 @@ test('a file shows its cached pseudocode, Update always says what it did, and no
     assert.match(state.notice, /^Notes updated: \d+ notes in .*\.yamori\/notes\.$/);
     assert.ok(state.vault.lastSync.notes > 5); assert.equal(state.vault.lastSync.error, '');
     assert.equal(ctx.calls.length, calls, 'neither calls AI');
+  } finally { ctx.cleanup(); }
+});
+
+test('the agent session sees what is selected, can bring a step into view, and dragged boxes keep their place', { skip }, async () => {
+  const ctx = await setup();
+  try {
+    await ctx.send({ type: 'buildSystem' });
+    assert.equal(ctx.last().terminalChat, true);
+    await ctx.send({ type: 'openPart', id: 'email-helper' });
+    await ctx.send({ type: 'openStage', part: 'email-helper', id: 'answer' });
+    const seen = ctx.map.views.at(-1).system;
+    assert.equal(seen.part, 'Email helper'); assert.equal(seen.step, 'Answer'); assert.deepEqual(seen.stepFiles.sort(), ['agents/email/inbox.py', 'agents/email/run.py']);
+    await ctx.send({ type: 'openFile', file: 'agents/email/inbox.py' });
+    assert.equal(ctx.map.views.at(-1).system.file, 'agents/email/inbox.py');
+    await ctx.send({ type: 'openPart', id: '' });
+    assert.deepEqual(ctx.map.views.at(-1).system, { overview: true });
+    // The agent asks to show a step by name.
+    await ctx.screen.reveal(ctx.entry, { part: 'lead scoring', step: 'Score' });
+    let state = ctx.last();
+    assert.equal(state.part, 'lead-scoring'); assert.equal(state.card.id, 'score');
+    // Ask in terminal opens the session with the step on the prompt.
+    await ctx.send({ type: 'agentSession', prefill: 'About Lead scoring › Score: ' });
+    assert.deepEqual(ctx.map.sessions.at(-1), { prefill: 'About Lead scoring › Score: ' });
+    // A dragged box keeps its place, until the layout is reset.
+    await ctx.send({ type: 'layout', key: 'system', id: 'email-helper', x: 512.4, y: -40 });
+    state = ctx.last();
+    assert.deepEqual(state.layouts.system, { 'email-helper': { x: 512, y: -40 } });
+    await ctx.send({ type: 'layout', key: 'system', reset: true });
+    assert.deepEqual(ctx.last().layouts, {});
+    assert.equal(ctx.calls.length, 4, 'none of this calls AI');
   } finally { ctx.cleanup(); }
 });
