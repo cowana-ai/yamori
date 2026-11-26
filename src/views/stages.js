@@ -156,6 +156,7 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-zoom button { min-width: 28px; font-size: 12px; border: 1px solid var(--read-border); background: var(--read-surface); }
 #stages-view .st-zoom { align-items: center; }
 #stages-view .st-canvas { resize: vertical; min-height: 180px; }
+#stages-view .st-path-stage { font: 600 10px/1.4 var(--vscode-editor-font-family, monospace); letter-spacing: .04em; text-transform: uppercase; margin: 0 0 3px; }
 #stages-view .st-full-tools { position: absolute; left: 8px; top: 6px; max-width: calc(100% - 440px); z-index: 2; background: var(--read-page); border: 1px solid var(--read-border); padding: 4px 8px; }
 #stages-view .st-full-tools .st-muted { font-size: 12px; }
 #stages-view .st-full-tools .st-flowbar { margin: 0; }
@@ -621,6 +622,7 @@ function mountStages(root, post) {
     // A clicked box takes over the trace; matches stay outlined.
     if (current && !clicked) { path.add(current.ref); walk(current.ref, callers, 6).forEach(ref => path.add(ref)); walk(current.ref, calls, 1).forEach(ref => path.add(ref)); }
     if (clicked) { path.add(clicked.ref); walk(clicked.ref, callers, 6).forEach(ref => path.add(ref)); walk(clicked.ref, calls, 3).forEach(ref => path.add(ref)); }
+    if (clicked) return pathView(part, clicked, entries, calls, callers, walk, height, words);
     const active = !!(clicked || hits.length), hitRefs = new Set(hits.map(hit => hit.ref));
     const nodes = [], edges = [], idOf = ref => byRef.get(ref)?.id;
     let previousLast;
@@ -658,6 +660,34 @@ function mountStages(root, post) {
     const picked = clicked?.step;
     return [ui.full === graphKey ? undefined : bar(),
       canvas, picked ? flowStepDetail(picked) : undefined];
+  }
+  // A clicked step's path on its own, read left to right: what leads to it,
+  // the step, and what it calls, each box labeled with its stage.
+  function pathView(part, clicked, entries, calls, callers, walk, height, words) {
+    const before = walk(clicked.ref, callers, 6), after = walk(clicked.ref, calls, 2);
+    const keep = new Set([...before, clicked.ref, ...after]);
+    const list = entries.filter(entry => keep.has(entry.ref));
+    const links = [];
+    for (const from of keep) for (const to of calls.get(from) || []) if (keep.has(to) && !(after.has(from) && before.has(to))) links.push({ from, to });
+    const W = 236, H = 34 + Math.max(...list.map(entry => height(entry.step)));
+    const layout = layeredLayout(list.map(entry => ({ id: entry.ref })), links, { width: W, height: H, gapX: 64, gapY: 18 });
+    const stageNumber = new Map((state.partFlow || []).map((stage, index) => [stage.id, index + 1]));
+    const graphKey = 'ppath:' + part.id + ':' + clicked.ref;
+    const nodes = list.map(entry => {
+      const at = layout.positions.get(entry.ref), color = stepColor(part.id, entry.stage.id);
+      const box = flowBox({ ...entry.step, depth: 0 }, entry.key, color, entry === clicked ? 'selected' : '', words);
+      box.prepend(h('div', { class: 'st-path-stage', style: 'color:' + color }, stageNumber.get(entry.stage.id) + '. ' + entry.stage.name));
+      return { id: entry.ref, x: at.x, y: at.y, w: W, h: H, ref: entry.ref, content: box };
+    });
+    const name = ref => entries.find(entry => entry.ref === ref)?.step.symbol;
+    const edges = links.map(link => ({ ...link, hot: true, title: name(link.from) + ' calls ' + name(link.to) }));
+    const summary = (before.size ? plural(before.size, 'step') + ' lead here' : 'Nothing in this part calls it') + (after.size ? ' · it calls ' + plural(after.size, 'step') : '');
+    const bar = () => h('div', { class: 'st-flowbar' },
+      act('flowBack', {}, '← Whole part', { title: 'Back to every step of this part' }),
+      h('b', {}, 'Path of ' + clicked.step.symbol), muted(summary + '. Read left to right; click another box to follow its path.'));
+    ui.flowPlaces = { key: graphKey, hits: [] };
+    const canvas = graphView(graphKey, { nodes, edges, width: layout.width, height: layout.height, minHeight: 300, maxHeight: 760, minZoom: 0.7, label: 'Path of ' + clicked.step.symbol + ' in ' + part.name, aside: flowStepDetail(clicked.step), toolbar: bar });
+    return [ui.full === graphKey ? undefined : bar(), canvas, flowStepDetail(clicked.step)];
   }
   // Marks the words that matched, inside a box's text.
   function marked(text, words) {
@@ -899,6 +929,7 @@ function mountStages(root, post) {
       case 'partTab': ui.partTab = data.tab; render(); return;
       case 'flowHit': ui.flowHit = (ui.flowHit || 0) + Number(data.by); ui.flowStep = undefined; render(); jumpToHit(); return;
       case 'flowClear': ui.flowQuery = ''; ui.flowStep = undefined; render(); return;
+      case 'flowBack': ui.flowStep = undefined; render(); jumpToHit(); return;
       case 'flowStep': ui.flowStep = ui.flowStep === data.key || !data.key ? undefined : data.key; render(); return;
       case 'resetLayout': if (state.layouts) delete state.layouts[data.key]; delete ui.views[data.key]; send('layout', { key: data.key, reset: true }); render(); return;
       case 'fullGraph': ui.full = ui.full === data.key ? undefined : data.key; render(); return;
