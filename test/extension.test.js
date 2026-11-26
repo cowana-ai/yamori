@@ -1954,7 +1954,7 @@ test('the reader header names its actions plainly and the empty state offers the
   const html = panelHTML();
   elements.plan.events.click(); assert.equal(sent.at(-1).type, 'plan');
   elements.map.events.click(); assert.equal(sent.at(-1).type, 'map');
-  for (const label of ['Switch file…', 'Read', 'Map', 'Plan', 'Overview', 'Logic']) assert.ok(html.includes('>' + label + '<'), label);
+  for (const label of ['Switch file…', 'Read', 'File links', 'How it works', 'Plan', 'Overview', 'Logic']) assert.ok(html.includes('>' + label + '<'), label);
   assert.ok(!/▤|▦|>Detailed</.test(html), 'no cryptic icons or removed levels');
   receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', requestedModel: 'opus', level: 'logic' } } });
   assert.equal(elements['ai-summary'].textContent, 'AI: Claude Code · opus ▾');

@@ -370,6 +370,9 @@ test('a part opens on how it works, old maps say so, and one click maps a part a
     assert.deepEqual(flow[1].steps.map(step => step.symbol), ['triage_loop', 'reply']);
     // Which step calls which, for tracing a path on the diagram (built without AI).
     const calls = ctx.last().partCalls;
+    // Files know how many functions each step runs from them, to sit under the busiest step.
+    const inbox = ctx.last().partDetail.files.find(entry => entry.file === 'agents/email/inbox.py');
+    assert.deepEqual(inbox.counts, { [flow[0].id]: 1, [flow[1].id]: 1 });
     assert.deepEqual(calls['agents/email/run.py#triage_loop'].sort(), ['agents/email/inbox.py#fetch_unread', 'agents/email/inbox.py#reply', 'shared/llm.py#complete']);
     // A map made by an older mapper is flagged, and remapping it brings it up to date.
     const db = ctx.screen.dbFor(ctx.item);

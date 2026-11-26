@@ -1,10 +1,12 @@
-# System map
+# How it works (system map)
 
-The **System** tab (in Yamori's project panel, or the **System** button in Read) shows how the whole project works: its **parts** (each workflow, agent, server or tool), the few **steps** each part goes through, and how the parts work together. It is written in plain words; the code is there when you ask for it.
+The panel's tabs: **Files** (which files to read first), **File links** (which files use which, grouped by folder; formerly Map), **How it works** (formerly System) and **Chat & plan**.
+
+The **How it works** tab (in Yamori's project panel, or the **How it works** button in Read) shows how the whole project works: its **parts** (each workflow, agent, server or tool), the few **steps** each part goes through, and how the parts work together. It is written in plain words; the code is there when you ask for it.
 
 ## Map it
 
-Open the System tab and click **Map my system**. The tab says up front about how many small AI calls and tokens that takes. You never pick entry points:
+Open the How it works tab and click **Map my system**. The tab says up front about how many small AI calls and tokens that takes. You never pick entry points:
 
 1. Without AI, Yamori looks in every folder (two levels deep, so `agents/email` and `agents/sales` count separately) for functions that could start something: a function nothing else in its file calls, that reaches the most of the project, runs at startup, or is named like a starter (`main`, `run_*`, `*_loop`, handlers).
 2. One cheap AI call reads those candidates with the files' AI notes, decides which are real parts, names them, and says how they connect ("the web server starts the email helper"). It can only choose among the candidates, so it cannot invent code.
@@ -24,13 +26,13 @@ Mapping again with the same files makes no AI call. When files are added or remo
 
 ## Read it
 
-The map is a graph you can pan, zoom (scroll or + / −) and **Fit**. Drag any box to move it; its arrows follow, and it stays there (per graph) until **Reset layout**. **⤢ Enlarge** fills the panel with it (Esc or **Exit full view** to go back), **✕** closes it, and dragging its bottom edge makes it taller:
+The map is a graph you can pan, zoom (scroll or + / −) and **Fit**. Drag any box to move it; its arrows follow, and it stays there (per graph) until **Reset layout**. **⤢ Enlarge** fills the panel with it (Esc or **Exit full view** to go back), **✕** closes it, and dragging its bottom edge makes it taller. In full view, whatever you click (a step, a file) opens beside the diagram, and the search bar comes along:
 
 - **Parts** are boxes with what they do and their steps in order. Arrows say how parts work together ("asks to research each topic"); dashed arrows are code one part uses from another.
 - **Shared code** (for example a contracts package several parts import) is its own dashed box, linked to every part that uses it. Click it for its files and how they use each other.
 - Parts with no links sit in a row underneath.
 
-Click a part to open it below the map. It opens on **How it works**: every stage as a column, its steps top to bottom with what they call indented under them, and key behaviors on every box (◆ decisions and ⚠ stop conditions written out, badges for AI calls, files written, fallbacks and more). Click a box for everything about that step; the diagram also traces its path: the steps that lead to it (across stages) and what it calls light up, joined by bold arrows, and everything else fades. Click it again to clear.
+Click a part to open it below the map. It opens on **Steps**: every stage as a column, its steps top to bottom with what they call indented under them, and key behaviors on every box (◆ decisions and ⚠ stop conditions written out, badges for AI calls, files written, fallbacks and more). Click a box for everything about that step; the diagram also traces its path: the steps that lead to it (across stages) and what it calls light up, joined by bold arrows, and everything else fades. Click it again to clear.
 
 The search bar above the diagram finds steps as you type, for example `angle selection`: it reads what each step does, its key behaviors, function and file names, forgives word endings and one typo, and knows a few verbs that mean the same thing (select, pick, choose). Matched words are marked on the boxes, matching steps are outlined, and the diagram centers on the best one and traces how the part gets there. **Enter** (or ↓) goes to the next match, **Shift+Enter** (or ↑) back, **Esc** or **Clear** ends the search. Which step calls which comes from the part's call tree, built without AI.
 
@@ -40,7 +42,7 @@ A part mapped by an older version of Yamori says so, with **Map this part again*
 
 Inside a part:
 
-- **Its files, step by step**: one column per step in the order the work happens, then the code it uses from other folders. The helper files the steps use are folded into one box; click it to show them. Colors are steps. Click a file and its links light up.
+- **Files** (the part's second tab): one column per step of the part, in the order the work happens, then the code it uses from other folders. The columns are the part's own mapped steps, not a fixed list; each file sits under the step that runs most of its functions, and its color strip shows every step it serves. The helper files the steps use are folded into one box; click it to show them. Colors are steps. Click a file and its links light up.
 - **A file** shows what it is for, which steps of which parts use it, its pseudocode block by block when Yamori already wrote it (no AI call; each block's line range opens Read there), what it uses and what uses it, and its functions.
 - **A step** shows **How it works** as a diagram: its steps left to right, what each calls stacked under it, every box with its behavior badges and up to three decisions or stop conditions written on it. Click a box for all of that step's behaviors, with links to the line, Read and your terminal agent. The same steps are also listed in full under **All steps and behaviors as a list**.
 - Part boxes on the map count their key behaviors, for example "14 AI calls · 49 decisions · 19 writes".
@@ -48,11 +50,11 @@ Inside a part:
 
 ## Chat, plan and change things in the terminal
 
-Opening Yamori's project panel starts one agent session for the project in the VS Code terminal by itself, in the background (`yamori.chatAutoStart`); it uses no AI until you write to it. **Chat** (top of the System tab), **Show chat** (in System and in Plan), or **Yamori: Chat with Your Agent in the Terminal** brings it up: Claude Code or Codex, whichever Yamori uses. It stays open while you work; with Claude Code the same conversation resumes after VS Code restarts. You can enlarge the System map and chat beside it.
+Opening Yamori's project panel starts one agent session for the project in the VS Code terminal by itself, in the background (`yamori.chatAutoStart`); it uses no AI until you write to it. **Chat** (top of the How it works tab), **Show chat** (in How it works and in Plan), or **Yamori: Chat with Your Agent in the Terminal** brings it up: Claude Code or Codex, whichever Yamori uses. It stays open while you work; with Claude Code the same conversation resumes after VS Code restarts. You can enlarge a diagram and chat beside it.
 
-The session is connected to Yamori and knows what you are looking at: the file, line and selected text in the editor, the file open in Read, the Yamori tab, and the part, step or file you selected in the System map (MCP `get_view`). So "why does this retry?" works without naming the file. It reads the map and your notes (`list_stages`, `get_stage`), writes plans onto Yamori's **Plan** canvas (`save_plan`), and can bring a part, step, file or plan into view in Yamori (`show_in_yamori`). **Ask in terminal…** on a step or file opens the session with that step or file already on the prompt.
+The session is connected to Yamori and knows what you are looking at: the file, line and selected text in the editor, the file open in Read, the Yamori tab, and the part, step or file you selected in How it works (MCP `get_view`). So "why does this retry?" works without naming the file. It reads the map and your notes (`list_stages`, `get_stage`), writes plans onto Yamori's **Plan** canvas (`save_plan`), and can bring a part, step, file or plan into view in Yamori (`show_in_yamori`). **Ask in terminal…** on a step or file opens the session with that step or file already on the prompt.
 
-`yamori.chatInTerminal` (default on): turn it off to use the chat inside the Plan tab and the **What should change** box in System instead.
+`yamori.chatInTerminal` (default on): turn it off to use the chat inside the Plan tab and the **What should change** box in How it works instead.
 
 ## Review
 
@@ -68,7 +70,7 @@ Notes connect to Obsidian with nothing to set up:
 - Otherwise, if Obsidian is installed, they go to the vault Obsidian has open (or opened last), found in Obsidian's own list of vaults.
 - Otherwise they go to `.yamori/notes/` in the project. Notes written there move into the vault once Yamori finds one; nothing in the vault is overwritten.
 
-Notes update by themselves: when you open Yamori, save code, map, review, or ask your agent. The top of the System tab says where they are and when they last synced; click it for the folder, **Open in Obsidian** and **Show the folder**. **Update** also says what it did, including when nothing changed. `yamori.obsidian.vaultPath` picks a vault by hand; `yamori.obsidian.auto` turns the search off.
+Notes update by themselves: when you open Yamori, save code, map, review, or ask your agent. The top of the How it works tab says where they are and when they last synced; click it for the folder, **Open in Obsidian** and **Show the folder**. **Update** also says what it did, including when nothing changed. `yamori.obsidian.vaultPath` picks a vault by hand; `yamori.obsidian.auto` turns the search off.
 
 In the vault, under `Yamori/<repo>/`:
 
@@ -109,6 +111,6 @@ Changing the AI model or Yamori's prompts does not redo the map by itself.
 
 ## Storage
 
-`.yamori/yamori.db` (SQLite, git-ignored) holds the parts, their steps, how parts connect, file hashes, the review queue and the AI-use log. It is derived from code and can be deleted; your renames and merges are the only edits it keeps. The System tab needs the editor's built-in SQLite (VS Code 1.101 or newer).
+`.yamori/yamori.db` (SQLite, git-ignored) holds the parts, their steps, how parts connect, file hashes, the review queue and the AI-use log. It is derived from code and can be deleted; your renames and merges are the only edits it keeps. The How it works tab needs the editor's built-in SQLite (VS Code 1.101 or newer).
 
 Links from notes into the code use `vscode://cowana-ai.yamori/open?file=<path>&line=<n>`.

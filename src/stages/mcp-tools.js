@@ -82,7 +82,7 @@ function createStageTools({ root, requestStructured, now = () => Date.now() }) {
     list_stages({ graph }, { workflow }) {
       if (workflow) return summary(workflowOf(workflow), graph);
       const list = database().workflows();
-      if (!list.length) throw new Error('No map yet. The founder maps the system in Yamori (System tab).');
+      if (!list.length) throw new Error('No map yet. The founder maps the system in Yamori (How it works tab).');
       if (list.length === 1) return { system: database().meta('system_summary') || undefined, ...summary(list[0].id, graph) };
       const names = new Map(list.map(item => [item.id, item.name || item.id]));
       return { system: database().meta('system_summary') || undefined, systemNotes: vault().systemNotes() || '(none)',

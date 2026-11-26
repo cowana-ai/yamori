@@ -156,6 +156,11 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-zoom button { min-width: 28px; font-size: 12px; border: 1px solid var(--read-border); background: var(--read-surface); }
 #stages-view .st-zoom { align-items: center; }
 #stages-view .st-canvas { resize: vertical; min-height: 180px; }
+#stages-view .st-full-tools { position: absolute; left: 8px; top: 6px; max-width: calc(100% - 440px); z-index: 2; background: var(--read-page); border: 1px solid var(--read-border); padding: 4px 8px; }
+#stages-view .st-full-tools .st-muted { font-size: 12px; }
+#stages-view .st-full-tools .st-flowbar { margin: 0; }
+#stages-view .st-full-aside { position: absolute; right: 8px; top: 48px; bottom: 8px; width: min(440px, 42%); overflow: auto; background: var(--read-page); border: 1px solid var(--read-border); padding: 0 14px 12px; cursor: auto; z-index: 2; }
+#stages-view .st-full-aside .st-card, #stages-view .st-full-aside .st-detail { border: 0; margin: 0; padding: 0; }
 #stages-view .st-canvas.full { position: fixed; inset: 6px; z-index: 50; height: auto; resize: none; box-shadow: 0 8px 40px rgba(0,0,0,.45); background-color: var(--read-page); }
 #stages-view .st-full-title { margin-right: 10px; font-size: 13px; }
 #stages-view .st-canvas-hidden { display: flex; gap: 8px; align-items: center; margin: 8px 0; padding: 8px 10px; border: 1px dashed var(--read-border); }
@@ -328,7 +333,7 @@ function mountStages(root, post) {
   const chips = details => [...new Set((details || []).map(item => item.kind).filter(kind => kind !== 'other'))].slice(0, 4).map(kind => behaviorChip(kind, (details || []).filter(item => item.kind === kind).map(item => item.text).join('\n')));
 
   // --- an interactive graph: drag to pan, scroll to zoom, Fit to see it all ---
-  function graphView(key, { nodes, edges, width, height, minHeight = 260, maxHeight = 560, label, minZoom = 0.5 }) {
+  function graphView(key, { nodes, edges, width, height, minHeight = 260, maxHeight = 560, label, minZoom = 0.5, aside, toolbar }) {
     if (ui.hidden[key]) return h('div', { class: 'st-canvas-hidden' }, muted(label + ' is hidden.'), link('showGraph', { key }, 'Show it'));
     const full = ui.full === key, view = ui.views[key];
     const size = full ? '' : 'height:' + (ui.heights[key] || Math.max(minHeight, Math.min(maxHeight, height + 60))) + 'px';
@@ -366,7 +371,10 @@ function mountStages(root, post) {
       Object.keys(saved).length ? act('resetLayout', { key }, 'Reset layout', { title: 'Put the boxes back where Yamori placed them' }) : undefined,
       act('zoom', { key, by: 1.25 }, '+', { title: 'Zoom in' }), act('zoom', { key, by: 0.8 }, '−', { title: 'Zoom out' }), act('fit', { key }, 'Fit', { title: 'See everything' }),
       act('fullGraph', { key }, full ? 'Exit full view' : '⤢ Enlarge', { title: full ? 'Back to the page (Esc)' : 'Fill the whole panel' }),
-      full ? undefined : act('hideGraph', { key }, '✕', { title: 'Close this graph' })));
+      full ? undefined : act('hideGraph', { key }, '✕', { title: 'Close this graph' })),
+      // In full view, what you clicked shows beside the diagram instead of below it.
+      full && aside ? h('div', { class: 'st-full-aside' }, aside) : undefined,
+      full && toolbar ? h('div', { class: 'st-full-tools' }, toolbar()) : undefined);
     // Drag the bottom edge to make the graph taller or shorter; the height is kept.
     if (!full && typeof ResizeObserver === 'function') { let first = true; new ResizeObserver(() => { if (first) { first = false; return; } ui.heights[key] = box.clientHeight; }).observe(box); }
     const apply = v => layer.setAttribute('transform', 'translate(' + v.x.toFixed(1) + ' ' + v.y.toFixed(1) + ') scale(' + v.k.toFixed(3) + ')');
@@ -383,6 +391,7 @@ function mountStages(root, post) {
     let drag, moving;
     box.addEventListener('pointerdown', event => {
       if (event.button !== undefined && event.button !== 0) return;
+      if (event.target.closest?.('.st-full-aside, .st-full-tools')) return;
       // On a box: drag that box (a click without movement still opens it).
       const fo = event.target.closest?.('foreignObject.st-movable');
       if (fo && !event.target.closest('button:not(.st-node), a, input, textarea, select, .st-zoom')) {
@@ -416,6 +425,7 @@ function mountStages(root, post) {
     };
     box.addEventListener('pointerup', stop); box.addEventListener('pointercancel', stop);
     box.addEventListener('wheel', event => {
+      if (event.target.closest?.('.st-full-aside, .st-full-tools')) return;
       if (!event.ctrlKey && !event.metaKey && Math.abs(event.deltaY) < 40 && !event.altKey) { /* a trackpad scroll pans */ const v = ui.views[key] || { x: 0, y: 0, k: 1 }; ui.views[key] = { ...v, x: v.x - event.deltaX, y: v.y - event.deltaY }; apply(ui.views[key]); event.preventDefault(); return; }
       event.preventDefault();
       const v = ui.views[key] || { x: 0, y: 0, k: 1 }, rect = box.getBoundingClientRect(), px = event.clientX - rect.left, py = event.clientY - rect.top;
@@ -488,7 +498,7 @@ function mountStages(root, post) {
       part.outdated && !state.busy ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, 'This part was mapped before inner steps and key behaviors.'), ' ', muted('Map it again to see what every step calls, its decisions, AI calls and files on the diagram. About 1–2 minutes and a few cents with the cheap model.')),
         go('remapPart', { id: part.id }, 'Map this part again', { disabled: !!state.busy })) : undefined,
       h('div', { class: 'st-tabs', role: 'tablist' },
-        act('partTab', { tab: 'flow' }, 'How it works', { role: 'tab', 'aria-selected': String(ui.partTab !== 'files'), class: ui.partTab !== 'files' ? 'on' : '' }),
+        act('partTab', { tab: 'flow' }, 'Steps', { role: 'tab', 'aria-selected': String(ui.partTab !== 'files'), class: ui.partTab !== 'files' ? 'on' : '' }),
         act('partTab', { tab: 'files' }, 'Files', { role: 'tab', 'aria-selected': String(ui.partTab === 'files'), class: ui.partTab === 'files' ? 'on' : '' }),
         spacer(), part.outdated ? undefined : link('remapPart', { id: part.id }, 'Map this part again', { title: 'Re-plan the stages; unchanged functions reuse their saved descriptions' })),
       ui.partTab === 'files' ? [filesGraph(part, detail), detail.hidden ? h('p', { class: 'st-muted' }, plural(detail.hidden, 'more file') + ' in ' + detail.folder + ' are not shown.') : undefined] : partFlowView(part),
@@ -499,7 +509,11 @@ function mountStages(root, post) {
   function filesGraph(part, detail) {
     const W = 196, H = 62, GX = 64, GY = 12, MAX_SUPPORT = 0, focus = state.card?.id, file = state.file?.file;
     const byStep = new Map(part.stages.map(stage => [stage.id, []])), support = [];
-    for (const entry of detail.files) { const first = part.stages.find(stage => entry.steps.includes(stage.id)); (first ? byStep.get(first.id) : support).push(entry); }
+    // A file sits under the step that runs most of its functions (the earlier one on a tie).
+    for (const entry of detail.files) {
+      const counts = entry.counts || {}, home = part.stages.filter(stage => entry.steps.includes(stage.id)).reduce((best, stage) => !best || (counts[stage.id] || 1) > (counts[best.id] || 1) ? stage : best, undefined);
+      (home ? byStep.get(home.id) : support).push(entry);
+    }
     const linked = new Set(detail.edges.flatMap(edge => [edge.from, edge.to]));
     support.sort((a, b) => (linked.has(b.file) ? 1 : 0) - (linked.has(a.file) ? 1 : 0) || (b.entry ? 1 : 0) - (a.entry ? 1 : 0));
     const shownSupport = ui.allSupport ? support : support.slice(0, MAX_SUPPORT);
@@ -530,8 +544,8 @@ function mountStages(root, post) {
     const width = columns.length * (W + GX) - GX, height = 30 + Math.max(1, ...columns.map(column => column.items.length)) * (H + GY);
     const headers = heads.map(head => ({ id: 'head:' + head.x, fixed: true, x: head.x, y: 0, w: W, h: 24, content: h('div', { class: 'st-colhead', style: head.color ? 'border-bottom-color:' + head.color : undefined }, head.title) }));
     return h('div', { class: 'st-section' }, h('h3', {}, 'Its files, step by step'),
-      h('p', { class: 'st-muted st-hint' }, 'Each column is a step, in the order the work happens. Click a file to see what it does, what it uses, and to change it; its links light up.'),
-      graphView('part:' + part.id, { nodes: [...headers, ...placed], edges: drawn, width, height, minHeight: 260, maxHeight: 600, minZoom: 0.7, label: 'Files of ' + part.name }));
+      h('p', { class: 'st-muted st-hint' }, 'Each column is one of this part\'s steps, in the order the work happens; a file sits under the step that runs most of its code, and its color strip shows every step it serves. Click a file to see what it does and what it uses; its links light up.'),
+      graphView('part:' + part.id, { nodes: [...headers, ...placed], edges: drawn, width, height, minHeight: 260, maxHeight: 600, minZoom: 0.7, label: 'Files of ' + part.name, aside: state.file ? fileCard() : undefined }));
   }
   function fileNode(part, entry, selected, dim) {
     const colors = entry.steps.map(stage => stepColor(part.id, stage)).filter(Boolean);
@@ -552,7 +566,7 @@ function mountStages(root, post) {
     const drawn = box.edges.filter(edge => at.has(edge.from) && at.has(edge.to)).map(edge => ({ ...edge, title: fileName(edge.from) + ' uses ' + edge.names.join(', ') }));
     return h('section', { class: 'st-card' }, h('h2', {}, 'Shared code: ' + box.folder, spacer(), link('openShared', { id: '' }, 'Close')),
       h('p', {}, (box.about ? box.about + ' ' : '') + 'Used by ' + box.usedBy.map(partName).join(', ') + '.'),
-      graphView('shared:' + box.id, { nodes: placed, edges: drawn, width: layout.width, height: layout.height, minHeight: 220, maxHeight: 480, label: 'Files in ' + box.folder }),
+      graphView('shared:' + box.id, { nodes: placed, edges: drawn, width: layout.width, height: layout.height, minHeight: 220, maxHeight: 480, label: 'Files in ' + box.folder, aside: state.file ? fileCard() : undefined }),
       fileCard());
   }
 
@@ -633,15 +647,16 @@ function mountStages(root, post) {
     }
     if (!entries.length) return h('p', { class: 'st-muted' }, 'No steps mapped yet.');
     const width = flow.length * (W + GX) - GX, tall = Math.max(...nodes.map(node => node.y + node.h));
-    const canvas = graphView(graphKey, { nodes, edges, width, height: tall, minHeight: 360, maxHeight: 760, minZoom: 0.7, label: 'How ' + part.name + ' works' });
+    const bar = () => h('div', { class: 'st-flowbar' },
+        h('input', { id: 'st-flowsearch', type: 'search', placeholder: 'Find in this part, e.g. angle selection', value: ui.flowQuery || '', 'aria-label': 'Find steps in this part', autocomplete: 'off', spellcheck: 'false' }),
+        words.length ? muted(hits.length ? hits.length + (hits.length === 1 ? ' match' : ' matches') + (hits.length > 1 ? ' · ' + (((ui.flowHit || 0) % hits.length + hits.length) % hits.length + 1) + ' of ' + hits.length : '') : 'No match') : muted(ui.full === graphKey ? 'Click a box to trace its path.' : 'Type words from a step, a behavior, a function or a file. Click a box to trace its path.'),
+        hits.length > 1 ? [act('flowHit', { by: -1 }, '↑', { title: 'Previous match (Shift+Enter)' }), act('flowHit', { by: 1 }, '↓', { title: 'Next match (Enter)' })] : undefined,
+        words.length || clicked ? link('flowClear', {}, 'Clear') : undefined);
+    const canvas = graphView(graphKey, { nodes, edges, width, height: tall, minHeight: 360, maxHeight: 760, minZoom: 0.7, label: 'How ' + part.name + ' works', aside: clicked ? flowStepDetail(clicked.step) : undefined, toolbar: bar });
     // Where each box ended up (after any dragging), to jump to a match.
     ui.flowPlaces = { key: graphKey, hits: hits.map(hit => nodes.find(node => node.ref === hit.ref)).filter(Boolean).map(node => ({ x: node.x, y: node.y, w: node.w, h: node.h })) };
     const picked = clicked?.step;
-    return [h('div', { class: 'st-flowbar' },
-        h('input', { id: 'st-flowsearch', type: 'search', placeholder: 'Find in this part, e.g. angle selection', value: ui.flowQuery || '', 'aria-label': 'Find steps in this part', autocomplete: 'off', spellcheck: 'false' }),
-        words.length ? muted(hits.length ? hits.length + (hits.length === 1 ? ' match' : ' matches') + (hits.length > 1 ? ' · ' + ((ui.flowHit || 0) % hits.length + 1) + ' of ' + hits.length : '') : 'No match') : muted('Type words from a step, a behavior, a function or a file. Click a box to trace its path.'),
-        hits.length > 1 ? [act('flowHit', { by: -1 }, '↑', { title: 'Previous match (Shift+Enter)' }), act('flowHit', { by: 1 }, '↓', { title: 'Next match (Enter)' })] : undefined,
-        words.length || clicked ? link('flowClear', {}, 'Clear') : undefined),
+    return [ui.full === graphKey ? undefined : bar(),
       canvas, picked ? flowStepDetail(picked) : undefined];
   }
   // Marks the words that matched, inside a box's text.
@@ -683,7 +698,7 @@ function mountStages(root, post) {
     });
     const width = (column + 1) * (W + GX) - GX, tall = Math.max(...out.map(item => item.y + item.h));
     const picked = ui.flowStep?.startsWith(stage.id + ':') ? stage.steps[Number(ui.flowStep.slice(stage.id.length + 1))] : undefined;
-    return [graphView('flow:' + part + '/' + stage.id, { nodes: out, edges, width, height: tall, minHeight: 240, maxHeight: 640, minZoom: 0.75, label: 'How ' + stage.name + ' works' }), picked ? flowStepDetail(picked) : undefined];
+    return [graphView('flow:' + part + '/' + stage.id, { nodes: out, edges, width, height: tall, minHeight: 240, maxHeight: 640, minZoom: 0.75, label: 'How ' + stage.name + ' works', aside: picked ? flowStepDetail(picked) : undefined }), picked ? flowStepDetail(picked) : undefined];
   }
   // Everything about one step: what it does, every key behavior, and where it is.
   function flowStepDetail(step) {

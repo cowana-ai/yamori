@@ -287,10 +287,11 @@ function partDetail(db, graph, notes, workflowId) {
   const workflow = db.workflow(workflowId);
   if (!workflow) return undefined;
   const areas = areasOf(graph), areaOf = file => areas.find(area => inFolder(file, area.folder))?.folder;
-  const stepsByFile = new Map();
+  const stepsByFile = new Map(), counts = new Map();
   for (const stage of db.stages(workflowId)) for (const step of db.steps(workflowId, stage.id)) {
-    if (!stepsByFile.has(step.file)) stepsByFile.set(step.file, new Set());
+    if (!stepsByFile.has(step.file)) { stepsByFile.set(step.file, new Set()); counts.set(step.file, {}); }
     stepsByFile.get(step.file).add(stage.id);
+    counts.get(step.file)[stage.id] = (counts.get(step.file)[stage.id] || 0) + 1;
   }
   const own = workflow.folder ? (areas.find(area => area.folder === workflow.folder)?.files || []) : [];
   const candidates = [...new Set([...stepsByFile.keys(), workflow.entry_file, ...own])].filter(file => graph.files[file] && !graph.files[file].test);
@@ -310,7 +311,7 @@ function partDetail(db, graph, notes, workflowId) {
   return {
     id: workflowId, folder: workflow.folder || '', hidden: candidates.length - files.length,
     files: files.map(file => ({ file, name: file.split('/').at(-1), dir: file.split('/').slice(0, -1).join('/'), purpose: notes?.files?.[file]?.purpose || '', role: notes?.files?.[file]?.role || '',
-      steps: [...(stepsByFile.get(file) || [])], entry: file === workflow.entry_file, lines: graph.files[file].lines, alsoIn: usedElsewhere(file) })),
+      steps: [...(stepsByFile.get(file) || [])], counts: counts.get(file) || {}, entry: file === workflow.entry_file, lines: graph.files[file].lines, alsoIn: usedElsewhere(file) })),
     edges,
     outside: [...outside.values()].map(item => ({ id: item.id, folder: item.folder, files: [...item.files].sort(byPath).slice(0, 12), count: item.files.size, from: [...item.from] }))
   };
