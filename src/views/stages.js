@@ -441,7 +441,7 @@ function mountStages(root, post) {
       h('div', { class: 'st-row st-legend' }, muted('Steps:'), part.stages.map((stage, index) => act('openStage', { part: part.id, id: state.card?.id === stage.id ? '' : stage.id }, (index + 1) + '. ' + stage.name,
         { class: 'st-step' + (state.card?.id === stage.id ? ' open' : '') + (stage.stale ? ' stale' : '') + (stage.pending ? ' changed' : ''), style: 'border-left: 4px solid ' + stepColor(part.id, stage.id), title: stage.gist || '' }))),
       part.usedBy.length || part.uses.length ? h('p', { class: 'st-muted' }, [...part.usedBy.map(entry => partName(entry.from) + ' ' + entry.label + ' it'), ...part.uses.map(entry => 'it ' + entry.label + ' ' + partName(entry.to))].join(' · ')) : undefined,
-      part.outdated ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, 'This part was mapped before inner steps and key behaviors.'), ' ', muted('Map it again to see what every step calls, its decisions, AI calls and files on the diagram. About 1–2 minutes and a few cents with the cheap model.')),
+      part.outdated && !state.busy ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, 'This part was mapped before inner steps and key behaviors.'), ' ', muted('Map it again to see what every step calls, its decisions, AI calls and files on the diagram. About 1–2 minutes and a few cents with the cheap model.')),
         go('remapPart', { id: part.id }, 'Map this part again', { disabled: !!state.busy })) : undefined,
       h('div', { class: 'st-tabs', role: 'tablist' },
         act('partTab', { tab: 'flow' }, 'How it works', { role: 'tab', 'aria-selected': String(ui.partTab !== 'files'), class: ui.partTab !== 'files' ? 'on' : '' }),
@@ -760,7 +760,7 @@ function mountStages(root, post) {
       state.busy ? h('p', { class: 'st-notice' }, state.busy) : undefined,
       state.notice ? h('p', { class: 'st-notice' }, state.notice) : undefined,
       sys?.newFiles ? h('p', { class: 'st-notice' }, 'Files were added or removed since the map was made. ', link('buildSystem', {}, 'Update the map')) : undefined,
-      sys && sys.parts.some(part => part.outdated) ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, plural(sys.parts.filter(part => part.outdated).length, 'part') + ' mapped the old way.'), ' ', muted('Map them again to see inner steps, decisions, AI calls and files on the diagrams. A few cents with the cheap model; unchanged functions are reused.')),
+      sys && !state.busy && sys.parts.some(part => part.outdated) ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, plural(sys.parts.filter(part => part.outdated).length, 'part') + ' mapped the old way.'), ' ', muted('Map them again to see inner steps, decisions, AI calls and files on the diagrams. A few cents with the cheap model; unchanged functions are reused.')),
         go('upgradeParts', {}, 'Upgrade all parts', { disabled: !!state.busy })) : undefined];
     if (!sys) return [header(), h('div', { class: 'st-top st-plain' }, notices), activity(), empty()];
     return [header(), notesPanel(), h('div', { class: 'st-top' }, sys.summary ? h('p', { class: 'st-summary' }, sys.summary) : undefined, notices, reviewBar(), state.terminalChat ? chatBar() : steerBox()),
