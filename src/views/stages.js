@@ -646,7 +646,7 @@ function mountStages(root, post) {
       default: send(name, { part: data.part, stage: data.stage });
     }
   });
-  root.ownerDocument.addEventListener('keydown', event => { if (event.key === 'Escape' && ui.full) { ui.full = undefined; render(); } });
+  doc?.addEventListener?.('keydown', event => { if (event.key === 'Escape' && ui.full) { ui.full = undefined; render(); } });
   root.addEventListener('keydown', event => {
     if (event.target.id === 'st-intent' && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); ask(); return; }
     if ((event.key === 'Enter' || event.key === ' ') && event.target.matches?.('.st-node[data-act]')) { event.preventDefault(); event.target.click(); }
