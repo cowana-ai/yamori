@@ -6,6 +6,7 @@
 - **Stage review.** Behavior changes appear as one plain sentence per stage, then the pseudocode in red and green, then the code diff from the map's base commit. Approve or reject with an optional why; the next change is compared with what you accepted.
 - **Stage notes in Obsidian.** Each card has a note box. Notes sync to `yamori.obsidian.vaultPath` (or `.yamori/notes/`) as stage notes, file notes, an index and a dated change log. Yamori rewrites only its managed section; renaming a stage in front matter pins it.
 - **Stages for agents.** The MCP server adds `list_stages`, `get_stage`, `what_changed` (no model calls), `add_note`, `done`, and a rate-limited, budgeted `propose_change`. Connect also registers Yamori with Cursor when it is installed.
+- **Steer a stage.** State an intent on a stage card to preview a multi-file change (main model, the stage's own code only, your notes as constraints), apply it to every file or none, and undo it. Or leave the intent in the stage's notes for your next agent run.
 
 ### 0.27.1 · 2026-11-26
 

@@ -1331,7 +1331,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   }
   // What the stage screen needs from the project map: the same graph, notes
   // and pseudocode cache, without another scan or store.
-  let stageBaseProvider;
+  let stageBaseProvider, stageProposals;
   const stageSupport = {
     entryFor, entryForFile,
     relative: (entry, uri) => relative(entry.root.fsPath, uri.fsPath),
@@ -1376,6 +1376,27 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       const left = api.Uri.from({ scheme: 'yamori-stage-base', path: '/' + rel, query: new URLSearchParams({ root: entry.root.fsPath, sha: base, file: rel }).toString() });
       const at = Math.max(0, (Number(line) || 1) - 1);
       await api.commands.executeCommand('vscode.diff', left, target, path.basename(rel) + ' · ' + base.slice(0, 7) + ' → working tree', { preview: true, selection: new api.Range(at, 0, at, 0) });
+    },
+    fileUri: (entry, rel) => fileUri(entry, rel),
+    isDirty: (entry, rel) => !!(api.workspace.textDocuments || []).find(doc => doc.uri.scheme === 'file' && doc.isDirty && relative(entry.root.fsPath, doc.uri.fsPath) === rel),
+    // Steer writes only mapped files, through a real path inside the project.
+    async writeSource(entry, rel, text) {
+      if (!entry.graph?.files[rel]) throw new Error(rel + ' is not in the project map.');
+      const root = await fs.realpath(entry.root.fsPath), real = await fs.realpath(path.join(entry.root.fsPath, ...rel.split('/')));
+      if (!relative(root, real)) throw new Error(rel + ' resolves outside the project.');
+      await fs.writeFile(real, text);
+    },
+    // The proposed text beside the file, in VS Code's diff editor.
+    async openProposed(entry, rel, text, title) {
+      if (!stageProposals) {
+        stageProposals = new Map();
+        const provider = api.workspace.registerTextDocumentContentProvider?.('yamori-steer', { provideTextDocumentContent: uri => stageProposals.get(uri.query) ?? '' });
+        if (provider) context.subscriptions.push(provider);
+      }
+      const key = String(Date.now()) + Math.random().toString(36).slice(2, 6);
+      stageProposals.set(key, text);
+      if (stageProposals.size > 20) stageProposals.delete(stageProposals.keys().next().value);
+      await api.commands.executeCommand('vscode.diff', fileUri(entry, rel), api.Uri.from({ scheme: 'yamori-steer', path: '/' + rel, query: key }), path.basename(rel) + ' · proposed: ' + String(title || 'steer').slice(0, 60), { preview: true });
     },
     requestStructured
   };

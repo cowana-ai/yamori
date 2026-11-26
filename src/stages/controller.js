@@ -11,6 +11,8 @@ const stages = require('./generate');
 const { createStageScheduler } = require('./scheduler');
 const review = require('./review');
 const { Vault } = require('./vault');
+const steer = require('./steer');
+const { lineDiff } = require('../views/stages');
 const { stagesHTML } = require('../views/stages');
 
 function createStages({ api, context, map, setting, gitOperationInProgress, extensions = {} }) {
@@ -106,6 +108,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (card) { const notes = vaultFor(item).stageNotes(item.workflowId, card.id); card.notes = notes.text; card.noteFile = !!notes.file; }
     const extra = extensions.state?.(item, { db, graph, workflow, card }) || {};
     extra.vault = { dir: vaultFor(item).dir, obsidian: vaultFor(item).obsidian };
+    if (item.steer && card && item.steer.stageId === card.id) extra.steer = steerState(item.steer);
     const lineOf = (file, symbol) => { const def = stages.symbolsOf(graph.files[file]).find(item => item.name === symbol); return def ? def.start || def.line : 1; };
     const queue = workflow ? review.reviewQueue(db, item.workflowId).map(change => ({ ...change, detail: change.detail && { ...change.detail, steps: (change.detail.steps || []).map(step => ({ ...step, line: lineOf(step.file, step.symbol) })) } })) : [];
     return { ...base, workflows, workflow, card, queue, outdated: !!status.outdated, activity: activity(db), ...extra };
@@ -133,7 +136,54 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     });
     return item;
   }
-  const MUTATIONS = new Set(['rename', 'pin', 'merge', 'move', 'decide', 'refresh', 'refreshStage']);
+  // Compact hunks for the preview: changed lines with two lines of context.
+  function hunks(before, after) {
+    const lines = lineDiff(before, after), keep = new Set();
+    lines.forEach((line, index) => { if (line.kind !== 'same') for (let i = Math.max(0, index - 2); i <= Math.min(lines.length - 1, index + 2); i++) keep.add(i); });
+    const out = []; let last = -2;
+    for (const index of [...keep].sort((a, b) => a - b)) { if (index > last + 1 && out.length) out.push({ kind: 'gap', text: '…' }); out.push(lines[index]); last = index; }
+    return out;
+  }
+  function steerState(value) {
+    return { stageId: value.stageId, phase: value.phase, intent: value.intent, message: value.message || '',
+      summary: value.preview?.summary || value.applied?.summary || '',
+      files: (value.preview?.files || []).map(item => ({ file: item.file, edits: item.edits, hunks: hunks(item.before, item.after) })),
+      applied: value.applied ? value.applied.files.map(item => item.file) : [] };
+  }
+  const steerIO = item => ({ read: file => map.readSource(item.entry, file), write: (file, text) => map.writeSource(item.entry, file, text) });
+  async function steerPreview(item, stageId, intent) {
+    const db = dbFor(item), view = stages.stageView(db, item.entry.graph, item.entry.explanations, item.workflowId, stageId);
+    if (!view) throw new Error('No such stage.');
+    item.steerController?.abort();
+    const controller = item.steerController = new AbortController();
+    const { provider, model, request: send } = await request('main');
+    item.steer = { stageId, intent, phase: 'previewing' }; post(item);
+    try {
+      const preview = await steer.previewSteer({ db, view, notes: vaultFor(item).stageNotes(item.workflowId, stageId).text, intent, io: steerIO(item), request: send, run: createRun(db, { budget: budget(), trigger: 'stages.steer' }), provider, model, workflowId: item.workflowId, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      item.steer = { stageId, intent, phase: preview.files.length ? 'preview' : 'empty', preview, message: preview.files.length ? '' : preview.summary || 'No change was proposed.' };
+    } catch (error) {
+      if (!controller.signal.aborted) item.steer = { stageId, intent, phase: 'error', message: error.message };
+    }
+  }
+  async function steerApply(item) {
+    const preview = item.steer?.preview;
+    if (!preview) throw new Error('Preview a change first.');
+    const dirty = preview.files.filter(file => map.isDirty(item.entry, file.file)).map(file => file.file);
+    if (dirty.length) throw new Error('Save or revert ' + dirty.join(', ') + ' first: the preview is based on the saved file.');
+    const applied = await steer.applyAtomic(preview, steerIO(item));
+    item.steer = { stageId: preview.stageId, intent: preview.intent, phase: 'applied', applied };
+    // The applied change goes through the normal update and review.
+    for (const file of applied.files) await saved(map.fileUri(item.entry, file.file));
+  }
+  async function steerUndo(item) {
+    const applied = item.steer?.applied;
+    const files = await steer.undoAtomic(applied, steerIO(item));
+    item.steer = { stageId: item.steer.stageId, intent: item.steer.intent, phase: 'undone', message: 'Undone: ' + files.join(', ') + ' are back as they were.' };
+    for (const file of files) await saved(map.fileUri(item.entry, file));
+  }
+
+  const MUTATIONS = new Set(['rename', 'pin', 'merge', 'move', 'decide', 'refresh', 'refreshStage', 'steerIntent']);
   async function receive(item, message) {
     if (!message || typeof message.type !== 'string') return;
     await handle(item, message);
@@ -183,6 +233,19 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       case 'openNote': {
         const file = vaultFor(item).findStageNote(wf, message.stage) || (sync(item), vaultFor(item).findStageNote(wf, message.stage));
         if (file) await api.window.showTextDocument(await api.workspace.openTextDocument(api.Uri.file(file)), { preview: true, viewColumn: api.ViewColumn.Beside });
+        break;
+      }
+      case 'steerPreview': await steerPreview(item, message.stage, typeof message.intent === 'string' ? message.intent : ''); break;
+      case 'steerApply': await steerApply(item); break;
+      case 'steerUndo': await steerUndo(item); break;
+      case 'steerCancel': item.steerController?.abort(); item.steer = undefined; break;
+      case 'steerDiff': { const file = item.steer?.preview?.files.find(entry => entry.file === message.file); if (file) await map.openProposed(item.entry, file.file, file.after, item.steer.preview.summary); break; }
+      // Leave the intent for the next agent run instead (no model call).
+      case 'steerIntent': {
+        const text = typeof message.intent === 'string' ? message.intent.trim() : '';
+        if (!text) break;
+        vaultFor(item).addNote(db(), wf, message.stage, 'Intent for the next run: ' + text, { author: 'You' });
+        item.steer = { stageId: message.stage, intent: '', phase: 'saved', message: 'Saved as an intent in this stage\'s notes. Agents see it in get_stage.' };
         break;
       }
       case 'markReviewed': review.markReviewed(db(), wf, await head(item)); break;
@@ -315,7 +378,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     saved, updateChanged, post, state, projectFor, dbFor, vaultFor, sync, vaultChanged, request, budget, busy,
     // An agent finished a run (MCP `done`): summarize once, now.
     agentDone(entry) { projectFor(entry).scheduler.done(); },
-    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.doneWatch?.close(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); item.panel?.dispose(); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
+    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.steerController?.abort(); item.doneWatch?.close(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); item.panel?.dispose(); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
   };
 }
 

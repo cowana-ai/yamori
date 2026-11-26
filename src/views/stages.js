@@ -34,14 +34,16 @@ button:disabled { opacity: .5; cursor: default; }
 button.link { background: none; color: var(--vscode-textLink-foreground); padding: 0 2px; }
 input, textarea, select { font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 4px 6px; }
 textarea { width: 100%; box-sizing: border-box; min-height: 48px; resize: vertical; }
-header { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0 8px; background: var(--vscode-editor-background); border-bottom: 1px solid var(--vscode-panel-border); }
+.top { position: sticky; top: 0; z-index: 2; background: var(--vscode-editor-background); border-bottom: 1px solid var(--vscode-panel-border); }
+header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0 8px; }
 header h1 { font-size: 14px; margin: 0 8px 0 0; font-weight: 600; }
-header .spacer { flex: 1; }
+.spacer { flex: 1; }
 .muted { color: var(--vscode-descriptionForeground); }
 .error { color: var(--vscode-errorForeground); margin: 8px 0; }
 .notice { margin: 8px 0; padding: 6px 10px; border-radius: 4px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border); }
 .reviewbar { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; padding: 6px 10px; border-radius: 4px; background: var(--vscode-inputValidation-infoBackground, var(--vscode-editorWidget-background)); border: 1px solid var(--vscode-inputValidation-infoBorder, var(--vscode-panel-border)); }
 .graph { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 14px 2px 10px; }
+@media (max-height: 520px) { .top { position: static; } }
 .stage { position: relative; flex: 0 0 190px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); cursor: pointer; text-align: left; color: inherit; }
 .stage:hover, .stage:focus-visible { border-color: var(--vscode-focusBorder); outline: none; }
 .stage.open { border-color: var(--vscode-focusBorder); box-shadow: 0 0 0 1px var(--vscode-focusBorder) inset; }
@@ -159,7 +161,27 @@ function notesSection(stage) {
     '<button class="primary" data-act="addNote" data-stage="' + esc(stage.id) + '">Save note</button>' +
     '<button class="link" data-act="openNote" data-stage="' + esc(stage.id) + '">Open in ' + where + '</button></div></div>';
 }
-function steerSection() { return ''; }
+function steerSection(stage) {
+  const steer = state.steer && state.steer.stageId === stage.id ? state.steer : undefined;
+  let html = '<div class="section"><h3>Steer · what should this stage do differently?</h3>';
+  if (!steer || ['error', 'empty', 'saved', 'undone'].includes(steer.phase)) {
+    if (steer?.message) html += '<p class="' + (steer.phase === 'error' ? 'error' : 'notice') + '">' + esc(steer.message) + '</p>';
+    html += '<div class="tools"><textarea id="intent" aria-label="Intent" placeholder="For example: retry a failed tool call twice before giving up">' + esc(ui.intentDraft || '') + '</textarea>' +
+      '<button class="primary" data-act="steerPreview" data-stage="' + esc(stage.id) + '" title="One main-model call; sends this stage’s functions and your notes">Preview change</button>' +
+      '<button data-act="steerIntent" data-stage="' + esc(stage.id) + '" title="No model call: your next agent run reads it in get_stage">Leave for my agent</button></div>';
+    return html + '</div>';
+  }
+  if (steer.phase === 'previewing') return html + '<p class="notice">Writing a preview for “' + esc(steer.intent) + '”…</p><div class="tools"><button data-act="steerCancel">Stop</button></div></div>';
+  if (steer.phase === 'preview') {
+    html += '<p style="font-size:14px;margin:4px 0">' + esc(steer.summary) + '</p><p class="muted">' + steer.files.length + ' file' + (steer.files.length === 1 ? '' : 's') + ' · applied together or not at all · you can undo</p>';
+    html += steer.files.map(file => '<div style="margin-top:8px"><button class="chip" data-act="steerDiff" data-file="' + esc(file.file) + '" title="Open in the diff editor">' + esc(file.file) + '</button>' +
+      file.edits.filter(edit => edit.why).map(edit => '<div class="muted">L' + edit.startLine + (edit.endLine > edit.startLine ? '–' + edit.endLine : '') + ': ' + esc(edit.why) + '</div>').join('') +
+      '<pre class="diff">' + file.hunks.map(line => '<span class="' + line.kind + '">' + (line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  ') + esc(line.text) + '</span>').join('') + '</pre></div>').join('');
+    return html + '<div class="tools"><button class="primary" data-act="steerApply">Apply to ' + steer.files.length + ' file' + (steer.files.length === 1 ? '' : 's') + '</button><button data-act="steerCancel">Discard</button></div></div>';
+  }
+  if (steer.phase === 'applied') return html + '<p class="notice">Applied: ' + esc(steer.summary) + ' (' + steer.applied.map(esc).join(', ') + '). The stage updates and the change appears in Review.</p><div class="tools"><button data-act="steerUndo">Undo</button><button class="link" data-act="steerCancel">Done</button></div></div>';
+  return html + '</div>';
+}
 function activity() {
   if (!ui.activity || !state.activity) return '';
   const { total, calls, day } = state.activity;
@@ -178,8 +200,8 @@ function body() {
   if (state.outdated) html += '<p class="notice">The stage model or prompt changed since these stages were made. They still work; <button class="link" data-act="regenerate">regenerate</button> when you want.</p>';
   html += reviewBar();
   if (!state.workflow) html += '<div class="empty"><p>No stages yet. Pick where a workflow starts (for example the function that runs your agent loop); Yamori groups the code it reaches into 3–7 stages from its AI notes.</p><button class="primary" data-act="fromEntry">Choose an entry point…</button></div>';
-  html += activity() + graph() + reviewPanel() + card();
-  return html;
+  // The graph stays in view while a card or the review is open below it.
+  return '<div class="top">' + html + graph() + '</div>' + activity() + reviewPanel() + card();
 }
 function reviewBar() {
   const queue = state.queue || [];
@@ -238,11 +260,13 @@ function handleAction(act, target) {
     case 'cancelWhy': ui.why = undefined; save(); render(); return true;
     case 'saveWhy': send('decide', { id: ui.why.id, status: ui.why.status, why: document.getElementById('why')?.value || '' }); ui.why = undefined; save(); return true;
     case 'addNote': { const text = document.getElementById('note')?.value || ''; if (!text.trim()) return true; send('addNote', { stage: target.dataset.stage, text }); ui.noteDraft = ''; save(); return true; }
+    case 'steerPreview': case 'steerIntent': { const intent = document.getElementById('intent')?.value || ''; if (!intent.trim()) return true; send(act, { stage: target.dataset.stage, intent }); if (act === 'steerIntent') ui.intentDraft = ''; save(); return true; }
+    case 'steerDiff': send('steerDiff', { file: target.dataset.file }); return true;
     case 'diff': send('diff', { id: Number(target.dataset.id), file: target.dataset.file, line: Number(target.dataset.line) }); return true;
   }
   return false;
 }
-document.addEventListener('input', event => { if (event.target.id === 'note') { ui.noteDraft = event.target.value; save(); } });
+document.addEventListener('input', event => { if (event.target.id === 'note') { ui.noteDraft = event.target.value; save(); } if (event.target.id === 'intent') { ui.intentDraft = event.target.value; save(); } });
 document.addEventListener('toggle', event => { const id = event.target.dataset?.expand; if (id) { ui.expanded = { ...(ui.expanded || {}), [id]: event.target.open }; save(); } }, true);
 window.addEventListener('message', event => {
   const message = event.data;

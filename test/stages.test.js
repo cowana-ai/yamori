@@ -279,3 +279,50 @@ test('vault: managed sections are rewritten, free sections survive, renames pin,
     assert.match(merged, /<!-- yamori:end -->\n\nhello$/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('steer: previews with the main model on the stage\'s own code, rejects edits outside it, and applies or undoes atomically', { skip }, async () => {
+  const fs = require('node:fs');
+  const steer = require('../src/stages/steer');
+  const ctx = await setup(), model = fakeModel(() => STAGES);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  const view = stages.stageView(ctx.db, ctx.graph, ctx.explanations, workflowId, 'act');
+  const files = new Map(['agent/actor.py', 'agent/tools.py'].map(file => [file, fs.readFileSync(path.join(FIXTURE, file), 'utf8')]));
+  let failWrite;
+  const io = { read: async file => files.get(file), write: async (file, text) => { if (failWrite === file) throw new Error('disk full'); files.set(file, text); } };
+  const prompts = [];
+  const reply = value => async ({ prompt, tier }) => { prompts.push({ prompt, tier }); return { raw: JSON.stringify(value), usage: { input: 2000, output: 300 }, model: 'main-model' }; };
+  const good = { summary: 'Act retries a failed tool call once.', edits: [
+    { file: 'agent/actor.py', startLine: 8, endLine: 9, replacement: 'def run_step(step):\n    result = call_tool("search", step)\n    return result or call_tool("search", step)', why: 'Retry once.' },
+    { file: 'agent/tools.py', startLine: 2, endLine: 2, replacement: '    return {"tool": name, "argument": argument, "ok": True}', why: 'Report success.' }] };
+  const preview = await steer.previewSteer({ db: ctx.db, view, notes: 'Never call paid tools twice.', intent: 'retry failed tools', io, request: reply(good), run: runFor(ctx.db), provider: 'claude', model: 'main-model', workflowId });
+  assert.equal(prompts[0].tier, 'main'); assert.match(prompts[0].prompt, /Never call paid tools twice/); assert.match(prompts[0].prompt, /8: def run_step\(step\):/);
+  assert.doesNotMatch(prompts[0].prompt, /PLAN_PROMPT/, 'only this stage\'s code is sent');
+  assert.deepEqual(preview.files.map(file => file.file), ['agent/actor.py', 'agent/tools.py']);
+  assert.equal(ctx.db.calls({})[0].trigger, 'stages.steer');
+  // Out of range, or overlapping: no preview.
+  await assert.rejects(steer.previewSteer({ db: ctx.db, view, intent: 'x', io, request: reply({ summary: 's', edits: [{ file: 'agent/planner.py', startLine: 1, endLine: 1, replacement: 'import os', why: '' }] }), run: runFor(ctx.db), workflowId }), /outside this stage's code/);
+  await assert.rejects(steer.previewSteer({ db: ctx.db, view, intent: 'x', io, request: reply({ summary: 's', edits: [{ file: 'agent/tools.py', startLine: 1, endLine: 4, replacement: 'x', why: '' }] }), run: runFor(ctx.db), workflowId }), /outside this stage's code \(lines 1-4\)/);
+  await assert.rejects(steer.previewSteer({ db: ctx.db, view, intent: 'x', io, request: reply({ summary: 's', edits: [good.edits[0], { ...good.edits[0], startLine: 9 }] }), run: runFor(ctx.db), workflowId }), /overlapping/);
+  // A failed write restores the files already written.
+  failWrite = 'agent/tools.py';
+  const original = new Map(files);
+  await assert.rejects(steer.applyAtomic(preview, io), /Every file is as it was/);
+  assert.deepEqual(files, original);
+  failWrite = undefined;
+  const applied = await steer.applyAtomic(preview, io);
+  assert.match(files.get('agent/actor.py'), /return result or call_tool/); assert.match(files.get('agent/tools.py'), /"ok": True/);
+  await assert.rejects(steer.applyAtomic(preview, io), /changed since the preview/);
+  assert.deepEqual(await steer.undoAtomic(applied, io), ['agent/actor.py', 'agent/tools.py']);
+  assert.deepEqual(files, original);
+  // Undo refuses once a file was edited after the apply.
+  const again = await steer.applyAtomic(preview, io);
+  files.set('agent/tools.py', files.get('agent/tools.py') + '\n# edited');
+  await assert.rejects(steer.undoAtomic(again, io), /edited after the change/);
+  assert.match(files.get('agent/actor.py'), /return result or call_tool/, 'a refused undo changes nothing');
+});
+
+test('the stage screen script parses', () => {
+  const html = require('../src/views/stages').stagesHTML();
+  const script = /<script nonce="[^"]+">([\s\S]*)<\/script>/.exec(html)[1];
+  assert.doesNotThrow(() => new Function(script));
+});

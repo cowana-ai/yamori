@@ -14,6 +14,14 @@ Run **Yamori: Map Stages from Entry Point** and pick the function where the work
 - **Steps across files:** each function, a chip that opens the source line, **File Flow** (the file in Read, at that step), and its cached pseudocode.
 - **Rename, Pin, Merge, Move to…:** your changes pin the stage. Regeneration keeps pinned stages exactly as you left them. **Move to… → New stage** splits a stage.
 
+## Steer
+
+Each card has a **Steer** box: say what the stage should do differently. **Preview change** makes one main-model call. It sends only this stage's functions (bounded, with a few lines of context) and your notes as constraints, and returns edits across those files. The preview shows a plain sentence, why each edit is there and the red/green lines; a file chip opens it in the diff editor.
+
+**Apply** writes every file or none: if a file changed since the preview, nothing is written. Files must be saved first. The applied change then goes through the normal update and shows up in Review. **Undo** restores every file, unless one was edited after the change.
+
+**Leave for my agent** saves the intent in the stage's notes instead (no model call). Your next Claude Code, Codex or Cursor run sees it in `get_stage`.
+
 ## Updates and cost
 
 Opening the screen, a card or pseudocode never calls a model: it reads `.yamori/yamori.db` and the pseudocode cache.

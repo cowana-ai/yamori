@@ -44,9 +44,13 @@ async function setup(answers) {
     rescanFiles: async (value, files) => { value.graph = await project.includeSourceFiles(root, value.graph, files, new project.Indexer()); return value; },
     readSource: async (_entry, rel) => fs.readFileSync(path.join(root, rel), 'utf8'),
     reveal: async () => {}, openFlow: async () => {}, gitHead: async () => 'abc123',
+    fileUri: (_entry, rel) => ({ scheme: 'file', fsPath: path.join(root, ...rel.split('/')) }),
+    isDirty: () => false, openProposed: async () => {},
+    writeSource: async (_entry, rel, text) => fs.writeFileSync(path.join(root, rel), text),
     connection: async tier => ({ provider: 'claude', model: tier === 'main' ? 'main-model' : 'cheap-model' }),
     requestStructured: async ({ prompt }) => {
       calls.push(prompt);
+      if (/steer writer/.test(prompt)) return { raw: JSON.stringify({ summary: 'Act retries a failed step once.', edits: [{ file: 'agent/actor.py', startLine: 9, endLine: 9, replacement: '    return call_tool("search", step) or call_tool("search", step)', why: 'Retry once.' }] }), usage: { input: 3000, output: 200 }, actualModel: 'main-model' };
       const refresh = /Code behind one stage changed/.test(prompt);
       const value = refresh
         ? { name: 'Act', gist: 'Run steps.', input: 'steps', output: 'results', steps: [{ file: 'agent/actor.py', symbol: 'act' }, { file: 'agent/actor.py', symbol: 'run_step' }], behaviorChanged: true, summary: 'Act now runs every step twice.' }
@@ -113,4 +117,36 @@ test('rename from the card pins the stage', { skip }, async () => {
     assert.equal(act.name, 'Use tools'); assert.ok(act.pinned);
     assert.equal(generate.workflowView(db, ctx.entry.graph, 'run-agent').stages[1].pinned, true);
   } finally { ctx.cleanup(); }
+});
+
+test('steer from the card: preview, apply to disk, review the result, then undo', { skip }, async () => {
+  const saved = { ...timing };
+  Object.assign(timing, { delay: 10, idle: 30 });
+  const ctx = await setup({});
+  try {
+    await ctx.screen.fromEntry(ctx.entry, { file: 'main.py', symbol: 'run_agent' });
+    const send = message => ctx.panels[0].handlers.message(message);
+    await send({ type: 'openStage', id: 'act' });
+    await send({ type: 'steerPreview', stage: 'act', intent: 'retry failed steps' });
+    let state = ctx.posted.at(-1).state;
+    assert.equal(state.steer.phase, 'preview'); assert.equal(state.steer.files[0].file, 'agent/actor.py');
+    assert.ok(state.steer.files[0].hunks.some(line => line.kind === 'add' && /or call_tool/.test(line.text)));
+    const call = state.activity.calls.find(row => row.trigger === 'stages.steer');
+    assert.equal(call.model, 'main-model', 'steer uses the main model');
+    const file = path.join(ctx.root, 'agent', 'actor.py'), original = fs.readFileSync(file, 'utf8');
+    await send({ type: 'steerApply' });
+    assert.match(fs.readFileSync(file, 'utf8'), /or call_tool/);
+    await new Promise(resolve => setTimeout(resolve, 60)); await ctx.screen.projectFor(ctx.entry).scheduler.running;
+    state = ctx.screen.state(ctx.screen.projectFor(ctx.entry));
+    assert.equal(state.queue.length, 1, 'the applied change enters review'); assert.equal(state.queue[0].stage_id, 'act');
+    await send({ type: 'openStage', id: 'act' });
+    await send({ type: 'steerUndo' });
+    assert.equal(fs.readFileSync(file, 'utf8'), original);
+    assert.equal(ctx.posted.at(-1).state.steer.phase, 'undone');
+    // Leaving the intent for an agent writes a note and calls no model.
+    const before = ctx.calls.length;
+    await send({ type: 'steerIntent', stage: 'act', intent: 'Prefer cached tool results.' });
+    assert.equal(ctx.calls.length, before);
+    assert.match(ctx.posted.at(-1).state.card.notes, /Intent for the next run: Prefer cached tool results\./);
+  } finally { Object.assign(timing, saved); ctx.cleanup(); }
 });
