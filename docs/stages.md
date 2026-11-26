@@ -14,7 +14,7 @@ Mapping again with the same files makes no AI call. When files are added or remo
 
 ## Read it
 
-The map is a graph you can drag, zoom (scroll or + / −) and **Fit**:
+The map is a graph you can drag, zoom (scroll or + / −) and **Fit**. **⤢ Enlarge** fills the panel with it (Esc or **Exit full view** to go back), **✕** closes it, and dragging its bottom edge makes it taller:
 
 - **Parts** are boxes with what they do and their steps in order. Arrows say how parts work together ("asks to research each topic"); dashed arrows are code one part uses from another.
 - **Shared code** (for example a contracts package several parts import) is its own dashed box, linked to every part that uses it. Click it for its files and how they use each other.
@@ -22,8 +22,8 @@ The map is a graph you can drag, zoom (scroll or + / −) and **Fit**:
 
 Click a part to open it below the map, which stays in view:
 
-- **Its files, step by step**: one column per step in the order the work happens, then the supporting files and the code it uses from other folders. Colors are steps. Click a file and its links light up.
-- **A file** shows what it is for, which steps of which parts use it, what it uses and what uses it, and its functions, with **Read it** and **Open the code**.
+- **Its files, step by step**: one column per step in the order the work happens, then the code it uses from other folders. The helper files the steps use are folded into one box; click it to show them. Colors are steps. Click a file and its links light up.
+- **A file** shows what it is for, which steps of which parts use it, its pseudocode block by block when Yamori already wrote it (no AI call; each block's line range opens Read there), what it uses and what uses it, and its functions.
 - **A step** shows what it does, takes and gives, and how; **Show functions** lists the code behind it, with **Move to…** another step. **Rename**, **Merge with…** and **Keep as is** fix the grouping; updates keep your changes.
 
 ## Steer it
@@ -49,7 +49,7 @@ Notes connect to Obsidian with nothing to set up:
 - Otherwise, if Obsidian is installed, they go to the vault Obsidian has open (or opened last), found in Obsidian's own list of vaults.
 - Otherwise they go to `.yamori/notes/` in the project. Notes written there move into the vault once Yamori finds one; nothing in the vault is overwritten.
 
-The top of the System tab says where notes are. `yamori.obsidian.vaultPath` picks a vault by hand; `yamori.obsidian.auto` turns the search off.
+The top of the System tab says where notes are and when they were last written. Click it for the folder, **Update notes now** (no AI), **Open in Obsidian** and **Show the folder**. **Update** also says what it did, including when nothing changed. `yamori.obsidian.vaultPath` picks a vault by hand; `yamori.obsidian.auto` turns the search off.
 
 In the vault, under `Yamori/<repo>/`:
 

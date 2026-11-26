@@ -302,10 +302,14 @@ function partDetail(db, graph, notes, workflowId) {
 
 // One file: what it is for, its functions, what it uses and what uses it, and
 // which steps of which parts run its code. Pure reads.
-function fileDetail(db, graph, notes, file) {
+function fileDetail(db, graph, notes, file, explanations) {
   const info = graph.files[file];
   if (!info) return undefined;
   const note = notes?.files?.[file];
+  // Pseudocode Yamori already wrote for this file (Read's cache): no AI call.
+  const saved = explanations?.[file], level = saved?.logic ? 'logic' : saved?.overview ? 'overview' : undefined, view = level && saved[level];
+  const pseudocode = view?.sections?.length ? { level, current: view.hash === info.hash, title: view.title || '', summary: view.summary || '',
+    sections: view.sections.slice(0, 60).map(section => ({ title: section.title, startLine: section.startLine, endLine: section.endLine, pseudocode: String(section.pseudocode || '').slice(0, 6000) })) } : undefined;
   const steps = db.all('SELECT DISTINCT s.workflow_id, s.stage_id, s.symbol, s.what FROM steps s WHERE s.file = ? ORDER BY s.workflow_id, s.stage_id, s.position', file);
   const where = [];
   for (const row of steps) {
@@ -315,7 +319,7 @@ function fileDetail(db, graph, notes, file) {
     entry.does.push(row.what || row.symbol);
   }
   return {
-    file, purpose: note?.purpose || '', role: note?.role || '', lines: info.lines, outdated: !!note && note.hash !== info.hash,
+    file, purpose: note?.purpose || '', role: note?.role || '', lines: info.lines, outdated: !!note && note.hash !== info.hash, pseudocode,
     functions: stages.symbolsOf(info).slice(0, 40).map(def => ({ name: def.name, kind: def.kind, line: def.start || def.line })),
     uses: (graph.edges || []).filter(edge => edge.from === file).map(edge => ({ file: edge.to, names: (edge.names || []).slice(0, 5), purpose: notes?.files?.[edge.to]?.purpose || '' })).slice(0, 30),
     usedBy: (graph.edges || []).filter(edge => edge.to === file).map(edge => ({ file: edge.from, names: (edge.names || []).slice(0, 5), purpose: notes?.files?.[edge.from]?.purpose || '' })).slice(0, 30),

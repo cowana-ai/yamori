@@ -256,3 +256,25 @@ test('changes start from any box: a part narrows the search, a file goes straigh
     assert.ok(fs.existsSync(path.join(notes, 'Code', 'agents', 'email', 'inbox.py.md')));
   } finally { Object.assign(timing, saved); ctx.cleanup(); }
 });
+
+test('a file shows its cached pseudocode, Update always says what it did, and notes can be updated on demand', { skip }, async () => {
+  const ctx = await setup();
+  try {
+    await ctx.send({ type: 'buildSystem' });
+    const hash = ctx.entry.graph.files['agents/email/inbox.py'].hash;
+    ctx.entry.explanations['agents/email/inbox.py'] = { logic: { hash, title: 'Inbox', summary: 'Reads and answers mail.', sections: [{ title: 'Get unread mail', startLine: 1, endLine: 2, pseudocode: 'Return the unread messages' }, { title: 'Send a reply', startLine: 5, endLine: 6, pseudocode: 'Print the message and its answer' }] } };
+    await ctx.send({ type: 'openPart', id: 'email-helper' });
+    await ctx.send({ type: 'openFile', file: 'agents/email/inbox.py' });
+    const pseudo = ctx.last().file.pseudocode;
+    assert.equal(pseudo.current, true); assert.equal(pseudo.summary, 'Reads and answers mail.');
+    assert.deepEqual(pseudo.sections.map(section => [section.title, section.startLine]), [['Get unread mail', 1], ['Send a reply', 5]]);
+    const calls = ctx.calls.length;
+    await ctx.send({ type: 'refresh' });
+    assert.match(ctx.last().notice, /Everything is up to date: no code changed since the last update\. Notes updated \(\d+ notes\)\./);
+    await ctx.send({ type: 'syncNotes' });
+    const state = ctx.last();
+    assert.match(state.notice, /^Notes updated: \d+ notes in .*\.yamori\/notes\.$/);
+    assert.ok(state.vault.lastSync.notes > 5); assert.equal(state.vault.lastSync.error, '');
+    assert.equal(ctx.calls.length, calls, 'neither calls AI');
+  } finally { ctx.cleanup(); }
+});

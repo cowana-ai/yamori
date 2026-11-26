@@ -115,6 +115,15 @@ body.vscode-light:not([data-palette="slate"]) #stages-view, body[data-palette="p
 #stages-view .st-svg { width: 100%; height: 100%; display: block; }
 #stages-view .st-zoom { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; }
 #stages-view .st-zoom button { min-width: 28px; font-size: 12px; border: 1px solid var(--read-border); background: var(--read-surface); }
+#stages-view .st-zoom { align-items: center; }
+#stages-view .st-canvas { resize: vertical; min-height: 180px; }
+#stages-view .st-canvas.full { position: fixed; inset: 6px; z-index: 50; height: auto; resize: none; box-shadow: 0 8px 40px rgba(0,0,0,.45); background-color: var(--read-page); }
+#stages-view .st-full-title { margin-right: 10px; font-size: 13px; }
+#stages-view .st-canvas-hidden { display: flex; gap: 8px; align-items: center; margin: 8px 0; padding: 8px 10px; border: 1px dashed var(--read-border); }
+#stages-view .st-blocks { list-style: none; margin: 6px 0 0; padding: 0; }
+#stages-view .st-blocks li { border-top: 1px solid color-mix(in srgb, var(--read-border) 50%, transparent); padding: 3px 0; }
+#stages-view .st-block-title { border: 0; padding: 2px 0; font-weight: 600; text-align: left; }
+#stages-view code { font: 11px ui-monospace, monospace; overflow-wrap: anywhere; }
 #stages-view .st-edge-line { fill: none; stroke: color-mix(in srgb, var(--read-ink) 55%, transparent); stroke-width: 1.6; }
 #stages-view .st-edge-line.soft { stroke-dasharray: 5 4; stroke: color-mix(in srgb, var(--read-ink) 32%, transparent); stroke-width: 1.2; }
 #stages-view .st-edge-line.hot { stroke: var(--read-link, var(--read-ink)); stroke-width: 1.8; }
@@ -202,7 +211,7 @@ function layeredLayout(nodes, edges, { width = 220, height = 100, gapX = 90, gap
 function mountStages(root, post) {
   if (!root) return { update() {}, shown() {} };
   const doc = root.ownerDocument, SVG = 'http://www.w3.org/2000/svg';
-  let state = {}, ui = { pseudo: {}, expanded: {}, review: false, activity: false, code: {}, views: {}, step: undefined };
+  let state = {}, ui = { pseudo: {}, expanded: {}, review: false, activity: false, code: {}, views: {}, step: undefined, hidden: {}, heights: {}, full: undefined, blocks: {} };
   const tokens = n => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n || 0);
   const money = n => n ? '$' + n.toFixed(n < 0.1 ? 4 : 2) : '—';
   const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
@@ -246,8 +255,10 @@ function mountStages(root, post) {
 
   // --- an interactive graph: drag to pan, scroll to zoom, Fit to see it all ---
   function graphView(key, { nodes, edges, width, height, minHeight = 260, maxHeight = 560, label, minZoom = 0.5 }) {
-    const view = ui.views[key];
-    const box = h('div', { class: 'st-canvas', style: 'height:' + Math.max(minHeight, Math.min(maxHeight, height + 60)) + 'px', 'aria-label': label });
+    if (ui.hidden[key]) return h('div', { class: 'st-canvas-hidden' }, muted(label + ' is hidden.'), link('showGraph', { key }, 'Show it'));
+    const full = ui.full === key, view = ui.views[key];
+    const size = full ? '' : 'height:' + (ui.heights[key] || Math.max(minHeight, Math.min(maxHeight, height + 60))) + 'px';
+    const box = h('div', { class: 'st-canvas' + (full ? ' full' : ''), style: size, 'aria-label': label, data: { key } });
     const markerId = 'st-arrow-' + key, markerSoft = 'st-arrow-soft-' + key;
     const svg = s('svg', { class: 'st-svg', role: 'img', 'aria-label': label },
       s('defs', {}, s('marker', { id: markerId, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, s('path', { d: 'M0 0 L8 4 L0 8 z', class: 'st-arrowhead' })),
@@ -261,7 +272,13 @@ function mountStages(root, post) {
       layer.append(fo);
     }
     svg.append(layer);
-    box.append(svg, h('div', { class: 'st-zoom' }, act('zoom', { key, by: 1.25 }, '+', { title: 'Zoom in' }), act('zoom', { key, by: 0.8 }, '−', { title: 'Zoom out' }), act('fit', { key }, 'Fit', { title: 'See everything' })));
+    box.append(svg, h('div', { class: 'st-zoom' },
+      full ? h('b', { class: 'st-full-title' }, label) : undefined,
+      act('zoom', { key, by: 1.25 }, '+', { title: 'Zoom in' }), act('zoom', { key, by: 0.8 }, '−', { title: 'Zoom out' }), act('fit', { key }, 'Fit', { title: 'See everything' }),
+      act('fullGraph', { key }, full ? 'Exit full view' : '⤢ Enlarge', { title: full ? 'Back to the page (Esc)' : 'Fill the whole panel' }),
+      full ? undefined : act('hideGraph', { key }, '✕', { title: 'Close this graph' })));
+    // Drag the bottom edge to make the graph taller or shorter; the height is kept.
+    if (!full && typeof ResizeObserver === 'function') { let first = true; new ResizeObserver(() => { if (first) { first = false; return; } ui.heights[key] = box.clientHeight; }).observe(box); }
     const apply = v => layer.setAttribute('transform', 'translate(' + v.x.toFixed(1) + ' ' + v.y.toFixed(1) + ') scale(' + v.k.toFixed(3) + ')');
     const fit = () => {
       const w = box.clientWidth || 900, hgt = box.clientHeight || 400;
@@ -271,7 +288,8 @@ function mountStages(root, post) {
       apply(ui.views[key]);
     };
     box.fit = () => { const w = box.clientWidth || 900, hgt = box.clientHeight || 400, k = Math.min(1.1, (w - 40) / Math.max(1, width), (hgt - 50) / Math.max(1, height)); ui.views[key] = { k, x: (w - width * k) / 2, y: Math.max(16, (hgt - height * k) / 2), sig: width + 'x' + height }; apply(ui.views[key]); };
-    if (view && view.sig === width + 'x' + height) apply(view); else requestAnimationFrame(fit);
+    const sig = width + 'x' + height + (full ? ':full' : '');
+    if (view && view.sig === sig) apply(view); else requestAnimationFrame(() => { fit(); ui.views[key].sig = sig; });
     let drag;
     box.addEventListener('pointerdown', event => { if (event.target.closest('button, a, input, textarea, select, [data-act]')) return; drag = { x: event.clientX, y: event.clientY, v: { ...(ui.views[key] || { x: 0, y: 0, k: 1 }) } }; box.setPointerCapture?.(event.pointerId); box.classList.add('dragging'); });
     box.addEventListener('pointermove', event => { if (!drag) return; ui.views[key] = { ...drag.v, x: drag.v.x + event.clientX - drag.x, y: drag.v.y + event.clientY - drag.y }; apply(ui.views[key]); });
@@ -351,15 +369,15 @@ function mountStages(root, post) {
   // Files arranged by the part's steps, left to right in the order the work happens:
   // each step's files, then the supporting files they use, then code from other folders.
   function filesGraph(part, detail) {
-    const W = 196, H = 62, GX = 64, GY = 12, MAX_SUPPORT = 14, focus = state.card?.id, file = state.file?.file;
+    const W = 196, H = 62, GX = 64, GY = 12, MAX_SUPPORT = 0, focus = state.card?.id, file = state.file?.file;
     const byStep = new Map(part.stages.map(stage => [stage.id, []])), support = [];
     for (const entry of detail.files) { const first = part.stages.find(stage => entry.steps.includes(stage.id)); (first ? byStep.get(first.id) : support).push(entry); }
     const linked = new Set(detail.edges.flatMap(edge => [edge.from, edge.to]));
     support.sort((a, b) => (linked.has(b.file) ? 1 : 0) - (linked.has(a.file) ? 1 : 0) || (b.entry ? 1 : 0) - (a.entry ? 1 : 0));
     const shownSupport = ui.allSupport ? support : support.slice(0, MAX_SUPPORT);
     const columns = [...part.stages.filter(stage => byStep.get(stage.id).length).map(stage => ({ title: (part.stages.indexOf(stage) + 1) + '. ' + stage.name, color: stepColor(part.id, stage.id), items: byStep.get(stage.id).map(entry => ({ id: entry.file, entry })) })),
-      ...(support.length ? [{ title: 'Supporting files', items: [...shownSupport.map(entry => ({ id: entry.file, entry })), ...(support.length > shownSupport.length ? [{ id: 'more', more: support.length - shownSupport.length }] : [])] }] : []),
-      ...(detail.outside.length ? [{ title: 'Uses from other folders', items: detail.outside.map(box => ({ id: box.id, box })) }] : [])];
+      ...(support.length ? [{ title: 'Supporting files', items: [...shownSupport.map(entry => ({ id: entry.file, entry })), ...(support.length > shownSupport.length ? [{ id: 'more', more: support.length - shownSupport.length }] : [{ id: 'more', more: 0, less: true }])] }] : []),
+      ...(detail.outside.length ? [{ title: 'Uses from other folders', items: detail.outside.map(box => ({ id: box.id, box })) }] : [])].map(column => ({ ...column, items: column.items.filter(item => !item.less || ui.allSupport) }));
     const placed = [], heads = [];
     columns.forEach((column, c) => {
       const x = c * (W + GX);
@@ -369,7 +387,8 @@ function mountStages(root, post) {
         const lit = !focus && !file ? true : item.entry ? (focus ? item.entry.steps.includes(focus) : item.id === file || detail.edges.some(edge => (edge.from === file && edge.to === item.id) || (edge.to === file && edge.from === item.id))) : item.box ? (file ? item.box.from.includes(file) : true) : false;
         const content = item.entry ? fileNode(part, item.entry, file === item.id, !lit)
           : item.box ? h('div', { class: 'st-node out' + (lit ? '' : ' dim'), title: item.box.files.join('\n') }, h('b', {}, item.box.folder), h('div', { class: 'st-node-meta' }, plural(item.box.count, 'file') + ' used'))
-          : h('div', { class: 'st-node out', data: { act: 'allSupport' }, role: 'button' }, h('b', {}, '+ ' + item.more + ' more'), h('div', { class: 'st-node-meta' }, 'Show all'));
+          : item.less ? h('div', { class: 'st-node out', data: { act: 'allSupport' }, role: 'button' }, h('b', {}, 'Hide supporting files'))
+          : h('div', { class: 'st-node out', data: { act: 'allSupport' }, role: 'button' }, h('b', {}, item.more + ' supporting file' + (item.more === 1 ? '' : 's')), h('div', { class: 'st-node-meta' }, 'Helpers the steps use · click to show'));
         placed.push({ id: item.id, x, y, w: W, h: H, content });
       });
     });
@@ -441,17 +460,32 @@ function mountStages(root, post) {
       h('p', {}, file.purpose || 'No AI note for this file yet.'), file.role ? h('p', { class: 'st-muted' }, file.role) : undefined,
       file.where.length ? section('Used in', h('ul', { class: 'st-list' }, file.where.map(entry => h('li', {}, link('openStage', { part: entry.part, id: entry.stage }, entry.partName + ' › ' + entry.stageName), muted(': ' + entry.does.slice(0, 3).join('; ')))))) : undefined,
       h('div', { class: 'st-tools' }, go('changeHere', { kind: 'file', file: file.file }, 'Change this file…'), act('flow', { file: file.file, line: 1 }, 'Read it'), link('jump', { file: file.file, line: 1 }, 'Open the code')),
+      pseudoSection(file),
       file.uses.length ? section('Uses', h('ul', { class: 'st-list' }, file.uses.map(row))) : undefined,
       file.usedBy.length ? section('Used by', h('ul', { class: 'st-list' }, file.usedBy.map(row))) : undefined,
       file.functions.length ? h('details', {}, h('summary', {}, plural(file.functions.length, 'function')), h('ul', { class: 'st-list' }, file.functions.map(def => h('li', {}, link('jump', { file: file.file, line: def.line }, def.name), muted(' ' + def.kind + ' · line ' + def.line))))) : undefined);
   }
 
+  // Pseudocode Yamori already has for the file (no AI call), block by block.
+  function pseudoSection(file) {
+    const pseudo = file.pseudocode;
+    if (!pseudo) return section('Pseudocode', h('p', { class: 'st-muted' }, 'Not written yet. ', link('flow', { file: file.file, line: 1 }, 'Read it'), ' to have Yamori write it (uses AI).'));
+    const key = index => file.file + '#' + index;
+    return section('Pseudocode' + (pseudo.level === 'overview' ? ' · overview' : ''),
+      pseudo.current ? undefined : h('p', { class: 'st-notice' }, 'From an older version of this file. ', link('flow', { file: file.file, line: 1 }, 'Read it'), ' to update it.'),
+      pseudo.summary ? h('p', {}, pseudo.summary) : undefined,
+      h('div', { class: 'st-row' }, muted(plural(pseudo.sections.length, 'block') + ' · saved, no AI call'), spacer(), link('allBlocks', {}, pseudo.sections.every((_, index) => ui.blocks[key(index)]) ? 'Collapse all' : 'Expand all')),
+      h('ol', { class: 'st-blocks' }, pseudo.sections.map((block, index) => h('li', {},
+        h('div', { class: 'st-row' }, act('block', { key: key(index) }, (ui.blocks[key(index)] ? '▾ ' : '▸ ') + block.title, { class: 'st-block-title' }), spacer(),
+          link('flow', { file: file.file, line: block.startLine }, 'L' + block.startLine + (block.endLine > block.startLine ? '–' + block.endLine : ''), { title: 'Read this block beside the code' })),
+        ui.blocks[key(index)] ? h('pre', {}, block.pseudocode) : undefined))));
+  }
   // --- header, request box, review, notes, AI use ---
   function header() {
     const total = state.activity?.total, sys = state.system;
     return h('div', { class: 'st-bar' },
       h('h1', { class: 'st-title' }, 'How ' + (state.repo || 'this project') + ' works'), spacer(),
-      state.vault && sys ? link('openNote', {}, state.vault.obsidian ? 'Notes in Obsidian' : 'Notes', { title: 'Open the system note · ' + state.vault.where }) : undefined,
+      state.vault && sys ? link('notesPanel', {}, (state.vault.obsidian ? 'Obsidian' : 'Notes') + (state.vault.lastSync?.error ? ' · not written' : state.vault.lastSync ? ' · updated ' + new Date(state.vault.lastSync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''), { title: 'Where the notes are, and update them now' }) : undefined,
       sys ? act('refresh', {}, 'Update', { disabled: !!state.busy, title: 'Update only what changed in the code' }) : undefined,
       link('activity', {}, total?.calls ? 'Today: ' + tokens(total.input + total.cached + total.output) + ' tokens · ' + money(total.cost) : 'AI use', { title: 'Every AI call today, with tokens and cost' }));
   }
@@ -512,6 +546,15 @@ function mountStages(root, post) {
           : h('div', { class: 'st-tools' }, go('approve', { id: change.id }, 'Keep it'), act('reject', { id: change.id }, 'Reject it')));
     }));
   }
+  function notesPanel() {
+    if (!ui.notesPanel || !state.vault) return undefined;
+    const v = state.vault, last = v.lastSync;
+    return h('section', { class: 'st-card' }, h('h2', {}, v.obsidian ? 'Notes in Obsidian' : 'Notes', spacer(), link('notesPanel', {}, 'Close')),
+      h('p', {}, v.obsidian ? 'Yamori writes the notes into your Obsidian vault by itself: ' : 'Yamori writes the notes here by itself: ', h('code', {}, v.dir)),
+      h('p', { class: last?.error ? 'st-error' : 'st-muted' }, last?.error ? 'The last update failed: ' + last.error : last ? 'Last updated ' + new Date(last.at).toLocaleString() + ' · ' + plural(last.notes, 'note') + '. They update after every change, review and request.' : 'Not written yet in this session.'),
+      v.obsidian ? undefined : h('p', { class: 'st-muted' }, 'No Obsidian vault found. Open this folder as a vault in Obsidian, or set yamori.obsidian.vaultPath, and the notes move there.'),
+      h('div', { class: 'st-tools' }, go('syncNotes', {}, 'Update notes now'), act('openNote', {}, v.obsidian ? 'Open in Obsidian' : 'Open the system note'), link('revealNotes', {}, 'Show the folder'), link('notesSettings', {}, 'Settings')));
+  }
   function systemNotes() {
     return h('section', { class: 'st-card' }, h('h2', {}, 'Rules for the whole system', spacer(), link('openNote', {}, state.vault?.obsidian ? 'Open in Obsidian' : 'Open notes file')),
       state.systemNotes ? h('pre', {}, state.systemNotes) : h('p', { class: 'st-muted' }, 'Optional. Rules your agents follow for every change, for example “all AI calls go through the budget check”.'),
@@ -544,7 +587,7 @@ function mountStages(root, post) {
       state.notice ? h('p', { class: 'st-notice' }, state.notice) : undefined,
       sys?.newFiles ? h('p', { class: 'st-notice' }, 'Files were added or removed since the map was made. ', link('buildSystem', {}, 'Update the map')) : undefined];
     if (!sys) return [header(), h('div', { class: 'st-top st-plain' }, notices), activity(), empty()];
-    return [header(), h('div', { class: 'st-top' }, sys.summary ? h('p', { class: 'st-summary' }, sys.summary) : undefined, notices, reviewBar(), steerBox()),
+    return [header(), notesPanel(), h('div', { class: 'st-top' }, sys.summary ? h('p', { class: 'st-summary' }, sys.summary) : undefined, notices, reviewBar(), steerBox()),
       activity(), reviewPanel(), systemGraph(),
       h('p', { class: 'st-muted st-hint' }, 'Click a box to open it. Arrows show what starts or uses what; dashed arrows are code one part uses from another.'),
       partPanel(), sharedPanel(), !state.part && !state.shared ? fileCard() : undefined, systemNotes(),
@@ -576,6 +619,12 @@ function mountStages(root, post) {
       case 'zoom': { const v = ui.views[data.key]; const canvas = target.closest('.st-canvas'); if (!v || !canvas) return; const w = canvas.clientWidth / 2, hh = canvas.clientHeight / 2, k = Math.max(0.15, Math.min(2.5, v.k * Number(data.by))); ui.views[data.key] = { ...v, k, x: w - (w - v.x) * k / v.k, y: hh - (hh - v.y) * k / v.k }; canvas.querySelector('.st-world')?.setAttribute('transform', 'translate(' + ui.views[data.key].x + ' ' + ui.views[data.key].y + ') scale(' + k + ')'); return; }
       case 'fit': target.closest('.st-canvas')?.fit?.(); return;
       case 'allSupport': ui.allSupport = !ui.allSupport; render(); return;
+      case 'fullGraph': ui.full = ui.full === data.key ? undefined : data.key; render(); return;
+      case 'hideGraph': ui.hidden[data.key] = true; if (ui.full === data.key) ui.full = undefined; render(); return;
+      case 'showGraph': ui.hidden[data.key] = false; render(); return;
+      case 'notesPanel': ui.notesPanel = !ui.notesPanel; render(); return;
+      case 'block': ui.blocks[data.key] = !ui.blocks[data.key]; render(); return;
+      case 'allBlocks': { const keys = (state.file?.pseudocode?.sections || []).map((_, index) => state.file.file + '#' + index); const open = !keys.every(key => ui.blocks[key]); keys.forEach(key => { ui.blocks[key] = open; }); render(); return; }
       case 'openPart': ui.here = undefined; send('openPart', { id: data.id || undefined }); return;
       case 'openShared': ui.here = undefined; send('openShared', { id: data.id || undefined }); return;
       case 'openStage': send('openStage', { part: data.part, id: data.id || undefined }); return;
@@ -597,6 +646,7 @@ function mountStages(root, post) {
       default: send(name, { part: data.part, stage: data.stage });
     }
   });
+  root.ownerDocument.addEventListener('keydown', event => { if (event.key === 'Escape' && ui.full) { ui.full = undefined; render(); } });
   root.addEventListener('keydown', event => {
     if (event.target.id === 'st-intent' && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); ask(); return; }
     if ((event.key === 'Enter' || event.key === ' ') && event.target.matches?.('.st-node[data-act]')) { event.preventDefault(); event.target.click(); }

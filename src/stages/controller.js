@@ -99,8 +99,11 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
   function sync(item) {
     const db = dbFor(item, false);
     if (!db || !db.workflows().length || !item.vault) return;
-    try { item.vault.syncSystem(db, item.entry.graph || { files: {} }, { notes: item.entry.notes }); watchVault(item); }
-    catch (error) { item.notice = 'Notes were not written: ' + error.message; }
+    try {
+      const files = item.vault.syncSystem(db, item.entry.graph || { files: {} }, { notes: item.entry.notes });
+      item.lastSync = { at: new Date().toISOString(), notes: files.length, error: '' };
+      watchVault(item);
+    } catch (error) { item.lastSync = { at: new Date().toISOString(), notes: 0, error: error.message }; item.notice = 'Notes were not written: ' + error.message; }
   }
 
   async function request(tier) {
@@ -122,13 +125,14 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     return texts;
   };
 
+  const syncLine = item => item.lastSync && !item.lastSync.error ? ' Notes updated' + (item.vault?.obsidian ? ' in Obsidian' : '') + ' (' + item.lastSync.notes + ' notes).' : '';
   // --- state for the panel (zero AI calls) ---
   function state(item) {
     if (!available()) return { unavailable: new StageDbUnavailable().message };
     const graph = item.entry.graph || { files: {} };
     const db = dbFor(item, false), vault = vaultFor(item);
     const base = { repo: path.basename(item.root), busy: item.busy, error: item.error, notice: item.notice, budget: budget(),
-      vault: { obsidian: vault.obsidian, where: vault.obsidian ? path.basename(vault.vaultPath) + ' › Yamori › ' + vault.repo : '.yamori/notes in this project' } };
+      vault: { obsidian: vault.obsidian, where: vault.obsidian ? path.basename(vault.vaultPath) + ' › Yamori › ' + vault.repo : '.yamori/notes in this project', dir: vault.dir, lastSync: item.lastSync } };
     if (!db || !db.workflows().length) return { ...base, estimate: estimateFor(item), system: undefined, activity: db ? activity(db) : undefined };
     const view = system.systemView(db, graph, item.entry.notes);
     if (item.workflowId && !view.parts.some(part => part.id === item.workflowId)) { item.workflowId = undefined; item.open = undefined; }
@@ -142,7 +146,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     return { ...base, system: view, part: item.workflowId, card, queue, systemNotes: vault.systemNotes(),
       partDetail: item.workflowId ? system.partDetail(db, graph, item.entry.notes, item.workflowId) : undefined,
       shared: item.shared ? sharedDetail(item, view) : undefined,
-      file: item.file ? system.fileDetail(db, graph, item.entry.notes, item.file) : undefined,
+      file: item.file ? system.fileDetail(db, graph, item.entry.notes, item.file, item.entry.explanations) : undefined,
       route: item.route, steer: item.steer && steerState(item.steer), activity: activity(db) };
   }
   function post(item) {
@@ -355,6 +359,8 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
         await api.window.showTextDocument(await api.workspace.openTextDocument(api.Uri.file(file)), { preview: true, viewColumn: api.ViewColumn.Beside });
         break;
       }
+      case 'syncNotes': sync(item); if (!item.lastSync?.error) item.notice = 'Notes updated' + (vaultFor(item).obsidian ? ' in Obsidian' : '') + ': ' + item.lastSync.notes + ' notes in ' + vaultFor(item).dir + '.'; break;
+      case 'revealNotes': if (fs.existsSync(vaultFor(item).dir)) await api.commands?.executeCommand?.('revealFileInOS', api.Uri.file(vaultFor(item).dir)); break;
       case 'notesSettings': await api.commands?.executeCommand?.('workbench.action.openSettings', 'yamori.obsidian'); break;
       case 'route': await route(item, typeof message.intent === 'string' ? message.intent.trim() : '', message.scope); break;
       case 'routeCancel': item.route = undefined; item.steer = undefined; item.steerController?.abort(); break;
@@ -393,7 +399,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const db = dbFor(item), entry = item.entry;
     markChanged(item);
     const targets = workflows || db.workflows().map(workflow => workflow.id).filter(id => db.staleStages(id).length);
-    if (!targets.length) return { calls: 0 };
+    if (!targets.length) { sync(item); item.notice = 'Everything is up to date: no code changed since the last update.' + syncLine(item); return { calls: 0 }; }
     const { provider, model, request: send } = await request('cheap');
     const readExcerpt = async (file, from, to) => { try { return (await map.readSource(entry, file)).split('\n').slice(from - 1, to).map((line, index) => (from + index) + ': ' + line).join('\n'); } catch { return undefined; } };
     const run = createRun(db, { budget: budget(), trigger });
@@ -415,7 +421,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       }
       sync(item);
     });
-    item.notice = skipped.length ? skipped[0].reason : '';
+    item.notice = skipped.length ? skipped[0].reason : 'Updated ' + calls + ' step' + (calls === 1 ? '' : 's') + ' whose code changed.' + syncLine(item);
     return { calls, skipped };
   }
   async function busy(item, label, work) {
