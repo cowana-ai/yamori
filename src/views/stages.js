@@ -156,9 +156,13 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-zoom button { min-width: 24px; height: 24px; padding: 0 7px; font-size: 12px; line-height: 22px; border: 1px solid var(--read-border); background: var(--read-page); }
 #stages-view .st-zoom { align-items: center; }
 #stages-view .st-canvas { resize: vertical; min-height: 180px; }
-#stages-view .st-kind { font: 600 10px/1.4 var(--vscode-editor-font-family, monospace); letter-spacing: .04em; text-transform: uppercase; color: var(--read-muted); margin: 0 0 3px; }
-#stages-view .st-kind.class { color: oklch(72% .13 300); }
-#stages-view .st-kind.method { color: oklch(72% .1 200); text-transform: none; letter-spacing: 0; }
+#stages-view .st-codekind { font: 600 10px/1.4 var(--vscode-editor-font-family, monospace); letter-spacing: .04em; text-transform: uppercase; color: var(--read-muted); margin: 0 0 3px; }
+#stages-view .st-codekind.class { color: oklch(72% .13 300); display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; text-transform: none; letter-spacing: 0; }
+#stages-view .st-kind-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; opacity: .85; }
+#stages-view .st-classname { font: 700 14px/1.3 var(--vscode-editor-font-family, monospace); color: oklch(80% .14 300); background: color-mix(in srgb, oklch(60% .15 300) 18%, transparent); border-radius: 4px; padding: 0 5px; max-width: 100%; overflow-wrap: anywhere; }
+#stages-view .st-classname.small { font-size: 11.5px; padding: 0 4px; }
+#stages-view .st-codekind.method { color: oklch(72% .1 200); text-transform: none; letter-spacing: 0; font-size: 11px; }
+#stages-view .st-built code { color: oklch(80% .14 300); font-weight: 600; }
 #stages-view .st-node.flowstep.classbox { border-radius: 10px; border-width: 1.5px; background: color-mix(in srgb, oklch(60% .13 300) 9%, var(--read-surface, var(--read-page))); }
 #stages-view .st-node.flowstep.methodbox { border-style: dashed; border-left-style: solid; }
 #stages-view .st-built { font-size: 11px; color: var(--read-muted); margin: 4px 0 0; }
@@ -628,7 +632,7 @@ function mountStages(root, post) {
     const flow = state.partFlow || [], W = 236, GX = 70, GY = 12, HEAD = 46, graphKey = 'pflow:' + part.id;
     const lines = (text, per) => Math.min(3, Math.ceil(String(text || '').length / per));
     const decisionsOf = step => (step.details || []).filter(item => item.kind === 'decides' || item.kind === 'stops').slice(0, 3);
-    const height = step => 38 + (step.kind === 'class' || step.kind === 'method' || step.kind === 'section' ? 16 : 0) + 17 * lines(step.what || step.symbol, 26) + decisionsOf(step).reduce((sum, item) => sum + 4 + 15 * Math.min(2, lines(item.text, 30)), 0) + (step.details?.length ? 24 : 0);
+    const height = step => 38 + (step.kind === 'class' ? 30 + (step.symbol.length > 16 ? 20 : 0) : step.kind === 'method' || step.kind === 'section' ? 17 : 0) + 17 * lines(step.what || step.symbol, 26) + decisionsOf(step).reduce((sum, item) => sum + 4 + 15 * Math.min(2, lines(item.text, 30)), 0) + (step.details?.length ? 24 : 0);
     // Every step once, with its call links: from the part's call tree when known, else from nesting.
     const entries = [];
     flow.forEach(stage => stage.steps.forEach((step, index) => entries.push({ key: 'p:' + stage.id + ':' + index, id: 'n:' + stage.id + ':' + index, ref: step.file + '#' + step.symbol, step, stage })));
@@ -656,7 +660,7 @@ function mountStages(root, post) {
     // A method sits inside its class's box when that class is a step of the same stage.
     for (const entry of entries) if (entry.step.kind === 'method') entry.host = entries.find(other => other.stage === entry.stage && other.step.kind === 'class' && other.step.symbol === entry.step.owner && other.step.file === entry.step.file);
     const membersOf = host => entries.filter(entry => entry.host === host);
-    const classHeight = (entry, members) => height(entry.step) + (state.partBuiltFrom?.[entry.ref] ? 18 : 0) + (members.length ? 12 + members.reduce((sum, member) => sum + 20 + 14 * Math.min(2, lines(member.step.what, 32)), 0) : 0);
+    const classHeight = (entry, members) => height(entry.step) + (state.partBuiltFrom?.[entry.ref] ? 6 + 15 * lines('Built from ' + state.partBuiltFrom[entry.ref].join(' · '), 34) : 0) + (members.length ? 14 + members.reduce((sum, member) => sum + 25 + 15 * Math.min(2, lines(member.step.what, 30)), 0) : 0);
     const nodes = [], edges = [], idOf = ref => { const entry = byRef.get(ref); return entry && (entry.host || entry).id; };
     let previousLast;
     flow.forEach((stage, c) => {
@@ -750,10 +754,11 @@ function mountStages(root, post) {
     return String(text).split(/([A-Za-z0-9_]+)/).map(part => /[A-Za-z0-9]/.test(part) && finder.matches(part, words) ? h('mark', {}, part) : part);
   }
   // What kind of code a box is: a class (a thing with parts and methods), a method of one, or a script section.
-  function kindLabel(step) {
-    if (step.kind === 'class') return h('div', { class: 'st-kind class' }, '◇ class');
-    if (step.kind === 'method') return h('div', { class: 'st-kind method' }, 'ƒ method of ' + (step.owner || 'a class'));
-    if (step.kind === 'section') return h('div', { class: 'st-kind section' }, '§ script section');
+  // The class name is the layer's name in a model (LayerNorm, Block): shown big, not only in the small print.
+  function kindLabel(step, words) {
+    if (step.kind === 'class') return h('div', { class: 'st-codekind class' }, h('span', { class: 'st-kind-tag' }, '◇ class'), h('span', { class: 'st-classname' }, marked(step.symbol, words)));
+    if (step.kind === 'method') return h('div', { class: 'st-codekind method' }, 'ƒ ', h('span', { class: 'st-classname small' }, marked(step.owner || 'a class', words)), '.' + step.symbol);
+    if (step.kind === 'section') return h('div', { class: 'st-codekind section' }, '§ script section');
     return undefined;
   }
   const codeName = step => step.kind === 'method' && step.owner ? step.owner + '.' + step.symbol : step.symbol;
@@ -761,7 +766,7 @@ function mountStages(root, post) {
     const decisionsOf = (step.details || []).filter(item => item.kind === 'decides' || item.kind === 'stops').slice(0, 3);
     return h('div', { class: 'st-node flowstep' + (step.depth ? ' sub' : '') + (step.kind === 'class' ? ' classbox' : step.kind === 'method' ? ' methodbox' : '') + (look ? ' ' + look : ''), data: { act: 'flowStep', key }, role: 'button', tabindex: 0, style: step.depth && step.kind !== 'class' ? undefined : 'border-left: 4px solid ' + color,
       title: codeName(step) + ' · ' + step.file + ':' + (step.line_start || '') + (step.details?.length ? '\n\n' + step.details.map(item => (KIND[item.kind] || item.kind) + ': ' + item.text).join('\n') : '') },
-      kindLabel(step),
+      kindLabel(step, words),
       h('b', {}, marked(step.what || step.symbol, words)),
       decisionsOf.map(item => h('div', { class: 'st-decision' + (item.kind === 'stops' ? ' stops' : '') }, (item.kind === 'stops' ? '⚠ ' : '◆ '), marked(item.text, words))),
       step.details?.length ? h('div', { class: 'st-node-kinds' }, chips(step.details)) : undefined,
