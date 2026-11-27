@@ -162,6 +162,8 @@ function normalizePlan(raw, graph, { maxSteps = MAX_USER_STEPS } = {}) {
   const plan = { id: /^[\w-]{1,32}$/.test(raw?.id || '') ? raw.id : 'p' + Date.now().toString(36), goal: clip(raw?.goal, 600), summary: clip(raw?.summary, 600), createdAt: Number(raw?.createdAt) || Date.now(), updatedAt: Date.now(),
     messages: (Array.isArray(raw?.messages) ? raw.messages : []).slice(-100).filter(message => ['user', 'assistant'].includes(message?.role)).map(message => ({ role: message.role, text: clip(message.text, 3000) })),
     starting: (Array.isArray(raw?.starting) ? raw.starting : []).filter(rel => known.has(rel)).slice(0, 30), dismissed: (Array.isArray(raw?.dismissed) ? raw.dismissed : []).filter(rel => known.has(rel)).slice(0, 30), steps,
+    ...(['agent', 'native'].includes(raw?.origin) ? { origin: raw.origin } : {}),
+    ...(raw?.native && typeof raw.native === 'object' ? { native: { agent: raw.native.agent === 'codex' ? 'codex' : 'claude', hash: clip(raw.native.hash, 32), at: Number(raw.native.at) || Date.now() } } : {}),
     ...(raw?.models && typeof raw.models === 'object' ? { models: { draft: clip(raw.models.draft, 80), escalated: !!raw.models.escalated, improved: !!raw.models.improved } } : {}),
     ...(raw?.tokens && typeof raw.tokens === 'object' ? { tokens: { sent: Number(raw.tokens.sent) || 0, whole: Number(raw.tokens.whole) || 0, used: Number(raw.tokens.used) || 0 } } : {}),
     ...(Array.isArray(raw?.calls) ? { calls: raw.calls.slice(0, 12).map(call => ({ stage: clip(call?.stage, 24), model: clip(call?.model, 80), tokens: Number(call?.tokens) || 0, estimated: !!call?.estimated })) } : {}) };

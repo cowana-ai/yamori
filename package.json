@@ -40,7 +40,8 @@
         "yamori.obsidian.vaultPath",
         "yamori.obsidian.auto",
         "yamori.chatInTerminal",
-        "yamori.chatAutoStart"
+        "yamori.chatAutoStart",
+        "yamori.agentPlanMode"
       ]
     }
   },
@@ -461,6 +462,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Start your agent session in the terminal by itself when you open Yamori's project panel, without showing it or taking focus, so **Chat** opens at once. It uses no AI until you write to it."
+        },
+        "yamori.agentPlanMode": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show plans made in your agent's own plan mode (`/plan` in Claude Code, Plan mode in Codex) for this project on Yamori's **Plan** canvas. Yamori reads the new lines of this project's Claude Code and Codex session logs on this computer; no AI is used."
         }
       }
     },

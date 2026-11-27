@@ -3594,6 +3594,30 @@ const GOOD_PLAN = { summary: 'Skip the hook when numbering loops.', steps: [
   { file: 'pipeline/write.py', lines: [4, 5], title: 'Match the hints', change: 'Do not hint the hook loop', why: 'Keeps hints in step' }] };
 const BAD_PLAN = { summary: 'x', steps: [{ file: 'pipeline/missing.py', lines: [1, 5], title: 't', change: 'Edit it', why: '' }] };
 
+test('a plan from Claude Code plan mode (/plan) appears on the Plan canvas by itself, once', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-home-')), before = process.env.HOME;
+  process.env.HOME = home;
+  let h;
+  try {
+    h = await readerHarness({ prefetchNext: false, autoNotes: false });
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    const real = await fs.realpath(h.root), folder = path.join(home, '.claude', 'projects', real.replace(/[^A-Za-z0-9]/g, '-'));
+    await fs.mkdir(folder, { recursive: true });
+    const plan = '# Skip the hook when numbering\n\n## Changes\n- **plan_loops** in `pipeline/plan.py`: start at L2 after the hook.\n- Update `pipeline/write.py` hints to match.\n';
+    await fs.writeFile(path.join(folder, 's.jsonl'), JSON.stringify({ type: 'assistant', cwd: real, sessionId: 's', timestamp: new Date().toISOString(), message: { content: [{ type: 'tool_use', name: 'ExitPlanMode', input: { plan } }] } }) + '\n');
+    for (let i = 0; i < 160 && h.guideState().plan?.plan?.steps?.length !== 2; i++) await new Promise(resolve => setTimeout(resolve, 50));
+    const shown = h.guideState().plan;
+    assert.equal(shown.plan.goal, 'Skip the hook when numbering');
+    assert.deepEqual(shown.plan.steps.map(step => [step.file, step.startLine]), [['pipeline/plan.py', 3], ['pipeline/write.py', 1]], 'plan_loops resolves to its lines');
+    assert.equal(shown.plan.origin, 'native');
+    assert.ok(shown.conversation.some(message => /Claude Code plan mode/.test(message.text)));
+    const id = shown.plan.id;
+    await new Promise(resolve => setTimeout(resolve, 3500));
+    assert.equal(h.guideState().plan.plan.id, id, 'the same plan is not added again');
+  } finally { await h?.close(); process.env.HOME = before; await fs.rm(home, { recursive: true, force: true }); }
+});
+
 test('planning: local starting points, explicit retries, no hidden draft or preview fallback, and durable usage', async () => {
   const fs = require('node:fs/promises'), path = require('node:path');
   const calls = [], queue = [];

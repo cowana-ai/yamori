@@ -36,6 +36,21 @@ const SESSION_WRITE_TOOLS = [
 
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; } }
 
+// Makes a plan the current one on the canvas (the old one stays in history)
+// and notes it in the project conversation. Shared by save_plan and by plans
+// read from the agents' own plan mode.
+function adoptPlan(plans, plan, text, journal) {
+  journal.ensure(plans);
+  const old = plans.current;
+  if (plan.steps.length) {
+    plans.history = [...(plans.history || []), ...(old && (old.steps?.length || old.goal) ? [old] : [])].slice(-5);
+    plans.current = plan;
+  }
+  plans.conversation.mode = 'plan';
+  journal.add(plans, { role: 'assistant', mode: 'plan', kind: 'plan', ...(plan.steps.length ? { planId: plan.id } : {}), text });
+  return plans;
+}
+
 function createSessionTools({ store, root, project, normalizePlan, journal }) {
   const handlers = {
     get_view() {
@@ -49,16 +64,8 @@ function createSessionTools({ store, root, project, normalizePlan, journal }) {
       const { plan, dropped } = normalizePlan({ goal, summary, steps: (steps || []).map(step => ({ ...step, why: step.why || '' })) }, graph);
       if (dropped.length) throw new Error('Not saved: ' + dropped.join('; ') + '. Use files from list_files (or newFile: true for a new file), then save again.');
       if (!plan.steps.length) throw new Error('Not saved: the plan has no steps.');
-      await project.updateStoreFile(store(), 'plan', plans => {
-        const next = { ...plans };
-        journal.ensure(next);
-        const old = next.current;
-        next.history = [...(next.history || []), ...(old && (old.steps?.length || old.goal) ? [old] : [])].slice(-5);
-        next.current = plan;
-        next.conversation.mode = 'plan';
-        journal.add(next, { role: 'assistant', mode: 'plan', kind: 'plan', planId: plan.id, text: 'Plan from the terminal session: ' + (plan.summary || plan.goal) });
-        return next;
-      });
+      plan.origin = 'agent';
+      await project.updateStoreFile(store(), 'plan', plans => adoptPlan({ ...plans }, plan, 'Plan from the terminal session: ' + (plan.summary || plan.goal), journal));
       return `Saved a plan with ${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}. The founder sees it on Yamori's Plan canvas; call show_in_yamori with tab "plan" to open it.`;
     },
     show_in_yamori(_data, request) {
@@ -76,4 +83,4 @@ function createSessionTools({ store, root, project, normalizePlan, journal }) {
   return { handlers };
 }
 
-module.exports = { createSessionTools, SESSION_READ_TOOLS, SESSION_WRITE_TOOLS, VIEW_FILE, SHOW_FILE };
+module.exports = { adoptPlan, createSessionTools, SESSION_READ_TOOLS, SESSION_WRITE_TOOLS, VIEW_FILE, SHOW_FILE };

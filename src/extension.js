@@ -7,6 +7,8 @@ const { verifyPseudocode, unknownNames, sourceNames, hiddenEffects } = require('
 const planner = require('./project/plan');
 const journal = require('./project/conversation');
 const nativeSessions = require('./project/sessions');
+const agentPlanMode = require('./project/native-plans');
+const { adoptPlan } = require('./project/session-tools');
 const { CHAT_SCHEMA, implementPlan, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, flowPrompt, parseFlow, FLOW_SCHEMA, FLOW_FORMAT_VERSION, reviewDraft, reviewModel, REFINEMENT_VERSION, providerStatus, clearProviderStatus, isSetupProblem, runProcess, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, LEVELS, PROVIDERS, PROMPT_FORMAT_VERSION, cacheKey, generate, hash, parseResult, lowerView, ORDER, listModels, listEfforts, findCLI, cliLaunch, refinementSteps, requestStructured, gistPrompt, GIST_SCHEMA, GIST_VERSION, GIST_LIMIT, refreshPrompt, requestSchema, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA } = require('./ai/engine');
 const { parseCard } = require('./ai/cards');
 const logicWorkspace = require('./project/reader-workspace');
@@ -404,6 +406,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
         const loaded = maps.get(key);
         if (loaded.plans?.conversation && loaded.plans.conversation.displayVersion !== 1) { journal.ensure(loaded.plans); await store.save('plan', loaded.plans); }
         watchStore(maps.get(key));
+        watchAgentPlans(maps.get(key));
       })();
       maps.set(key, { key, root, loading: opening, graph: undefined, notes: { files: {} }, layout: {}, explanations: {}, guideFolder: '' });
     }
@@ -432,6 +435,41 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     entry.viewRequest = { view: request.tab === 'plan' ? 'plan' : 'map', token: Date.now() };
     if (rel) entry.focus = { id: rel, token: Date.now() };
     ensurePanel(entry); post(entry);
+  }
+  // Plans from the agents' own plan mode (/plan in Claude Code, Plan mode in
+  // Codex) for this project: read from their session logs, shown on the Plan canvas.
+  function watchAgentPlans(entry) {
+    if (entry.agentPlans || setting(api, 'agentPlanMode', true) === false) return;
+    const reader = agentPlanMode.createNativePlanReader({ root: entry.root.fsPath });
+    const waiting = [];
+    const tick = async () => {
+      if (entry.closed || setting(api, 'agentPlanMode', true) === false) return;
+      try { waiting.push(...reader.read()); } catch { return; }
+      // Never while Yamori is planning or saving itself; the plan waits for the next look.
+      if (!waiting.length || !entry.graph || entry.planController || entry.planBusy) return;
+      const plans = entry.plans ||= {};
+      let shown;
+      for (const found of waiting.splice(0)) {
+        const known = (plans.agentPlans || []).includes(found.hash) || [plans.current, ...(plans.history || [])].some(plan => plan?.native?.hash === found.hash);
+        // The agent also saved it with save_plan: that richer copy stays.
+        const saved = plans.current?.origin === 'agent' && Math.abs((plans.current.createdAt || 0) - found.at) < 10 * 60 * 1000;
+        if (known || saved) continue;
+        plans.agentPlans = [...(plans.agentPlans || []), found.hash].slice(-20);
+        const raw = agentPlanMode.planFromMarkdown(found.text, entry.graph, { agent: found.agent });
+        const { plan } = planner.normalizePlan({ ...raw, origin: 'native', native: { agent: found.agent, hash: found.hash, at: found.at }, createdAt: found.at }, entry.graph);
+        const who = found.agent === 'codex' ? 'Codex' : 'Claude Code';
+        const left = raw.unplaced.length ? '\n\nNot tied to a mapped file: ' + raw.unplaced.slice(0, 6).join(' · ') : '';
+        adoptPlan(plans, plan, who + ' plan mode' + (plan.steps.length ? ' (' + plan.steps.length + ' step' + (plan.steps.length === 1 ? '' : 's') + ' on the canvas)' : ' (no step names a mapped file)') + ':\n\n' + found.text + left, journal);
+        shown = plan;
+      }
+      if (!shown) return;
+      bump(entry); planSave(entry);
+      entry.viewRequest = { view: 'plan', token: Date.now() };
+      ensurePanel(entry); post(entry);
+    };
+    const next = () => { if (entry.closed) return; entry.agentPlans = setTimeout(() => { void tick().catch(() => {}).finally(next); }, 3000); entry.agentPlans.unref?.(); };
+    entry.agentPlans = true;
+    void tick().catch(() => {}).finally(next);
   }
   // The deepest mapped folder containing a file, else its workspace folder.
   async function entryForFile(uri) {
@@ -1626,7 +1664,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       const entry = await entryForFile(uri).catch(() => undefined);
       if (entry?.graph) scheduleAutoNotes(entry);
     },
-    async dispose() { const saves = []; for (const entry of maps.values()) { entry.closed = true; entry.planController?.abort(); clearTimeout(entry.planSaveTimer); if (entry.store && entry.plans) saves.push(entry.store.save('plan', entry.plans)); disposePlanningSession(entry.planSession); entry.notesController?.abort(); unwatch(entry); entry.storeWatch?.close?.(); clearTimeout(entry.mirrorTimer); entry.panel?.dispose?.(); } maps.clear(); await Promise.allSettled(saves); }
+    async dispose() { const saves = []; for (const entry of maps.values()) { entry.closed = true; clearTimeout(entry.agentPlans); entry.planController?.abort(); clearTimeout(entry.planSaveTimer); if (entry.store && entry.plans) saves.push(entry.store.save('plan', entry.plans)); disposePlanningSession(entry.planSession); entry.notesController?.abort(); unwatch(entry); entry.storeWatch?.close?.(); clearTimeout(entry.mirrorTimer); entry.panel?.dispose?.(); } maps.clear(); await Promise.allSettled(saves); }
   };
 }
 
@@ -1705,6 +1743,7 @@ const SESSION_RULES = `You are the founder's agent for this project, started fro
 - To explain how things fit together, use list_stages and get_stage (each step lists what it does and key details); notes there are the founder's rules, follow them.
 - The map is a summary. Before answering how something works in detail, read the code it points to (get_pseudocode, read_source, or your own file tools), and say what you found, not what you assume.
 - When they ask for a plan, write it with save_plan so it appears on Yamori's Plan canvas, then call show_in_yamori with tab "plan". Do not edit code until they approve.
+- In your own plan mode (/plan), finish the plan the usual way; Yamori puts it on the Plan canvas by itself. Name each file by its path in the project (and the function or lines) so every step lands on the right file.
 - After you explain a part, step or file, you may call show_in_yamori to bring it into view.
 - After a run that edited code, call done once.
 Keep answers short and plain; the founder may not read code.`;

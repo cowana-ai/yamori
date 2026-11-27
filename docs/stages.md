@@ -60,6 +60,16 @@ Opening Yamori's project panel starts one agent session for the project in the V
 
 The session is connected to Yamori and knows what you are looking at: the file, line and selected text in the editor, the file open in Read, the Yamori tab, and the part, step or file you selected in How it works (MCP `get_view`). So "why does this retry?" works without naming the file. It reads the map and your notes (`list_stages`, `get_stage`), writes plans onto Yamori's **Plan** canvas (`save_plan`), and can bring a part, step, file or plan into view in Yamori (`show_in_yamori`). **Ask in terminal…** on a step or file opens the session with that step or file already on the prompt.
 
+**Plan mode works too.** A plan made in the agent's own plan mode (`/plan` in Claude Code, Plan mode in Codex) appears on the **Plan** canvas by itself, and Yamori brings the Plan tab into view. This covers the session Yamori started and any other Claude Code or Codex session in this project folder. Neither agent calls `save_plan` in plan mode. Claude Code ends with `ExitPlanMode` carrying the plan, and Codex with a `<proposed_plan>` block. Yamori reads the new lines of those sessions' logs on this computer (`~/.claude/projects`, `~/.codex/sessions`) every few seconds. It then turns the plan's Markdown into steps without AI:
+- each item that names a mapped file (`model.py`, `src/a.js:40-60`) becomes a step on that file;
+- items under a heading that names a file belong to that file;
+- a function or class the item names (`Block.forward`, **GPTConfig**) gives the lines;
+- a new file the plan creates is a proposed file;
+- items that say to leave code alone are kept but marked skipped;
+- context, assumptions and verification sections are not steps.
+
+The full plan text is in the conversation, with any items that name no mapped file. A plan the agent also saved with `save_plan` is not added twice. Turn this off with `yamori.agentPlanMode`.
+
 `yamori.chatInTerminal` (default on): turn it off to use the chat inside the Plan tab and the **What should change** box in How it works instead.
 
 ## Review
