@@ -16,6 +16,8 @@ Open the How it works tab and click **Map my system**. The tab says up front abo
 
    - **sub-steps**, built from the call tree without AI: under each step, the functions it calls (two levels deep), so inner logic such as a ranking or a judge is on the map even when the planner lists only the function that calls it. Plumbing (logging, tracing, settings, helper folders such as `utils` and `config`) is left out.
 
+   - **scripts**: a Python file (or notebook) that does its work in top-level code rather than in functions is split into sections at its comments (`# download the data`, `# training loop`), and those sections are its steps, in the order they run. A small part may have just one or two stages.
+
    Every key behavior has a kind: **Decides** (a rule or threshold), **AI** (asks a model, and what for), **Asks you** (waits for a person), **Writes** and **Reads** (files, folders, services), **Loops**, **Fallback**, **Stops on error**, **Limit**.
 
    What each function does is saved against a hash of its code, so mapping again or updating reuses every unchanged function without a call. At most 4 AI calls run at once (`yamori.parallelRequests`).

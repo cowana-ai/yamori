@@ -45,7 +45,7 @@ const ROUTE_SCHEMA = {
 
 const byPath = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const clip = (text, max) => { const value = String(text || '').replace(/\s+/g, ' ').trim(); return value.length > max ? value.slice(0, max - 1).trimEnd() + '…' : value; };
-const parseJson = (raw, label) => { try { return JSON.parse(String(raw).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch { throw new Error(label + ' returned incomplete JSON.'); } };
+const parseJson = (raw, label) => { const value = stages.readJson(raw); if (value === undefined) throw new Error(label + ' returned incomplete JSON.'); return value; };
 const sourceFiles = graph => Object.entries(graph.files).filter(([, file]) => !file.test && !file.contextFile).map(([rel]) => rel).sort(byPath);
 const signature = graph => crypto.createHash('sha256').update(sourceFiles(graph).join('\n')).digest('hex').slice(0, 16);
 
@@ -67,8 +67,9 @@ function areasOf(graph) {
 // code, or named like a starter.
 const STARTER = /^(main|run|start|serve|app|cli|handler|handle|execute|loop|pipeline|workflow|agent|orchestrate|activate|lambda_handler|create_app)$|(^run_|_loop$|agent|pipeline|workflow|orchestrat|^handle_)/i;
 function fileCandidates(graph, file, text, imported) {
+  const script = scriptCandidate(graph, file, text, imported);
   const defs = stages.symbolsOf(graph.files[file]).filter(def => ['function', 'method'].includes(def.kind));
-  if (!defs.length) return [];
+  if (!defs.length) return script ? [script] : [];
   const lines = text?.split('\n');
   const bodies = new Map(defs.map(def => [def, lines ? lines.slice((def.start || def.line) - 1, def.end || def.line).join('\n') : '']));
   const uses = name => new RegExp('\\b' + name.replace(/[$]/g, '\\$') + '\\b');
@@ -85,7 +86,17 @@ function fileCandidates(graph, file, text, imported) {
     const fromModule = !!moduleText && new RegExp('\\b' + def.name + '\\s*\\(').test(moduleText);
     const score = Math.min(calls.size, 12) * 3 + Math.min(seen.size - 1, 6) + (called.has(def) ? 0 : 5) + (fromModule ? 4 : 0) + (STARTER.test(def.name) ? 4 : 0) + (entryFile ? 3 : 0) + Math.min(reach, 30) * 0.5;
     return { file, symbol: def.name, line: def.start || def.line, score, calls: [...calls].slice(0, 8), reaches: reach, entryFile, fromModule };
-  });
+  }).concat(script ? [script] : []);
+}
+// A script whose work is its top-level code starts at its first block.
+function scriptCandidate(graph, file, text, imported) {
+  const blocks = graph.files[file]?.blocks || [];
+  if (!blocks.length || !text) return undefined;
+  const lines = text.split('\n'), code = blocks.map(block => lines.slice(block.start - 1, block.end).join('\n')).join('\n');
+  const calls = [...imported].filter(name => new RegExp('\\b' + name.replace(/[$]/g, '\\$') + '\\b').test(code));
+  const size = blocks.reduce((sum, block) => sum + block.end - block.start + 1, 0), reach = stages.workflowFiles(graph, file).length;
+  const score = Math.min(calls.length, 12) * 3 + Math.min(blocks.length, 8) + Math.min(size / 10, 10) + 5 + (graph.files[file].main ? 4 : 0) + Math.min(reach, 30) * 0.5;
+  return { file, symbol: blocks[0].name, line: blocks[0].start, score, calls: calls.slice(0, 8), reaches: reach, entryFile: true, fromModule: true, script: true };
 }
 // texts: Map(file → source text) for the files worth reading (readFiles picks them).
 function readFiles(graph) {
@@ -115,7 +126,7 @@ function systemPrompt({ graph, notes, found, project }) {
   const areas = areasOf(graph).map(area => ({
     folder: area.folder,
     files: area.files.slice().sort((a, b) => (graph.files[b].rank || 0) - (graph.files[a].rank || 0) || byPath(a, b)).slice(0, LIMITS.filesPerArea).sort(byPath).map(file => ({ file, purpose: notes?.files?.[file]?.purpose || '' })),
-    candidates: found.filter(item => item.folder === area.folder).map(item => ({ id: item.id, file: item.file, function: item.symbol, calls: item.calls, reachesFiles: item.reaches, ...(item.entryFile ? { entryFile: true } : {}), ...(item.fromModule ? { runAtStartup: true } : {}) }))
+    candidates: found.filter(item => item.folder === area.folder).map(item => ({ id: item.id, file: item.file, function: item.symbol, calls: item.calls, reachesFiles: item.reaches, ...(item.entryFile ? { entryFile: true } : {}), ...(item.fromModule ? { runAtStartup: true } : {}), ...(item.script ? { script: 'the file\'s top-level code' } : {}) }))
   }));
   const areaOf = file => areasOf(graph).find(area => area.files.includes(file))?.folder;
   const cross = new Map();

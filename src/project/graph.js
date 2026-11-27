@@ -19,7 +19,7 @@ const isContextFile = rel => CONTEXT_EXTENSIONS.has(posix.extname(rel).toLowerCa
 const prioritizeFiles = rels => [...rels].sort((a, b) => (isContextFile(a) ? 1 : 0) - (isContextFile(b) ? 1 : 0) || (a < b ? -1 : a > b ? 1 : 0));
 const MAX_FILE_BYTES = 500000, MAX_FILES = 500, MAX_REFS = 600, MAX_PATH_STEPS = 15;
 // Version 2 adds definition end lines and test cases; older scans rebuild once.
-const GRAPH_VERSION = 2;
+const GRAPH_VERSION = 3;
 const IMPORT_WEIGHT = 3, MAX_LINKS_PER_FILE = 12;
 const TEST_PATH = /(^|\/)(tests?|__tests__|specs?)\/|(^|\/)(test_[^/]*|tests?\.[^/.]+|conftest\.py)$|_test\.[^/.]+$|\.(test|spec)\.[^/.]+$/i;
 // In these languages a file must import what it uses, so shared names only
@@ -243,7 +243,65 @@ function testCases(grammar, defs, cases, uses) {
 function finishRecord(defs, refs, imports, rel, text) {
   // Stored references stay bounded; the most used names carry the edges.
   const ranked = [...refs].sort((a, b) => b[1].count - a[1].count || a[1].line - b[1].line).slice(0, MAX_REFS);
-  return { defs: defs.slice(0, 400), refs: ranked.map(([name, ref]) => [name, ref.count, ref.line]), imports: imports.slice(0, 200), main: entrySignal(rel, text) };
+  const blocks = /\.py$/i.test(rel) && defs.every(def => def.end) ? scriptBlocks(defs, text) : [];
+  return { defs: defs.slice(0, 400), refs: ranked.map(([name, ref]) => [name, ref.count, ref.line]), imports: imports.slice(0, 200), main: entrySignal(rel, text), ...(blocks.length ? { blocks } : {}) };
+}
+// A Python script (or a notebook's code view) that does its work outside
+// functions: its top-level code in blocks, split where a section comment
+// follows a blank line (or a notebook cell starts), each named by that comment.
+// Kept apart from defs; only the System map uses them as steps.
+const BLOCK_LIMITS = { minCode: 8, minBlock: 2, maxBlocks: 16, name: 48 };
+function scriptBlocks(defs, text) {
+  const lines = String(text || '').split('\n'), covered = new Uint8Array(lines.length + 2);
+  // Only functions and classes are taken out; top-level assignments are the script's own code.
+  for (const def of defs) if (['function', 'method', 'class'].includes(def.kind)) for (let line = def.start || def.line; line <= (def.end || def.line); line++) covered[line] = 1;
+  const segments = [];
+  let current, title, gap = true, cell, quote;
+  const close = () => { if (current) segments.push(current); current = undefined; };
+  for (let i = 1; i <= lines.length; i++) {
+    const line = lines[i - 1], trimmed = line.trim(), top = !/^\s/.test(line);
+    if (covered[i]) { close(); title = undefined; gap = true; continue; }
+    // A docstring before any code (the module's own) is not a step.
+    if (quote) { if (trimmed.includes(quote)) quote = undefined; continue; }
+    const opens = !current && top && /^[rRbBuU]?("""|''')/.exec(trimmed);
+    if (opens) { if (!trimmed.slice(opens[0].length).includes(opens[1])) quote = opens[1]; continue; }
+    if (!trimmed) { gap = true; continue; }
+    if (/^# Yamori notebook code view/.test(trimmed)) continue;
+    const cellMark = /^# Cell (\d+)$/.exec(trimmed);
+    if (cellMark) { close(); title = undefined; cell = 'cell ' + cellMark[1]; gap = true; continue; }
+    if (top && trimmed.startsWith('#')) {
+      const words = trimmed.replace(/^#+\s*/, '');
+      // A ruler (# -----) ends a section without naming the next one.
+      if (!/[A-Za-z]/.test(words)) { close(); title = undefined; gap = true; continue; }
+      if (gap || !current) { close(); title = title || words; }
+      gap = false; continue;
+    }
+    gap = false;
+    if (top && (/^(import\s|from\s+\S+\s+import\s)/.test(trimmed) || trimmed.startsWith('@')) && !current) continue;
+    if (!current) { current = { start: i, end: i, code: 0, title: title || cell, first: trimmed }; title = undefined; cell = undefined; }
+    if (!trimmed.startsWith('#')) { current.code++; current.end = i; }
+  }
+  close();
+  let kept = segments.filter(segment => segment.code >= BLOCK_LIMITS.minBlock);
+  if (kept.reduce((sum, segment) => sum + segment.code, 0) < BLOCK_LIMITS.minCode) return [];
+  // Too many small sections: fold each small one into the one before it.
+  while (kept.length > BLOCK_LIMITS.maxBlocks) {
+    const index = kept.slice(1).reduce((best, segment, i) => segment.code < kept[best].code ? i + 1 : best, 1);
+    kept[index - 1] = { ...kept[index - 1], end: kept[index].end, code: kept[index - 1].code + kept[index].code };
+    kept.splice(index, 1);
+  }
+  const names = new Set();
+  return kept.map(segment => {
+    let name = (segment.title || '').replace(/[`*]/g, '').replace(/\s+/g, ' ').trim();
+    name = name.split(/(?<=[.!?])\s|\s[-–—]\s/)[0];
+    // Long comments end at a word, not mid-word.
+    if (name.length > BLOCK_LIMITS.name) name = name.slice(0, BLOCK_LIMITS.name + 1).replace(/\s+\S*$/, '') + '…';
+    name = name.replace(/[\s(,.:;]+(…?)$/, '$1').trim();
+    if (!name) name = /^if\s+__name__\s*==/.test(segment.first) ? 'main script' : /^(for|while)\b/.test(segment.first) ? 'loop' : 'top-level code';
+    if (names.has(name.toLowerCase())) name += ' (line ' + segment.start + ')';
+    names.add(name.toLowerCase());
+    return { name, kind: 'block', line: segment.start, start: segment.start, end: segment.end };
+  });
 }
 function entrySignal(rel, text) {
   return /^\s*if\s+__name__\s*==\s*['"]__main__['"]/m.test(text) || /^#!/.test(text) || /require\.main\s*===\s*module/.test(text)
@@ -1289,7 +1347,7 @@ function planParts(defs, text, startLine = 1, { maxParts = 6, minLines = 25 } = 
   return parts.map(part => ({ ...part, names: named.filter(item => item.line >= part.startLine && item.line <= part.endLine).map(item => item.name).slice(0, 16) }));
 }
 
-module.exports = { prioritizeFiles, includeSourceFiles, gitInfo, sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
+module.exports = { scriptBlocks, prioritizeFiles, includeSourceFiles, gitInfo, sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
 
 // Build step: copy the tree-sitter runtime and the bundled grammars from the
 // pinned development dependency. Run `npm run build:parser` after updating it.

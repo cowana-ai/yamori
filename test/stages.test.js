@@ -436,3 +436,27 @@ test('the How it works search is loose: word endings, one typo, same-meaning ver
   assert.equal(matches('Picks', queryWords('selection')), true);
   assert.equal(matches('folder', queryWords('selection')), false);
 });
+
+test('a script that works outside functions gets steps: top-level sections named by their comments, run in order', () => {
+  const { scriptBlocks } = require('../src/project/graph');
+  const { callTree } = require('../src/stages/callgraph');
+  const { readJson, planSchema } = require('../src/stages/generate');
+  const text = ['"""', 'Prepare the data.', '"""', 'import os', 'size = 10', '', '# download the text', 'data = open("in.txt").read()', 'print(len(data))', '',
+    '# ----------', 'def encode(s):', '    return [ord(c) for c in s]', '', '# split and encode both halves', 'train = encode(data[:size])', 'val = encode(data[size:])', 'print(train, val)', '',
+    '# save the files', 'open("train.bin", "w").write(str(train))', 'open("val.bin", "w").write(str(val))', 'print("saved")'].join('\n');
+  const defs = [{ name: 'size', kind: 'constant', line: 5, start: 5, end: 5 }, { name: 'encode', kind: 'function', line: 12, start: 12, end: 13 }];
+  const blocks = scriptBlocks(defs, text);
+  // The docstring and imports are not steps; a top-level assignment is code, not a break.
+  assert.deepEqual(blocks.map(block => [block.name, block.start, block.end]), [['download the text', 8, 9], ['split and encode both halves', 16, 18], ['save the files', 21, 23]]);
+  assert.deepEqual(scriptBlocks([], 'import os\nx = 1\n'), [], 'a tiny module has no blocks');
+  // Started from its first block, the tree runs every block and reaches the function they call.
+  const graph = { files: { 'prep.py': { defs, blocks } }, edges: [] };
+  const tree = callTree(graph, new Map([['prep.py', text]]), ['prep.py'], 'prep.py', 'download the text');
+  assert.deepEqual(tree.nodes.map(node => node.symbol), ['download the text', 'split and encode both halves', 'save the files', 'encode']);
+  // A small part may have fewer stages; replies with text around the JSON still parse.
+  assert.equal(planSchema(1).properties.stages.minItems, 1);
+  assert.equal(planSchema(40).properties.stages.minItems, 3);
+  assert.deepEqual(readJson('Here it is:\n```json\n{"stages": []}\n```\nDone.'), { stages: [] });
+  assert.deepEqual(readJson('Sure. {"a": 1} hope that helps'), { a: 1 });
+  assert.equal(readJson('I cannot do that.'), undefined);
+});

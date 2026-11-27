@@ -66,7 +66,7 @@ Return the JSON only.`;
 // Turn the model's edits into whole-file results, checking every range.
 function buildPreview(raw, sources, texts) {
   let value;
-  try { value = JSON.parse(String(raw).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch { throw new Error('The steer writer returned incomplete JSON.'); }
+  value = require('./generate').readJson(raw); if (value === undefined) throw new Error('The steer writer returned incomplete JSON.');
   const edits = Array.isArray(value?.edits) ? value.edits.slice(0, LIMITS.edits) : [];
   // Replacements stay inside a range; an insertion may also go right after it.
   const allowed = (file, start, end) => sources.some(source => source.file === file && start >= source.from && (end < start ? start <= source.to + 1 : end <= source.to));

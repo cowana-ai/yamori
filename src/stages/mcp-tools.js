@@ -135,7 +135,7 @@ Return the JSON only.`;
       const response = await requestStructured({ ...config, prompt, schema: PROPOSE_SCHEMA, showPreview: false });
       run.log({ model: response.actualModel || config.model, usage: response.usage, workflowId, stageId: found.id, estimate, note: 'agent request' });
       let value;
-      try { value = JSON.parse(String(response.raw).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch { throw new Error('The planner returned incomplete JSON.'); }
+      value = require('./generate').readJson(response.raw); if (value === undefined) throw new Error('The planner returned incomplete JSON.');
       const known = new Set(view.steps.map(step => step.file + '#' + step.symbol));
       return { stage: found.name, summary: value.summary, constraints: value.constraints || [], founderNotes: notes || '(none)',
         steps: (value.steps || []).map(step => { const match = view.steps.find(item => item.file === step.file && item.symbol === step.symbol); return { file: step.file, symbol: step.symbol, change: step.change, ...(match ? { lines: [match.line_start, match.line_end] } : { outsideStage: !known.has(step.file + '#' + step.symbol) }) }; }),

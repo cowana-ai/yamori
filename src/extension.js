@@ -1395,7 +1395,8 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       await entry.store.save('graph', entry.graph).catch(() => {});
       return entry;
     },
-    async readSource(entry, rel) { return readSource(entry, await fs.realpath(entry.root.fsPath), fileUri(entry, rel), true); },
+    // Notebooks as their code view, the text the indexer's lines refer to.
+    async readSource(entry, rel) { return readSource(entry, await fs.realpath(entry.root.fsPath), fileUri(entry, rel), !/\.ipynb$/i.test(rel)); },
     reveal: (entry, rel, line) => entry.graph?.files[rel] ? reveal(entry, rel, line) : undefined,
     openFlow: (entry, rel, line) => entry.graph?.files[rel] ? api.commands.executeCommand('yamori.openAt', fileUri(entry, rel).toString(), line) : undefined,
     async gitHead(entry) {

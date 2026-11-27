@@ -4,7 +4,7 @@
 // handlers registered in a function, closures) and uses from other files, with
 // the first line of its docstring or leading comment. This is what lets the
 // mapper see the real flow of a part instead of only file notes.
-const STEP_KINDS = new Set(['function', 'method', 'class']);
+const STEP_KINDS = new Set(['function', 'method', 'class', 'block']);
 const LIMITS = { nodes: 160, depth: 10, doc: 220 };
 
 // Code without comments and string literals, so names in docstrings, log
@@ -21,7 +21,7 @@ function codeOnly(text) {
 const byStart = (a, b) => (a.start || a.line) - (b.start || b.line);
 function definitions(graph, file) {
   const seen = new Set();
-  return (graph.files[file]?.defs || []).filter(def => STEP_KINDS.has(def.kind) && !seen.has(def.name + ':' + def.line) && seen.add(def.name + ':' + def.line)).map(def => ({ ...def, start: def.start || def.line, end: def.end || def.line })).sort(byStart);
+  return [...(graph.files[file]?.defs || []), ...(graph.files[file]?.blocks || [])].filter(def => STEP_KINDS.has(def.kind) && !seen.has(def.name + ':' + def.line) && seen.add(def.name + ':' + def.line)).map(def => ({ ...def, start: def.start || def.line, end: def.end || def.line })).sort(byStart);
 }
 
 // The first sentence of a function's docstring (Python) or leading comment (JS/TS/Go/Rust/Java).
@@ -61,7 +61,7 @@ function callTree(graph, texts, files, entryFile, entrySymbol, { maxNodes = LIMI
   // Defs by name across the part, for package re-exports and unresolved names.
   const byName = new Map();
   for (const [file, list] of defs) for (const def of list) { if (!byName.has(def.name)) byName.set(def.name, []); byName.get(def.name).push({ file, def }); }
-  const children = (file, def) => defs.get(file).filter(other => other !== def && other.start > def.start && other.end <= def.end && !defs.get(file).some(mid => mid !== def && mid !== other && mid.start > def.start && mid.end <= def.end && other.start > mid.start && other.end <= mid.end));
+  const children = (file, def) => def.kind === 'block' ? [] : defs.get(file).filter(other => other !== def && other.kind !== 'block' && other.start > def.start && other.end <= def.end && !defs.get(file).some(mid => mid !== def && mid !== other && mid.start > def.start && mid.end <= def.end && other.start > mid.start && other.end <= mid.end));
   const resolve = (file, name, owner) => {
     const local = defs.get(file).filter(def => def.name === name && def !== owner);
     if (local.length) return local.map(def => ({ file, def }));
@@ -77,6 +77,8 @@ function callTree(graph, texts, files, entryFile, entrySymbol, { maxNodes = LIMI
   if (!entryDef) return { nodes: [], reached: new Set() };
   const nodes = new Map(), queue = [{ file: entryFile, def: entryDef, depth: 0 }];
   nodes.set(id(entryFile, entryDef), undefined);
+  // A script runs its top-level blocks one after another: all of them start the tree, in order.
+  if (entryDef.kind === 'block') for (const block of defs.get(entryFile).filter(def => def.kind === 'block' && def !== entryDef && def.start > entryDef.start)) { nodes.set(id(entryFile, block), undefined); queue.push({ file: entryFile, def: block, depth: 0 }); }
   while (queue.length && [...nodes.values()].filter(Boolean).length < maxNodes) {
     const { file, def, depth, inside } = queue.shift();
     const all = lines.get(file), nested = children(file, def);
