@@ -289,7 +289,21 @@ function systemView(db, graph, notes) {
 // One part as it works: every stage with its steps, sub-steps and behaviors. Pure reads.
 function partFlow(db, graph, workflowId) {
   return db.stages(workflowId).map(stage => ({ id: stage.id, name: stage.name, gist: stage.gist, input: stage.input, output: stage.output, stale: stage.stale,
-    steps: db.steps(workflowId, stage.id).map(step => { const def = stages.symbolsOf(graph.files[step.file]).find(item => item.name === step.symbol); return { ...step, line_start: def ? def.start || def.line : step.line_start }; }) }));
+    steps: db.steps(workflowId, stage.id).map(step => ({ ...step, ...stepShape(graph, step) })) }));
+}
+// What a step is: a class, a method of a class, a function, or a script section.
+// Several classes can have a method of the same name (forward): the line the step
+// was mapped at tells which one.
+function stepShape(graph, step) {
+  const file = graph.files[step.file];
+  const block = (file?.blocks || []).find(item => item.name === step.symbol);
+  if (block) return { kind: 'section', line_start: block.start };
+  const defs = (file?.defs || []).filter(def => ['function', 'method', 'class'].includes(def.kind)), at = def => def.start || def.line;
+  const same = defs.filter(def => def.name === step.symbol);
+  const def = same.find(item => at(item) === step.line_start) || same.slice().sort((a, b) => Math.abs(at(a) - (step.line_start || 0)) - Math.abs(at(b) - (step.line_start || 0)))[0];
+  if (!def) return {};
+  const owner = defs.filter(other => other.kind === 'class' && other !== def && at(other) < at(def) && (other.end || at(other)) >= (def.end || at(def))).sort((a, b) => at(b) - at(a))[0];
+  return { kind: def.kind === 'class' ? 'class' : owner ? 'method' : 'function', ...(owner ? { owner: owner.name } : {}), line_start: at(def) };
 }
 // One part up close: its files, what each is for, which step it serves, how the
 // files import each other, and what they use from outside. Pure reads.
@@ -382,4 +396,4 @@ async function routeIntent({ db, graph, intent, notes, request, run, provider, m
   return { intent: intent.trim(), targets, explanation: clip(value.explanation, 300), question: targets.length ? '' : clip(value.question, 200) };
 }
 
-module.exports = { partFlow, partDetail, fileDetail, inFolder, SYSTEM_SCHEMA, ROUTE_SCHEMA, SYSTEM_PROMPT_VERSION, areasOf, candidates, readFiles, systemPrompt, parseSystem, estimateSystem, buildSystem, systemStatus, systemView, routeIntent, signature };
+module.exports = { stepShape, partFlow, partDetail, fileDetail, inFolder, SYSTEM_SCHEMA, ROUTE_SCHEMA, SYSTEM_PROMPT_VERSION, areasOf, candidates, readFiles, systemPrompt, parseSystem, estimateSystem, buildSystem, systemStatus, systemView, routeIntent, signature };

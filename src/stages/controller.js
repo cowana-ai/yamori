@@ -157,6 +157,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       partDetail: item.workflowId ? system.partDetail(db, graph, item.entry.notes, item.workflowId) : undefined,
       partFlow: item.workflowId ? system.partFlow(db, graph, item.workflowId) : undefined,
       partCalls: item.workflowId ? item.callLinks?.[item.workflowId]?.links : undefined,
+      partBuiltFrom: item.workflowId ? item.callLinks?.[item.workflowId]?.builtFrom : undefined,
       shared: item.shared ? sharedDetail(item, view) : undefined,
       file: item.file ? system.fileDetail(db, graph, item.entry.notes, item.file, item.entry.explanations) : undefined,
       route: item.route, steer: item.steer && steerState(item.steer), activity: activity(db) };
@@ -273,7 +274,22 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       }
       if (found.size) links[from] = [...found];
     }
-    item.callLinks[workflowId] = { signature, links };
+    // What each class step is built from: the part's classes its code uses (a model from its layers).
+    const { definitions, codeOnly } = require('./callgraph');
+    const classes = new Map();
+    for (const file of texts.keys()) for (const def of definitions(graph, file)) if (def.kind === 'class' && !classes.has(def.name)) classes.set(def.name, { file, def });
+    const builtFrom = {};
+    // For each class that is a step, or owns a method that is one.
+    for (const step of steps) {
+      const line = step.line_start || 0;
+      const home = classes.get(step.symbol)?.file === step.file ? classes.get(step.symbol)
+        : [...classes.values()].filter(item => item.file === step.file && item.def.start < line && item.def.end >= line).sort((a, b) => b.def.start - a.def.start)[0];
+      if (!home || !texts.has(step.file) || builtFrom[step.file + '#' + home.def.name]) continue;
+      const body = codeOnly(texts.get(step.file).split('\n').slice(home.def.start - 1, home.def.end).join('\n'));
+      const used = [...classes.keys()].filter(name => name !== home.def.name && new RegExp('\\b' + name + '\\b').test(body));
+      if (used.length) builtFrom[step.file + '#' + home.def.name] = used.slice(0, 8);
+    }
+    item.callLinks[workflowId] = { signature, links, builtFrom };
   }
   // A message from the System tab: errors show in the tab.
   async function message(entry, value) {

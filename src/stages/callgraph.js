@@ -117,4 +117,4 @@ function treeText(tree, { maxLines = 220 } = {}) {
   return out.join('\n');
 }
 
-module.exports = { callTree, treeText, docOf, definitions, LIMITS };
+module.exports = { callTree, treeText, docOf, definitions, codeOnly, LIMITS };

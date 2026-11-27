@@ -460,3 +460,19 @@ test('a script that works outside functions gets steps: top-level sections named
   assert.deepEqual(readJson('Sure. {"a": 1} hope that helps'), { a: 1 });
   assert.equal(readJson('I cannot do that.'), undefined);
 });
+
+test('steps know whether they are a class, a method of which class, a function or a script section', () => {
+  const { stepShape } = require('../src/stages/system');
+  const graph = { files: { 'model.py': { defs: [
+    { name: 'LayerNorm', kind: 'class', line: 1, start: 1, end: 8 }, { name: 'forward', kind: 'function', line: 5, start: 5, end: 8 },
+    { name: 'Block', kind: 'class', line: 10, start: 10, end: 20 }, { name: 'forward', kind: 'function', line: 15, start: 15, end: 20 },
+    { name: 'train', kind: 'function', line: 22, start: 22, end: 30 }, { name: 'SIZE', kind: 'constant', line: 31, start: 31, end: 31 }],
+    blocks: [{ name: 'training loop', kind: 'block', line: 40, start: 40, end: 60 }] } } };
+  const shape = (symbol, line) => stepShape(graph, { file: 'model.py', symbol, line_start: line });
+  assert.deepEqual(shape('LayerNorm', 1), { kind: 'class', line_start: 1 });
+  // Two classes have a forward: the line the step was mapped at picks the right one.
+  assert.deepEqual(shape('forward', 15), { kind: 'method', owner: 'Block', line_start: 15 });
+  assert.deepEqual(shape('forward', 5), { kind: 'method', owner: 'LayerNorm', line_start: 5 });
+  assert.deepEqual(shape('train', 22), { kind: 'function', line_start: 22 });
+  assert.deepEqual(shape('training loop', 40), { kind: 'section', line_start: 40 });
+});
