@@ -158,6 +158,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       partFlow: item.workflowId ? system.partFlow(db, graph, item.workflowId) : undefined,
       partCalls: item.workflowId ? item.callLinks?.[item.workflowId]?.links : undefined,
       partBuiltFrom: item.workflowId ? item.callLinks?.[item.workflowId]?.builtFrom : undefined,
+      partLayers: item.workflowId ? item.callLinks?.[item.workflowId]?.layers : undefined,
       shared: item.shared ? sharedDetail(item, view) : undefined,
       file: item.file ? system.fileDetail(db, graph, item.entry.notes, item.file, item.entry.explanations) : undefined,
       route: item.route, steer: item.steer && steerState(item.steer), activity: activity(db) };
@@ -289,7 +290,9 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       const used = [...classes.keys()].filter(name => name !== home.def.name && new RegExp('\\b' + name + '\\b').test(body));
       if (used.length) builtFrom[step.file + '#' + home.def.name] = used.slice(0, 8);
     }
-    item.callLinks[workflowId] = { signature, links, builtFrom };
+    // What each model class is made of (its layers, in the order forward runs them).
+    const layers = require('./layers').partLayers([...classes.values()], texts);
+    item.callLinks[workflowId] = { signature, links, builtFrom, layers };
   }
   // A message from the System tab: errors show in the tab.
   async function message(entry, value) {

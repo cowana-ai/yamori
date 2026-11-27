@@ -476,3 +476,108 @@ test('steps know whether they are a class, a method of which class, a function o
   assert.deepEqual(shape('train', 22), { kind: 'function', line_start: 22 });
   assert.deepEqual(shape('training loop', 40), { kind: 'section', line_start: 40 });
 });
+
+// What a class is made of, from its code: any model style or plain class, no AI.
+test('a class shows what it is made of: parts in the order they run, repeats, shortcuts, plain words', () => {
+  const { partLayers } = require('../src/stages/layers');
+  const read = (file, text) => {
+    const lines = text.split('\n'), found = [];
+    lines.forEach((line, i) => { const m = /^(?:export\s+)?class (\w+)/.exec(line); if (m) found.push({ file, def: { name: m[1], start: i + 1 } }); });
+    found.forEach((item, i) => { item.def.end = i + 1 < found.length ? found[i + 1].def.start - 1 : lines.length; });
+    return found;
+  };
+  const conv = [
+    'class Unit(nn.Module):',
+    '    """Two convolutions with a skip connection."""',
+    '    def __init__(self, c):',
+    '        super().__init__()',
+    '        self.first = nn.Conv2d(c, c, 3)',
+    '        self.norm = nn.BatchNorm2d(c)',
+    '        self.second = nn.Conv2d(c, c, 3)',
+    '    def forward(self, x):',
+    '        saved = x',
+    '        out = self.norm(self.first(x))',
+    '        out = self.second(out)',
+    '        out += saved',
+    '        return out',
+    'class Net(nn.Module):',
+    '    def __init__(self, depth, classes):',
+    '        super().__init__()',
+    '        self.stem = nn.Sequential(OrderedDict([("conv", nn.Conv2d(3, 8, 7)), ("act", nn.ReLU())]))',
+    '        self.units = nn.ModuleList([Unit(8) for _ in range(depth)])',
+    '        self.head = nn.Linear(8, classes)  # the classifier',
+    '        self.spare = nn.Dropout(0.1)',
+    '    def forward(self, x, y=None):',
+    '        x = self.stem(x)',
+    '        for unit in self.units:',
+    '            x = unit(x)',
+    '        logits = self.head(x)',
+    '        loss = F.cross_entropy(logits, y)',
+    '        return logits, loss',
+  ].join('\n');
+  const keras = [
+    'class Tagger(keras.Model):',
+    '    def __init__(self):',
+    '        super().__init__()',
+    '        self.embed = layers.Embedding(100, 16)',
+    '        self.mix = layers.Dense(16)',
+    '    def call(self, inputs):',
+    '        h = self.embed(inputs)',
+    '        h = h + self.mix(h)',
+    '        return h',
+  ].join('\n');
+  const plain = [
+    'class Orders:',
+    '    def __init__(self, cfg):',
+    '        self.db = Database(cfg.url)',
+    '        self.mail = Mailer(cfg.smtp)',
+    '        self.count = 0',
+    '    def place(self, order):',
+    '        self.db.save(order)',
+    '        self.mail.send(order)',
+    '        return order',
+  ].join('\n');
+  const ts = [
+    '/** Keeps the cart in sync. */',
+    'export class Cart {',
+    '  constructor(base: string) {',
+    '    this.events = new Emitter();',
+    '    this.api = new Api(base);',
+    '  }',
+    '  async sync(cart: Items) {',
+    '    const fresh = await this.api.put(cart);',
+    '    this.events.emit(fresh);',
+    '    return fresh;',
+    '  }',
+    '}',
+  ].join('\n');
+  const texts = new Map([['net.py', conv], ['tagger.py', keras], ['orders.py', plain], ['cart.ts', ts]]);
+  const out = partLayers([...texts].flatMap(([file, text]) => read(file, text)), texts);
+  const names = key => out[key].layers.map(layer => layer.name);
+
+  // In the order forward runs them (inner calls first), with the skip added back after the last.
+  assert.deepEqual(names('net.py#Unit'), ['first', 'norm', 'second']);
+  assert.equal(out['net.py#Unit'].doc, 'Two convolutions with a skip connection.');
+  assert.deepEqual(out['net.py#Unit'].layers.filter(layer => layer.residual).map(layer => [layer.name, layer.residualFrom]), [['second', 'first']]);
+  assert.match(out['net.py#Unit'].layers[0].plain, /pattern/);
+  // Named pieces of a container run with it; a repeated project block points at its own class; math between parts shows.
+  assert.deepEqual(names('net.py#Net'), ['stem.conv', 'stem.act', 'units', 'head', 'cross_entropy', 'spare']);
+  const units = out['net.py#Net'].layers.find(layer => layer.name === 'units');
+  assert.equal(units.repeat, 'depth');
+  assert.equal(units.own, 'net.py#Unit');
+  assert.equal(units.doc, 'Two convolutions with a skip connection.');
+  assert.ok(out['net.py#Net'].layers.find(layer => layer.name === 'cross_entropy').op);
+  assert.ok(out['net.py#Net'].layers.find(layer => layer.name === 'spare').unused);
+  assert.deepEqual([out['net.py#Net'].inputs, out['net.py#Net'].outputs], [['x', 'y'], ['logits', 'loss']]);
+  // Keras: call() runs it; h = h + part(h) is a shortcut.
+  assert.equal(out['tagger.py#Tagger'].runs, 'call');
+  assert.deepEqual(out['tagger.py#Tagger'].layers.map(layer => [layer.name, !!layer.residual]), [['embed', false], ['mix', true]]);
+  // Not a model: the method that uses the most parts sets the order; plain values are not parts.
+  assert.equal(out['orders.py#Orders'].runs, 'place');
+  assert.deepEqual(names('orders.py#Orders'), ['db', 'mail']);
+  assert.equal(out['orders.py#Orders'].layers[0].plain, undefined);
+  // TypeScript: this.x = new X() in the constructor.
+  assert.deepEqual(names('cart.ts#Cart'), ['api', 'events']);
+  assert.equal(out['cart.ts#Cart'].doc, 'Keeps the cart in sync.');
+  assert.deepEqual(out['cart.ts#Cart'].inputs, ['cart']);
+});

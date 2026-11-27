@@ -165,6 +165,33 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-built code { color: oklch(80% .14 300); font-weight: 600; }
 #stages-view .st-node.flowstep.classbox { border-radius: 10px; border-width: 1.5px; background: color-mix(in srgb, oklch(60% .13 300) 9%, var(--read-surface, var(--read-page))); }
 #stages-view .st-node.flowstep.methodbox { border-style: dashed; border-left-style: solid; }
+#stages-view .st-measure { position: absolute; left: -10000px; top: 0; visibility: hidden; }
+#stages-view .st-measure > .st-node { height: auto; }
+#stages-view .st-measure > .st-node.repeat { height: auto; width: calc(100% - 9px); }
+#stages-view .st-inside-hint { font-size: 11px; color: oklch(72% .13 300); margin: 4px 0 0; }
+#stages-view .st-switch { display: inline-flex; border: 1px solid var(--read-border); }
+#stages-view .st-switch button { border: 0; padding: 2px 9px; font-size: 12px; background: transparent; color: var(--read-muted); }
+#stages-view .st-switch button.on { background: var(--read-ink); color: var(--read-page); font-weight: 700; }
+#stages-view .st-crumbs { font-size: 13px; }
+#stages-view .st-node.st-layer { border-radius: 10px; border-width: 1.5px; padding: 9px 12px; gap: 4px; background: color-mix(in srgb, oklch(60% .13 300) 7%, var(--read-surface, var(--read-page))); }
+#stages-view .st-node.st-layer.repeat { box-shadow: 4px 4px 0 -1px var(--read-page), 4px 4px 0 0 color-mix(in srgb, oklch(76% .13 85) 60%, transparent), 8px 8px 0 -1px var(--read-page), 8px 8px 0 0 color-mix(in srgb, oklch(76% .13 85) 35%, transparent); width: calc(100% - 9px); height: calc(100% - 9px); overflow: visible; }
+#stages-view .st-node.st-layer.selected { border-color: var(--read-ink); box-shadow: 0 0 0 2px var(--read-ink); }
+#stages-view .st-node.st-layer.op { border-style: dashed; border-radius: 16px; background: var(--read-page); padding: 5px 12px; }
+#stages-view .st-layer-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
+#stages-view .st-layer-name { font-size: 11px; color: var(--read-muted); }
+#stages-view .st-layer-what { font-size: 12.5px; line-height: 1.4; }
+#stages-view .st-opname { font: 600 12px var(--vscode-editor-font-family, monospace); color: oklch(74% .12 200); }
+#stages-view .st-layer-badge { font-size: 11px; color: var(--read-muted); }
+#stages-view .st-layer-badge.repeat { color: oklch(76% .13 85); font-weight: 600; }
+#stages-view .st-layer-badge.shortcut { color: oklch(74% .12 160); }
+#stages-view .st-layer-inner { margin-top: 4px; padding: 6px 8px; border: 1px dashed var(--read-border); border-radius: 8px; background: var(--read-page); }
+#stages-view .st-layer-inner-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--read-muted); margin-bottom: 2px; }
+#stages-view .st-layer-row { font-size: 11.5px; padding: 1px 0; }
+#stages-view .st-layer-row code { font-size: 10.5px; color: var(--read-muted); }
+#stages-view .st-layer-row-what { color: var(--read-muted); font-size: 11px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#stages-view .st-layer-down { display: block; color: var(--read-muted); font-size: 10px; line-height: 1; }
+#stages-view .st-layer-plus { color: oklch(74% .12 160); font-weight: 700; }
+#stages-view .st-node.st-layer-end { border-radius: 18px; border-style: dashed; background: var(--read-page); flex-direction: row; align-items: center; gap: 8px; padding: 6px 14px; cursor: default; }
 #stages-view .st-built { font-size: 11px; color: var(--read-muted); margin: 4px 0 0; }
 #stages-view .st-built code, #stages-view .st-method code { font-size: 11px; color: var(--read-ink); }
 #stages-view .st-methods { margin: 6px -4px 2px; border-top: 1px solid color-mix(in srgb, var(--read-border) 70%, transparent); padding-top: 4px; display: grid; gap: 2px; }
@@ -384,7 +411,7 @@ function mountStages(root, post) {
       const text = edge.label ? s('text', { 'text-anchor': 'middle' }, edge.label) : undefined;
       return { edge, path, text };
     });
-    const place = item => { const r = route(at.get(item.edge.from), at.get(item.edge.to)); item.path.setAttribute('d', r.d); if (item.text) { item.text.setAttribute('x', r.lx); item.text.setAttribute('y', r.ly); } };
+    const place = item => { const r = route(at.get(item.edge.from), at.get(item.edge.to), item.edge); item.path.setAttribute('d', r.d); if (item.text) { item.text.setAttribute('x', r.lx); item.text.setAttribute('y', r.ly); } };
     drawnEdges.forEach(place);
     for (const item of drawnEdges) layer.append(item.path);
     for (const item of drawnEdges) if (item.text) layer.append(s('g', { class: 'st-edge-label' + (item.edge.dim ? ' dim' : '') }, item.text));
@@ -466,7 +493,9 @@ function mountStages(root, post) {
     return box;
   }
   // An arrow from the right side of one box to the left side of another; backward arrows loop underneath.
-  function route(from, to) {
+  function route(from, to, edge = {}) {
+    if (edge.down) { const x1 = from.x + from.w / 2, y1 = from.y + from.h, x2 = to.x + to.w / 2, y2 = to.y - 3; return { d: 'M' + x1 + ' ' + y1 + ' C' + x1 + ' ' + (y1 + y2) / 2 + ' ' + x2 + ' ' + (y1 + y2) / 2 + ' ' + x2 + ' ' + y2, lx: (x1 + x2) / 2, ly: (y1 + y2) / 2 }; }
+    if (edge.side) { const x1 = from.x + from.w, y1 = from.y + from.h / 2, x2 = to.x + to.w + 3, y2 = to.y + to.h / 2, out = Math.max(x1, x2) + 54; return { d: 'M' + x1 + ' ' + y1 + ' C' + out + ' ' + y1 + ' ' + out + ' ' + y2 + ' ' + x2 + ' ' + y2, lx: out - 10, ly: (y1 + y2) / 2 }; }
     const forward = to.x > from.x + from.w / 2;
     if (forward) {
       const x1 = from.x + from.w, y1 = from.y + from.h / 2, x2 = to.x - 3, y2 = to.y + to.h / 2, mid = (x1 + x2) / 2;
@@ -654,13 +683,14 @@ function mountStages(root, post) {
     // A clicked box takes over the trace; matches stay outlined.
     if (current && !clicked) { path.add(current.ref); walk(current.ref, callers, 6).forEach(ref => path.add(ref)); walk(current.ref, calls, 1).forEach(ref => path.add(ref)); }
     if (clicked) { path.add(clicked.ref); walk(clicked.ref, callers, 6).forEach(ref => path.add(ref)); walk(clicked.ref, calls, 3).forEach(ref => path.add(ref)); }
+    if (clicked && insideRefOf(clicked.step) && flowModeOf(clicked.step) === 'inside') return insideView(part, clicked, entries, words);
     if (clicked) return pathView(part, clicked, entries.find(entry => entry.key === ui.flowStep) || clicked, entries, calls, callers, walk, height, words);
     const active = !!(clicked || hits.length), hitRefs = new Set(hits.map(hit => hit.ref));
     const lookOf = entry => current?.ref === entry.ref ? 'hit current' : hitRefs.has(entry.ref) ? 'hit' : path.has(entry.ref) ? 'onpath' : active ? 'dim' : '';
     // A method sits inside its class's box when that class is a step of the same stage.
     for (const entry of entries) if (entry.step.kind === 'method') entry.host = entries.find(other => other.stage === entry.stage && other.step.kind === 'class' && other.step.symbol === entry.step.owner && other.step.file === entry.step.file);
     const membersOf = host => entries.filter(entry => entry.host === host);
-    const classHeight = (entry, members) => height(entry.step) + (state.partBuiltFrom?.[entry.ref] ? 6 + 15 * lines('Built from ' + state.partBuiltFrom[entry.ref].join(' · '), 34) : 0) + (members.length ? 14 + members.reduce((sum, member) => sum + 25 + 15 * Math.min(2, lines(member.step.what, 30)), 0) : 0);
+    const classHeight = (entry, members) => height(entry.step) + (state.partLayers?.[entry.ref] ? 20 : 0) + (state.partBuiltFrom?.[entry.ref] ? 6 + 15 * lines('Built from ' + state.partBuiltFrom[entry.ref].join(' · '), 34) : 0) + (members.length ? 14 + members.reduce((sum, member) => sum + 25 + 15 * Math.min(2, lines(member.step.what, 30)), 0) : 0);
     const nodes = [], edges = [], idOf = ref => { const entry = byRef.get(ref); return entry && (entry.host || entry).id; };
     let previousLast;
     flow.forEach((stage, c) => {
@@ -711,9 +741,10 @@ function mountStages(root, post) {
       canvas, picked ? flowStepDetail(picked) : undefined];
   }
   // Moving between a part's whole diagram and a step's path stays in full view.
+  function resetInside() { ui.flowMode = ui.flowLayer = undefined; ui.insideTrail = []; }
   function keepFull(part, graphKey) {
     const [kind, id] = String(ui.full || '').split(':');
-    if ((kind === 'pflow' || kind === 'ppath') && id === part.id) ui.full = graphKey;
+    if ((kind === 'pflow' || kind === 'ppath' || kind === 'pin') && id === part.id) ui.full = graphKey;
   }
   // A clicked step's path on its own, read left to right: what leads to it,
   // the step, and what it calls, each box labeled with its stage.
@@ -723,8 +754,14 @@ function mountStages(root, post) {
     const list = entries.filter(entry => keep.has(entry.ref));
     const links = [];
     for (const from of keep) for (const to of calls.get(from) || []) if (keep.has(to) && !(after.has(from) && before.has(to))) links.push({ from, to });
-    const W = 236, H = 34 + Math.max(...list.map(entry => height(entry.step)));
-    const layout = layeredLayout(list.map(entry => ({ id: entry.ref })), links, { width: W, height: H, gapX: 64, gapY: 18 });
+    const W = 236, H = 34 + Math.max(...list.map(entry => height(entry.step))), GY = 18;
+    const layout = layeredLayout(list.map(entry => ({ id: entry.ref })), links, { width: W, height: H, gapX: 64, gapY: GY });
+    // Each box only as tall as its text: restack every column, centered on the tallest.
+    const own = new Map(list.map(entry => [entry.ref, 34 + height(entry.step)])), columns = new Map();
+    for (const entry of list) { const at = layout.positions.get(entry.ref); (columns.get(at.x) || columns.set(at.x, []).get(at.x)).push(entry.ref); }
+    const totals = new Map([...columns].map(([x, refs]) => [x, refs.reduce((sum, ref) => sum + own.get(ref) + GY, -GY)])), tallest = Math.max(...totals.values());
+    for (const [x, refs] of columns) { let y = (tallest - totals.get(x)) / 2; refs.sort((a, b) => layout.positions.get(a).y - layout.positions.get(b).y).forEach(ref => { layout.positions.get(ref).y = y; y += own.get(ref) + GY; }); }
+    layout.height = tallest;
     const stageNumber = new Map((state.partFlow || []).map((stage, index) => [stage.id, index + 1]));
     const graphKey = 'ppath:' + part.id + ':' + clicked.ref;
     keepFull(part, graphKey);
@@ -732,13 +769,13 @@ function mountStages(root, post) {
       const at = layout.positions.get(entry.ref), color = stepColor(part.id, entry.stage.id);
       const box = flowBox({ ...entry.step, depth: 0 }, entry.key, color, entry === selected ? 'selected' : entry === clicked ? 'onpath' : '', words);
       box.prepend(h('div', { class: 'st-path-stage', style: 'color:' + color }, stageNumber.get(entry.stage.id) + '. ' + entry.stage.name));
-      return { id: entry.ref, x: at.x, y: at.y, w: W, h: H, ref: entry.ref, content: box };
+      return { id: entry.ref, x: at.x, y: at.y, w: W, h: own.get(entry.ref), ref: entry.ref, content: box };
     });
     const name = ref => entries.find(entry => entry.ref === ref)?.step.symbol;
     const edges = links.map(link => ({ ...link, hot: true, title: name(link.from) + ' calls ' + name(link.to) }));
     const summary = (before.size ? plural(before.size, 'step') + ' lead here' : 'Nothing in this part calls it') + (after.size ? ' · it calls ' + plural(after.size, 'step') : '');
     const bar = () => h('div', { class: 'st-flowbar' },
-      act('flowBack', {}, '← Whole part', { title: 'Back to every step of this part' }),
+      act('flowBack', {}, '← Whole part', { title: 'Back to every step of this part' }), modeSwitch(clicked.step),
       h('b', {}, 'Path of ' + clicked.step.symbol), muted(summary + '. Read left to right; click a box for its details.'));
     ui.flowPlaces = { key: graphKey, hits: [] };
     // Another box's own path, only when asked.
@@ -747,6 +784,125 @@ function mountStages(root, post) {
     const box = nodes.find(node => node.ref === selected.ref);
     ui.flowSelected = { key: graphKey, x: box.x, y: box.y, w: box.w, h: box.h };
     return [ui.full === graphKey ? undefined : bar(), canvas, detail()];
+  }
+  // --- inside a class: what it is made of, top to bottom ---
+  // Read from the code (no AI): the parts its constructor creates, in the order
+  // its main method (forward, call, or the one using most parts) runs them.
+  const insideKeyOf = step => step.kind === 'class' ? step.file + '#' + step.symbol : step.kind === 'method' && step.owner ? step.file + '#' + step.owner : undefined;
+  const insideRefOf = step => { const key = insideKeyOf(step); return key && state.partLayers?.[key]?.layers.some(layer => !layer.op) ? key : undefined; };
+  const flowModeOf = step => ui.flowMode || (step.kind === 'class' ? 'inside' : 'calls');
+  const shortName = key => String(key).split('#').pop();
+  function modeSwitch(step) {
+    const key = insideRefOf(step);
+    if (!key) return undefined;
+    const mode = flowModeOf(step);
+    return h('span', { class: 'st-switch', role: 'group', 'aria-label': 'What to show' },
+      act('flowMode', { mode: 'inside' }, 'Inside ' + shortName(key), { class: mode === 'inside' ? 'on' : '', title: 'What it is made of, in the order it runs' }),
+      act('flowMode', { mode: 'calls' }, 'What it calls', { class: mode === 'calls' ? 'on' : '', title: 'What leads to it and what it calls' }));
+  }
+  function insideView(part, clicked, entries, words) {
+    const rootKey = insideRefOf(clicked.step), trail = (ui.insideTrail || []).filter(key => state.partLayers?.[key]);
+    const key = trail.length ? trail[trail.length - 1] : rootKey, anatomy = state.partLayers[key], name = shortName(key);
+    const graphKey = 'pin:' + part.id + ':' + key;
+    keepFull(part, graphKey);
+    const classStep = ref => entries.find(entry => entry.step.kind === 'class' && entry.step.file + '#' + entry.step.symbol === ref)?.step;
+    // What a part is: its step's description, its docstring, plain words for a known layer,
+    // or else what it is made of.
+    const madeOf = ref => { const sub = state.partLayers?.[ref]; const types = sub ? sub.layers.filter(item => !item.op && !item.unused).map(item => item.type) : []; return types.length ? 'Made of ' + [...new Set(types)].join(', ') + '.' : ''; };
+    const whatOf = layer => (layer.own && classStep(layer.own)?.what) || layer.doc || layer.plain || (layer.own ? madeOf(layer.own) : '') || '';
+    // Its parts are shown inside it when they are building blocks, not only raw learned numbers.
+    const opened = layer => { const sub = layer.own && state.partLayers?.[layer.own]; return sub && sub.layers.filter(item => !item.op && !item.unused && item.type !== 'Parameter').length >= 2 ? sub : undefined; };
+    const lines = (text, per) => Math.max(1, Math.ceil(String(text || '').length / per));
+    const runs = anatomy.runs ? anatomy.runs + '()' : '';
+    const used = anatomy.layers.filter(layer => !layer.unused), unused = anatomy.layers.filter(layer => layer.unused);
+    const W = 400, nodes = [], edges = [];
+    let y = 0;
+    const place = (id, w, hgt, content, gap = 30) => { nodes.push({ id, x: (W - w) / 2, y, w, h: hgt, content }); y += hgt + gap; return id; };
+    const end = (id, label, names) => place(id, 260, 34, h('div', { class: 'st-node st-layer-end' }, h('b', {}, label), names.length ? h('code', {}, names.join(', ')) : muted('the result')));
+    // One part: its type (the layer's name), what it does in plain words, and what is special about it.
+    const badges = layer => [
+      layer.repeat ? h('div', { class: 'st-layer-badge repeat' }, '× ' + String(layer.repeat).replace(/^(self|this|config|cfg|args)\./, '') + ' · the same part, repeated one after another') : undefined,
+      layer.residual ? h('div', { class: 'st-layer-badge shortcut' }, '↺ Then adds back what went into ' + layer.residualFrom + ' (a shortcut)') : undefined,
+      layer.optional ? h('div', { class: 'st-layer-badge' }, 'Only when a setting turns it on') : undefined,
+      layer.unused ? h('div', { class: 'st-layer-badge' }, runs ? 'Not used by ' + runs : 'Not used by its main method') : undefined].filter(Boolean);
+    const inner = layer => {
+      const sub = opened(layer);
+      if (!sub) return layer.own && state.partLayers?.[layer.own] ? link('flowInside', { ref: layer.own }, 'Look inside ' + layer.type + ' →', { title: 'Show ' + layer.type + ' on its own' }) : undefined;
+      const parts = sub.layers.filter(item => !item.unused);
+      return h('div', { class: 'st-layer-inner' }, h('div', { class: 'st-layer-inner-head' }, (layer.repeat ? 'Inside each ' : 'Inside ') + layer.type + ':'),
+        parts.map((item, index) => h('div', { class: 'st-layer-row' + (item.op ? ' op' : '') }, index ? h('span', { class: 'st-layer-down' }, '↓') : undefined,
+          h('span', { class: item.op ? 'st-opname' : 'st-classname small' }, marked(item.type, words)), item.op ? undefined : h('code', {}, ' ' + item.name), item.residual ? h('span', { class: 'st-layer-plus', title: 'Adds back what went into ' + item.residualFrom }, ' ↺ +') : undefined,
+          whatOf(item) ? h('div', { class: 'st-layer-row-what' }, marked(whatOf(item), words)) : undefined)),
+        link('flowInside', { ref: layer.own }, 'Look inside ' + layer.type + ' →', { title: 'Show ' + layer.type + ' on its own' }));
+    };
+    const heightOf = layer => {
+      const sub = opened(layer), what = whatOf(layer);
+      if (layer.op) return 26 + 15 * lines(what, 58);
+      return 44 + (what ? 17 * lines(what, 52) : 0) + badges(layer).length * 19 + (layer.own && !sub && state.partLayers?.[layer.own] ? 20 : 0)
+        + (sub ? 50 + sub.layers.filter(item => !item.unused).reduce((sum, item, index) => sum + 19 + (index ? 11 : 0) + (whatOf(item) ? 14 * Math.min(2, lines(whatOf(item), 60)) : 0), 0) : 0) + (layer.repeat ? 10 : 0);
+    };
+    const box = layer => {
+      const selected = ui.flowLayer === layer.name, what = whatOf(layer);
+      if (layer.op) return h('div', { class: 'st-node st-layer op' + (selected ? ' selected' : ''), data: { act: 'flowLayer', name: layer.name }, role: 'button', tabindex: 0, title: layer.type + ': math done between parts' },
+        h('div', {}, h('span', { class: 'st-opname' }, '∑ ' + layer.type)), what ? h('div', { class: 'st-layer-what' }, marked(what, words)) : undefined);
+      return h('div', { class: 'st-node st-layer' + (layer.own ? ' own' : '') + (layer.repeat ? ' repeat' : '') + (layer.unused ? ' dim' : '') + (selected ? ' selected' : ''), data: { act: 'flowLayer', name: layer.name }, role: 'button', tabindex: 0, title: layer.name + ' = ' + layer.type + '(…)' + (layer.own ? ' · defined in ' + layer.own.split('#')[0] : '') },
+        h('div', { class: 'st-layer-head' }, h('span', { class: 'st-classname' }, marked(layer.type, words)), h('code', { class: 'st-layer-name' }, marked(layer.name, words))),
+        what ? h('div', { class: 'st-layer-what' }, marked(what, words)) : h('div', { class: 'st-layer-what st-muted' }, 'A part made from ' + layer.type + '.'),
+        badges(layer), inner(layer));
+    };
+    let previous = anatomy.inputs.length ? end('in', 'Goes in', anatomy.inputs) : undefined;
+    const ids = new Map();
+    // Boxes are measured in the page when it can, so any text fits; else estimated.
+    const sized = (layer, w) => { const content = box(layer), measured = measure(content, w); return [content, measured ? measured + (layer.repeat ? 10 : 0) : heightOf(layer)]; };
+    used.forEach((layer, index) => {
+      const w = layer.op ? 320 : W, [content, hgt] = sized(layer, w), id = place('l:' + index, w, hgt, content);
+      ids.set(layer.name, id);
+      if (previous) edges.push({ from: previous, to: id, down: true, hot: true });
+      previous = id;
+    });
+    if (previous && (anatomy.outputs.length || anatomy.runs)) { const id = end('out', 'Comes out', anatomy.outputs); edges.push({ from: previous, to: id, down: true, hot: true }); previous = id; }
+    // A shortcut: what went into the first part of the group skips ahead and is added after the last.
+    used.forEach((layer, index) => {
+      if (!layer.residual) return;
+      const first = used.findIndex(item => item.name === layer.residualFrom), from = first > 0 ? 'l:' + (first - 1) : nodes[0]?.id === 'in' ? 'in' : undefined;
+      const to = index + 1 < used.length ? 'l:' + (index + 1) : nodes.some(node => node.id === 'out') ? 'out' : undefined;
+      if (from && to) edges.push({ from, to, side: true, soft: true, label: '+ shortcut', title: 'What went into ' + layer.residualFrom + ' is added to what ' + layer.name + ' gives' });
+    });
+    if (unused.length) { y += 10; unused.forEach((layer, index) => { const [content, hgt] = sized(layer, W); place('u:' + index, W, hgt, content, 16); }); }
+    const height = Math.max(0, y - 30);
+    const crumbs = [rootKey, ...trail.filter(item => item !== rootKey)];
+    const bar = () => h('div', { class: 'st-flowbar' },
+      act('flowBack', {}, '← Whole part', { title: 'Back to every step of this part' }), modeSwitch(clicked.step),
+      crumbs.length > 1 ? h('span', { class: 'st-crumbs' }, crumbs.map((item, index) => [index ? ' › ' : '', index === crumbs.length - 1 ? h('b', {}, shortName(item)) : link('flowInside', { depth: index }, shortName(item))])) : h('b', {}, 'Inside ' + name),
+      muted('Top to bottom' + (runs ? ', in the order ' + runs + ' uses them' : '') + '. Click a part for more.'));
+    const selected = anatomy.layers.find(layer => layer.name === ui.flowLayer);
+    const detail = () => selected ? layerCard(selected, name, whatOf, classStep) : key === rootKey ? flowStepDetail(clicked.step)
+      : h('div', { class: 'st-detail st-flow-detail' }, h('h2', {}, name), h('p', {}, classStep(key)?.what || anatomy.doc || madeOf(key)), h('p', { class: 'st-muted' }, 'A part of ' + shortName(crumbs[crumbs.length - 2] || rootKey) + '.'), link('openFile', { file: key.split('#')[0] }, 'About ' + fileName(key.split('#')[0])));
+    ui.flowPlaces = { key: graphKey, hits: [] };
+    const canvas = graphView(graphKey, { nodes, edges, width: W + 120, height, minHeight: 320, maxHeight: 760, minZoom: 0.7, label: 'Inside ' + name, aside: detail(), toolbar: bar });
+    return [ui.full === graphKey ? undefined : bar(), canvas, detail()];
+  }
+  // The height a box takes at a given width, laid out off screen; 0 when the page can't tell.
+  function measure(content, width) {
+    if (!root.isConnected) return 0;
+    const probe = h('div', { class: 'st-measure', style: 'width:' + width + 'px' }, content);
+    root.append(probe);
+    const height = Math.ceil(probe.getBoundingClientRect().height);
+    probe.remove(); content.remove?.();
+    return height;
+  }
+  // One part, in the side panel: what it is and what the code says about it.
+  function layerCard(layer, owner, whatOf, classStep) {
+    const step = layer.own && classStep(layer.own), what = whatOf(layer);
+    return h('div', { class: 'st-detail st-flow-detail' },
+      h('h2', {}, layer.op ? '∑ ' + layer.type : layer.type, spacer(), link('flowLayer', { name: layer.name }, 'Close')),
+      h('p', { class: 'st-muted' }, layer.op ? 'Math that ' + owner + ' does between its parts.' : owner + ' keeps it as ' + layer.name + '.'),
+      what ? h('p', {}, what) : h('p', { class: 'st-muted' }, 'No plain-words note for ' + layer.type + ' yet.'),
+      layer.repeat ? h('p', {}, 'Repeated ' + String(layer.repeat).replace(/^(self|this|config|cfg|args)\./, '') + ' times: the output of one copy goes into the next.') : undefined,
+      layer.residual ? h('p', {}, 'Shortcut: what went into ' + layer.residualFrom + ' is added to what ' + layer.name + ' gives, so the original signal is never lost.') : undefined,
+      layer.own && state.partLayers?.[layer.own] ? h('div', { class: 'st-row' }, link('flowInside', { ref: layer.own }, 'Look inside ' + layer.type + ' →')) : undefined,
+      layer.own && !step ? h('div', { class: 'st-row' }, link('openFile', { file: layer.own.split('#')[0] }, 'About ' + fileName(layer.own.split('#')[0]))) : undefined,
+      step ? flowStepDetail(step) : undefined);
   }
   // Marks the words that matched, inside a box's text.
   function marked(text, words) {
@@ -777,6 +933,8 @@ function mountStages(root, post) {
     const box = flowBox(entry.step, entry.key, color, look, words), meta = box.lastChild;
     const parts = state.partBuiltFrom?.[entry.ref];
     if (parts?.length) box.insertBefore(h('div', { class: 'st-built', title: 'Classes this one is built from' }, 'Built from ', parts.map((name, index) => [index ? ' · ' : '', h('code', {}, name)])), meta);
+    const inside = state.partLayers?.[entry.ref]?.layers.filter(layer => !layer.op).length;
+    if (inside) box.insertBefore(h('div', { class: 'st-inside-hint', title: 'Click to see the parts it is made of, top to bottom' }, '▦ Made of ' + inside + ' parts · click to look inside'), meta);
     if (members.length) box.insertBefore(h('div', { class: 'st-methods' }, members.map(member => h('div', { class: 'st-method' + (lookOf(member) ? ' ' + lookOf(member) : ''), data: { act: 'flowStep', key: member.key }, role: 'button', tabindex: 0,
       title: member.step.owner + '.' + member.step.symbol + ' · ' + member.step.file + ':' + (member.step.line_start || '') + (member.step.details?.length ? '\n\n' + member.step.details.map(item => (KIND[item.kind] || item.kind) + ': ' + item.text).join('\n') : '') },
       h('code', {}, 'ƒ ', marked(member.step.symbol, words), '()'), member.step.what ? h('span', {}, marked(member.step.what, words)) : undefined))), meta);
@@ -1006,17 +1164,20 @@ function mountStages(root, post) {
       case 'fit': target.closest('.st-canvas')?.fit?.(); return;
       case 'allSupport': ui.allSupport = !ui.allSupport; render(); return;
       case 'partTab': ui.partTab = data.tab; render(); return;
-      case 'flowHit': ui.flowHit = (ui.flowHit || 0) + Number(data.by); ui.flowStep = ui.flowRoot = undefined; render(); jumpToHit(); return;
-      case 'flowClear': ui.flowQuery = ''; ui.flowStep = ui.flowRoot = undefined; render(); return;
-      case 'flowBack': ui.flowStep = ui.flowRoot = undefined; render(); jumpToHit(); return;
+      case 'flowHit': ui.flowHit = (ui.flowHit || 0) + Number(data.by); (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); jumpToHit(); return;
+      case 'flowClear': ui.flowQuery = ''; (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); return;
+      case 'flowBack': (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); jumpToHit(); return;
       case 'flowStep':
         // In a part's steps: the first click opens that step's path; clicks along it only select.
-        if (!data.key) ui.flowStep = ui.flowRoot = undefined;
+        if (!data.key) (ui.flowStep = ui.flowRoot = undefined, resetInside());
         else if (data.key.startsWith('p:') && ui.flowRoot) { ui.flowStep = data.key; render(); requestAnimationFrame(revealSelected); return; }
-        else if (data.key.startsWith('p:')) ui.flowStep = ui.flowRoot = data.key;
+        else if (data.key.startsWith('p:')) (ui.flowStep = ui.flowRoot = data.key, resetInside());
         else ui.flowStep = ui.flowStep === data.key ? undefined : data.key;
         render(); return;
-      case 'flowRoot': ui.flowStep = ui.flowRoot = data.key; render(); return;
+      case 'flowMode': ui.flowMode = data.mode; ui.flowLayer = undefined; render(); return;
+      case 'flowLayer': ui.flowLayer = ui.flowLayer === data.name ? undefined : data.name; render(); return;
+      case 'flowInside': { const trail = ui.insideTrail || []; ui.insideTrail = data.depth !== undefined ? trail.slice(0, Number(data.depth)) : trail.includes(data.ref) ? trail.slice(0, trail.indexOf(data.ref) + 1) : [...trail, data.ref]; ui.flowLayer = undefined; render(); return; }
+      case 'flowRoot': (ui.flowStep = ui.flowRoot = data.key, resetInside()); render(); return;
       case 'resetLayout': if (state.layouts) delete state.layouts[data.key]; delete ui.views[data.key]; send('layout', { key: data.key, reset: true }); render(); return;
       case 'fullGraph': ui.full = ui.full === data.key ? undefined : data.key; render(); return;
       case 'hideGraph': ui.hidden[data.key] = true; if (ui.full === data.key) ui.full = undefined; render(); return;
@@ -1024,7 +1185,7 @@ function mountStages(root, post) {
       case 'notesPanel': ui.notesPanel = !ui.notesPanel; render(); return;
       case 'block': ui.blocks[data.key] = !ui.blocks[data.key]; render(); return;
       case 'allBlocks': { const keys = (state.file?.pseudocode?.sections || []).map((_, index) => state.file.file + '#' + index); const open = !keys.every(key => ui.blocks[key]); keys.forEach(key => { ui.blocks[key] = open; }); render(); return; }
-      case 'openPart': ui.here = undefined; ui.flowStep = ui.flowRoot = undefined; send('openPart', { id: data.id || undefined }); return;
+      case 'openPart': ui.here = undefined; (ui.flowStep = ui.flowRoot = undefined, resetInside()); send('openPart', { id: data.id || undefined }); return;
       case 'openShared': ui.here = undefined; send('openShared', { id: data.id || undefined }); return;
       case 'openStage': send('openStage', { part: data.part, id: data.id || undefined }); return;
       case 'openFile': send('openFile', { file: data.file || undefined }); return;
@@ -1077,7 +1238,7 @@ function mountStages(root, post) {
     canvas.querySelector('.st-world')?.setAttribute('transform', 'translate(' + ui.views[places.key].x + ' ' + ui.views[places.key].y + ') scale(' + k + ')');
   }
   root.addEventListener('keydown', event => {
-    if (event.target.id === 'st-flowsearch' && event.key === 'Enter') { event.preventDefault(); ui.flowHit = (ui.flowHit || 0) + (event.shiftKey ? -1 : 1); ui.flowStep = ui.flowRoot = undefined; render(); jumpToHit(); return; }
+    if (event.target.id === 'st-flowsearch' && event.key === 'Enter') { event.preventDefault(); ui.flowHit = (ui.flowHit || 0) + (event.shiftKey ? -1 : 1); (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); jumpToHit(); return; }
     if (event.target.id === 'st-flowsearch' && event.key === 'Escape') { ui.flowQuery = ''; render(); return; }
     if (event.target.id === 'st-intent' && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); ask(); return; }
     if ((event.key === 'Enter' || event.key === ' ') && event.target.matches?.('.st-node[data-act]')) { event.preventDefault(); event.target.click(); }
@@ -1092,7 +1253,7 @@ function mountStages(root, post) {
     if (id === 'st-note') ui.noteDraft = event.target.value;
     if (id === 'st-system-note') ui.systemDraft = event.target.value;
     if (id === 'st-intent') ui.intentDraft = event.target.value;
-    if (id === 'st-flowsearch') { ui.flowQuery = event.target.value; ui.flowHit = 0; ui.flowStep = ui.flowRoot = undefined; clearTimeout(ui.flowTimer); ui.flowTimer = setTimeout(() => { render(); jumpToHit(); }, 140); }
+    if (id === 'st-flowsearch') { ui.flowQuery = event.target.value; ui.flowHit = 0; (ui.flowStep = ui.flowRoot = undefined, resetInside()); clearTimeout(ui.flowTimer); ui.flowTimer = setTimeout(() => { render(); jumpToHit(); }, 140); }
   });
   root.addEventListener('toggle', event => { const id = event.target.dataset?.expand; if (id) ui.expanded[id] = event.target.open; }, true);
   return {
