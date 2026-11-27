@@ -107,7 +107,36 @@ function howList(steps) {
   }).join('\n');
 }
 const linkTo = (dir, file, label) => '[[' + posix(path.relative(dir, file)).replace(/\.md$/, '') + (label ? '|' + label : '') + ']]';
-const GENERATED = new Set(['system', 'part', 'step', 'stage', 'file', 'index']);
+const GENERATED = new Set(['system', 'part', 'step', 'stage', 'file', 'index', 'inside']);
+const { flowWords } = require('./layers');
+const INSIDE_LIMIT = 80;
+// A Mermaid label: quotes and # are entities, line breaks are <br/>.
+const mermaidLabel = text => String(text || '').replace(/#/g, '#35;').replace(/"/g, '#quot;').replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+// A class's flow as a top-to-bottom Mermaid diagram: inputs and results as pills,
+// parts as boxes (repeated ones as double boxes with × n), known math as hexagons,
+// joins as circles, and the condition on the arrow into a part that runs only sometimes.
+function insideDiagram(anatomy) {
+  const words = flowWords(), flow = anatomy.flow || { nodes: [], edges: [] };
+  const layerOf = name => anatomy.layers.find(layer => !layer.op && layer.name === name);
+  const args = layer => layer?.args?.length ? '(' + layer.args.map(arg => (arg.name ? arg.name + '=' : '') + (arg.value ?? arg.code)).join(', ') + ')' : '';
+  const shape = node => {
+    if (node.kind === 'in') return '(["' + mermaidLabel('in: ' + node.name) + '"])';
+    if (node.kind === 'out') return '(["' + mermaidLabel('out: ' + (node.names?.length ? node.names.join(', ') : 'the result')) + '"])';
+    if (node.kind === 'merge') return '(("' + mermaidLabel(node.name + ' ' + (words.OPERATOR[node.name] || '')) + '"))';
+    if (node.kind === 'op') return '{{"' + mermaidLabel(node.name) + '"}}';
+    const layer = layerOf(node.name), label = (layer ? layer.type + ' · ' : '') + node.name + (node.method ? '.' + node.method + '()' : '');
+    const text = mermaidLabel(label) + (args(layer) ? '<br/>' + mermaidLabel(args(layer)) : '') + (layer?.repeat ? '<br/>× ' + mermaidLabel(words.times(layer)) : '');
+    return layer?.repeat ? '[["' + text + '"]]' : '["' + text + '"]';
+  };
+  const at = new Map(flow.nodes.map(node => [node.id, node]));
+  const lines = ['flowchart TD', ...flow.nodes.map(node => '  ' + node.id + shape(node))];
+  for (const [from, to] of flow.edges || []) {
+    if (!at.has(from) || !at.has(to)) continue;
+    const before = at.get(from).when || [], after = at.get(to).when || [], extra = after.filter(item => !before.includes(item));
+    lines.push('  ' + from + (flow.order ? ' -.-> ' : extra.length ? ' -- "' + mermaidLabel(extra.join('; ')) + '" --> ' : ' --> ') + to);
+  }
+  return '```mermaid\n' + lines.join('\n') + '\n```\n';
+}
 
 // Notes a founder can read without knowing the code:
 //   System.md                 how the whole system works, its parts and links
@@ -154,7 +183,7 @@ class Vault {
     this.scan = listMarkdown(this.dir).map(file => [file, parseNote(readFile(file)).front]);
     try { return this.syncAll(db, graph, options); } finally { this.scan = undefined; }
   }
-  syncAll(db, graph, { summary = db.meta('system_summary') || '', notes = {} } = {}) {
+  syncAll(db, graph, { summary = db.meta('system_summary') || '', notes = {}, anatomy = {} } = {}) {
     const owned = new Set(), workflows = db.workflows(), links = db.links();
     const name = id => this.partName(db, id);
     const day = at => String(at || '').slice(0, 10);
@@ -165,6 +194,16 @@ class Vault {
     for (const workflow of workflows) for (const step of db.steps(workflow.id)) if (graph.files?.[step.file]) codeFiles.add(step.file);
     const codeNote = file => path.join(this.dir, 'Code', ...file.split('/')) + '.md';
     const codeLink = file => linkTo(this.dir, codeNote(file), file.split('/').at(-1));
+    // Inside notes: one per class made of parts, those the map's steps use first.
+    const stepKeys = new Set(workflows.flatMap(workflow => db.steps(workflow.id).map(step => step.file + '#' + step.symbol)));
+    const usedAsPart = new Set(Object.values(anatomy).flatMap(item => item.layers.map(layer => layer.own).filter(Boolean)));
+    const insideKeys = Object.keys(anatomy).filter(key => anatomy[key].layers.some(layer => !layer.op))
+      .sort((a, b) => (stepKeys.has(b) - stepKeys.has(a)) || (usedAsPart.has(b) - usedAsPart.has(a)) || a.localeCompare(b)).slice(0, INSIDE_LIMIT);
+    const className = key => key.split('#').pop(), sameName = name => insideKeys.filter(key => className(key) === name).length > 1;
+    const insideFile = key => this.find(front => front.type === 'inside' && front.class === key) || path.join(this.dir, 'Inside', safeName(className(key) + (sameName(className(key)) ? ' (' + key.split('#')[0].split('/').pop() + ')' : '')) + '.md');
+    const insidePath = new Map(insideKeys.map(key => [key, insideFile(key)]));
+    const insideLink = key => insidePath.has(key) ? linkTo(this.dir, insidePath.get(key), className(key)) : '`' + className(key) + '`';
+    const insideOfFile = file => insideKeys.filter(key => key.split('#')[0] === file).sort((a, b) => (anatomy[a].initLine || 0) - (anatomy[b].initLine || 0));
     for (const workflow of workflows) {
       const list = db.stages(workflow.id), partFile = this.partNotePath(db, workflow.id);
       list.forEach((stage, index) => {
@@ -201,6 +240,7 @@ class Vault {
         '## Steps', '',
         ...list.map((stage, index) => (index + 1) + '. ' + linkTo(this.dir, this.stageNotePath(db, workflow.id, stage), stage.name) + (stage.gist ? ': ' + stage.gist : '')), '',
         uses.length || usedBy.length ? '## Works with\n\n' + [...uses, ...usedBy].join('\n') + '\n' : '',
+        (() => { const keys = [...new Set(db.steps(workflow.id).flatMap(step => insideOfFile(step.file)))].slice(0, 12); return keys.length ? '## What its classes are made of\n\n' + keys.map(key => '- ' + insideLink(key) + (anatomy[key].doc ? ': ' + anatomy[key].doc : '')).join('\n') + '\n' : ''; })(),
         '_Starts at `' + workflow.entry_symbol + '` in ' + codeLink(workflow.entry_file) + '._'].join('\n').replace(/\n{3,}/g, '\n\n');
       this.write(partFile, { type: 'part', workflow: workflow.id, name: name(workflow.id) }, managed);
       owned.add(partFile);
@@ -218,8 +258,33 @@ class Vault {
         note?.purpose || '', note?.role ? '_' + note.role + '_' : '', '',
         where.length ? '## Used in\n\n' + where.join('\n') + '\n' : '',
         usesFiles.length ? '## Uses\n\n' + usesFiles.map(other => '- ' + codeLink(other)).join('\n') + '\n' : '',
-        usedByFiles.length ? '## Used by\n\n' + usedByFiles.map(other => '- ' + codeLink(other)).join('\n') + '\n' : ''].join('\n').replace(/\n{3,}/g, '\n\n');
+        usedByFiles.length ? '## Used by\n\n' + usedByFiles.map(other => '- ' + codeLink(other)).join('\n') + '\n' : '',
+        insideOfFile(file).length ? '## Classes\n\n' + insideOfFile(file).map(key => '- ' + insideLink(key)).join('\n') + '\n' : ''].join('\n').replace(/\n{3,}/g, '\n\n');
       owned.add(this.write(codeNote(file), { type: 'file', path: file }, managed, '\n'));
+    }
+    // Inside notes: the diagram, the flow step by step, the parts, where it is used.
+    const words = flowWords();
+    const stepWhat = key => { const [file, symbol] = [key.split('#')[0], className(key)]; for (const workflow of workflows) { const step = db.steps(workflow.id).find(item => item.file === file && item.symbol === symbol && item.what); if (step) return step.what; } return ''; };
+    const madeOf = key => { const types = (anatomy[key]?.layers || []).filter(layer => !layer.op && !layer.unused).map(layer => layer.type); return types.length ? 'Made of ' + [...new Set(types)].join(', ') + '.' : ''; };
+    const whatOf = layer => (layer.own && stepWhat(layer.own)) || layer.doc || layer.plain || (layer.own ? madeOf(layer.own) : '');
+    const args = layer => layer.args?.length ? ' (' + layer.args.map(arg => (arg.name ? arg.name + '=' : '') + (arg.value ?? arg.code)).join(', ') + ')' : '';
+    for (const key of insideKeys) {
+      const item = anatomy[key], file = key.split('#')[0], name = className(key), flow = item.flow || { nodes: [], edges: [] };
+      // A link to one line, named by the line: [model.py:177](vscode://…).
+      const lineLink = line => codeLinks(file, line, this.obsidian ? this.root : undefined).split(' · ')[0].replace('[open]', '[' + file.split('/').pop() + ':' + line + ']');
+      const graphOf = words.links(flow), at = node => node.line ? ' · ' + lineLink(node.line) : '';
+      const containers = insideKeys.filter(other => anatomy[other].layers.some(layer => layer.own === key));
+      const managed = ['# Inside ' + name, '',
+        '`' + key.split('#')[0] + '` · ' + codeLink(file) + (item.initLine ? ' · ' + codeLinks(file, item.initLine, this.obsidian ? this.root : undefined) : ''), '',
+        stepWhat(key) || item.doc || madeOf(key), '',
+        flow.order ? '_Only the order its parts are used in is known here, not what feeds what._' : (item.runs ? '_Read from `' + item.runs + '()`: arrows show what feeds what, circles are where two paths join._' : ''),
+        item.defaults?.length ? '_Numbers use ' + item.defaults.join(', ') + '; a run can pass other values._' : '', '',
+        flow.nodes.length > 1 ? insideDiagram(item) : '',
+        flow.nodes.length > 1 ? '## Step by step\n\n' + flow.nodes.map((node, index) => (index + 1) + '. ' + words.sentence(item, node, { name, whatOf, graph: graphOf }) + at(node)).join('\n') + '\n' : '',
+        '## Parts\n\n' + item.layers.filter(layer => !layer.op).map(layer => '- **' + layer.name + '** · ' + (layer.own ? insideLink(layer.own) : '`' + layer.type + '`') + args(layer) + (layer.repeat ? ' × ' + words.times(layer) : '') + (whatOf(layer) ? ': ' + whatOf(layer) : '') + (layer.unused ? ' _(not used by ' + (item.runs || 'its main method') + ')_' : '') + (layer.line ? ' · ' + lineLink(layer.line) : '')).join('\n') + '\n',
+        containers.length ? '## Part of\n\n' + containers.map(other => '- ' + insideLink(other) + ' (as ' + anatomy[other].layers.filter(layer => layer.own === key).map(layer => '`' + layer.name + '`').join(', ') + ')').join('\n') + '\n' : '',
+        '_Yamori reads this from the code (no AI) and updates it when the code changes._'].join('\n').replace(/\n{3,}/g, '\n\n');
+      owned.add(this.write(insidePath.get(key), { type: 'inside', class: key, name }, managed, '\n'));
     }
     // The system note: what it does, a diagram, the parts, and what happened lately.
     const view = workflows.map((workflow, index) => ({ id: workflow.id, key: 'p' + index }));

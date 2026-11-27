@@ -83,7 +83,8 @@ In the vault, under `Yamori/<repo>/`:
 - `System.md`: how the whole system works, a diagram of the parts and how they work together, and what happened lately. Rules you add here apply to every change.
 - `<Part>/<Part>.md`: what the part does, a diagram of its steps, and what it works with.
 - `<Part>/<Step>.md`: what the step does, takes and gives, how, its files, and its **History**: every change Yamori found, what you decided and why, and every request you made there. The code references are in a folded box.
-- `Code/<path>.md`: one note per file the map uses, with what it is for, which steps use it, what it uses and what uses it. Obsidian's graph view then shows the real structure of the project.
+- `Code/<path>.md`: one note per file the map uses, with what it is for, which steps use it, what it uses and what uses it, and its classes. Obsidian's graph view then shows the real structure of the project.
+- `Inside/<Class>.md`: one note per class made of parts (up to 80, the map's own first), read from the code without AI, the same as **Inside** in the panel: a top-to-bottom Mermaid diagram of how data moves through it (parts with the arguments they were made with, joins as circles, conditions on the arrows), the flow step by step in sentences with links to the lines, its parts linking to their own Inside notes, and the classes it is part of. Part notes list the Inside notes of their classes. The notes follow the code: what classes are made of is read again in the background when the mapped files change (cached by their content), then the notes are written again.
 - `Changes/YYYY-MM-DD.md`: what changed, what you asked for, what you decided, and why.
 
 You do not have to write anything: Yamori records changes, decisions and requests by itself. Notes you add are kept and read by your agents.

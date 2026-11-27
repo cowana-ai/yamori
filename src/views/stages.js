@@ -4,6 +4,7 @@
 // expands below the graph instead of replacing it. Rendering uses only the
 // state the extension posts, so opening anything here never calls a model.
 const { randomBytes } = require('node:crypto');
+const { flowWords } = require('../stages/layers');
 
 // Line diff for the review view: red/green pseudocode without a library.
 function lineDiff(before = '', after = '') {
@@ -165,7 +166,8 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-built code { color: oklch(80% .14 300); font-weight: 600; }
 #stages-view .st-node.flowstep.classbox { border-radius: 10px; border-width: 1.5px; background: color-mix(in srgb, oklch(60% .13 300) 9%, var(--read-surface, var(--read-page))); }
 #stages-view .st-node.flowstep.methodbox { border-style: dashed; border-left-style: solid; }
-#stages-view .st-measure { position: absolute; left: -10000px; top: 0; visibility: hidden; }
+#stages-view .st-measures { position: absolute; left: -10000px; top: 0; visibility: hidden; }
+#stages-view .st-measure { position: relative; }
 #stages-view .st-measure > .st-node { height: auto; }
 #stages-view .st-measure > .st-node.repeat { height: auto; width: calc(100% - 9px); }
 #stages-view .st-inside-hint { font-size: 11px; color: oklch(72% .13 300); margin: 4px 0 0; }
@@ -824,11 +826,9 @@ function mountStages(root, post) {
     const lines = (text, per) => Math.max(1, Math.ceil(String(text || '').length / per));
     const runs = anatomy.runs ? anatomy.runs + '()' : '';
     const used = anatomy.layers.filter(layer => !layer.unused), unused = anatomy.layers.filter(layer => layer.unused);
-    // Words for combining two values, from Python's own operators.
-    const OPERATOR = { '+': 'add', '-': 'subtract', '*': 'multiply', '/': 'divide', '//': 'divide (whole)', '%': 'remainder', '@': 'matrix product' };
+    const { OPERATOR, times, nameOf } = flowText;
     const layerNamed = name => anatomy.layers.find(layer => !layer.op && layer.name === name);
     const file = key.split('#')[0], W = 380;
-    const times = layer => layer.times !== undefined ? layer.times : String(layer.repeat || '').replace(/^(self|this|config|cfg|args)\./, '');
     // A part's arguments, values worked out where the code allows (768 for n_embd).
     const argsOf = layer => layer.args?.length ? h('code', { class: 'st-layer-args', title: layer.type + '(' + layer.args.map(arg => (arg.name ? arg.name + '=' : '') + arg.code).join(', ') + ')' }, '(' + layer.args.map(arg => (arg.name ? arg.name + '=' : '') + (arg.value ?? arg.code)).join(', ') + ')') : undefined;
     const badges = (layer, node) => [
@@ -859,9 +859,7 @@ function mountStages(root, post) {
         + (sub ? 50 + sub.layers.filter(item => !item.unused).reduce((sum, item, index) => sum + 19 + (index ? 11 : 0) + (whatOf(item) ? 14 * Math.min(2, lines(whatOf(item), 58)) : 0), 0) : 0) + (layer.repeat ? 10 : 0);
     };
     const flow = anatomy.flow || { nodes: [], edges: [] }, flowNodes = flow.nodes, at = new Map(flowNodes.map(node => [node.id, node]));
-    const into = id => (flow.edges || []).filter(([, to]) => to === id).map(([from]) => at.get(from)).filter(Boolean);
-    const outOf = id => (flow.edges || []).filter(([from]) => from === id).map(([, to]) => at.get(to)).filter(Boolean);
-    const nameOf = node => !node ? '' : node.kind === 'in' ? node.name : node.kind === 'out' ? 'the result' : node.kind === 'merge' ? 'the ' + (OPERATOR[node.name] || node.name) + ' result' : node.kind === 'op' ? node.name : node.name + (node.method ? '.' + node.method + '()' : '');
+    const graph = flowText.links(flow), into = graph.into, outOf = graph.outOf;
     const walking = ui.walk !== undefined && ui.walkKey === key ? Math.max(0, Math.min(flowNodes.length - 1, ui.walk)) : undefined, current = walking !== undefined ? flowNodes[walking] : undefined;
     const isSelected = node => current ? current === node : ui.flowLayer === (node.kind === 'part' ? node.name : 'node:' + node.id);
     // One box per step of the flow.
@@ -882,7 +880,8 @@ function mountStages(root, post) {
     const widthOf = node => node.kind === 'merge' ? 92 : node.kind === 'in' || node.kind === 'out' ? 220 : node.kind === 'op' ? 300 : W;
     const estimate = node => node.kind === 'merge' ? 34 : node.kind === 'in' || node.kind === 'out' ? 34 : node.kind === 'op' ? 30 + 15 * lines(node.plain, 52) + (node.when?.length || 0) * 19 : heightOf(layerNamed(node.name) || {}, node);
     // Laid out top to bottom: rows from the flow's order, side by side where it splits.
-    const sized = flowNodes.map(node => { const content = flowContent(node), measured = measure(content, widthOf(node)); return { node, content, w: widthOf(node), h: measured ? measured + (layerNamed(node.name)?.repeat && node.kind === 'part' ? 10 : 0) : estimate(node) }; });
+    const contents = flowNodes.map(node => flowContent(node)), measured = measureAll(contents.map((content, index) => [content, widthOf(flowNodes[index])]));
+    const sized = flowNodes.map((node, index) => ({ node, content: contents[index], w: widthOf(node), h: measured[index] ? measured[index] + (layerNamed(node.name)?.repeat && node.kind === 'part' ? 10 : 0) : estimate(node) }));
     const layout = layeredLayout(flowNodes.map(node => ({ id: node.id })), (flow.edges || []).map(([from, to]) => ({ from, to })), { width: 1, height: W, gapX: 0, gapY: 46 });
     // A source other than an input (a part read with nothing fed in) sits just above where it is used.
     const row = new Map(flowNodes.map(node => [node.id, layout.positions.get(node.id).layer]));
@@ -920,7 +919,11 @@ function mountStages(root, post) {
       const lit = current ? to === current.id || from === current.id : true;
       return { from, to, down: !side, side, out, hot: lit && !flow.order, soft: !!flow.order, dim: !!current && !lit, title: nameOf(at.get(from)) + ' → ' + nameOf(at.get(to)) };
     });
-    if (unused.length) { y += 10; unused.forEach((layer, index) => { const content = flowContent({ kind: 'part', name: layer.name, id: 'u' + index }), measured = measure(content, W); nodes.push({ id: 'u:' + index, x: -left - W / 2, y, w: W, h: measured || heightOf(layer), content }); y += (measured || heightOf(layer)) + 16; }); }
+    if (unused.length) {
+      y += 10;
+      const spare = unused.map((layer, index) => flowContent({ kind: 'part', name: layer.name, id: 'u' + index })), tall = measureAll(spare.map(content => [content, W]));
+      unused.forEach((layer, index) => { const hgt = tall[index] || heightOf(layer); nodes.push({ id: 'u:' + index, x: -left - W / 2, y, w: W, h: hgt, content: spare[index] }); y += hgt + 16; });
+    }
     const width = Math.max(W, ...nodes.map(node => node.x + node.w)) + 90, height = Math.max(0, y - GAP);
     const crumbs = [rootKey, ...trail.filter(item => item !== rootKey)];
     const defaults = anatomy.defaults?.length ? 'Numbers use ' + anatomy.defaults.join(', ') + '; a run can pass other values.' : '';
@@ -930,20 +933,7 @@ function mountStages(root, post) {
       flowNodes.length > 1 ? act('walk', { key, at: walking === undefined ? 0 : '' }, walking === undefined ? '▶ Step through' : '■ Stop', { title: 'Follow the data one step at a time' }) : undefined,
       muted((flow.order ? 'Top to bottom in the order ' + (runs || 'it') + ' uses them' : 'Arrows show what feeds what' + (runs ? ' in ' + runs : '')) + '. ' + defaults));
     // Step through: one sentence per step, built from the graph.
-    const sentence = node => {
-      const from = [...new Set(into(node.id).map(nameOf))], to = [...new Set(outOf(node.id).map(next => next.kind === 'out' ? 'what comes out' : nameOf(next)))], list = items => items.length > 1 ? items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1] : items[0] || '';
-      const layer = node.kind === 'part' ? layerNamed(node.name) : undefined, what = layer ? whatOf(layer) : node.plain;
-      const parts = [];
-      if (node.kind === 'in') parts.push(name + ' is given ' + node.name + '.');
-      else if (node.kind === 'out') parts.push(name + ' gives back ' + (node.names?.length ? list(node.names) : 'the result') + (from.length ? ', from ' + list(from) : '') + '.');
-      else if (node.kind === 'merge') parts.push(list(from) + ' are combined: ' + (OPERATOR[node.name] || node.name) + ' (' + node.name + ').');
-      else parts.push((layer ? node.name + ' (' + layer.type + ')' : node.name) + (node.value ? ' is read as a value' : from.length ? ' takes ' + list(from) : ' starts a path of its own: nothing earlier feeds it') + '.', what || '');
-      if (layer?.repeat) parts.push('It runs ' + times(layer) + ' times, each copy taking what the one before gave.');
-      for (const when of node.when || []) parts.push('This only happens ' + when + '.');
-      for (const loop of node.loop || []) parts.push('It runs ' + loop + '.');
-      if (to.length && node.kind !== 'out') parts.push('Next: ' + list(to) + '.');
-      return parts.filter(Boolean).join(' ');
-    };
+    const sentence = node => flowText.sentence(anatomy, node, { name, whatOf, graph });
     const walkCard = () => h('div', { class: 'st-detail st-flow-detail st-walk' },
       h('h2', {}, 'Step ' + (walking + 1) + ' of ' + flowNodes.length, spacer(), link('walk', { key, at: '' }, 'Stop')),
       h('p', {}, sentence(current)),
@@ -961,14 +951,17 @@ function mountStages(root, post) {
     const canvas = graphView(graphKey, { nodes, edges, width, height, minHeight: 320, maxHeight: 760, minZoom: 0.7, label: 'Inside ' + name, aside: detail(), toolbar: bar });
     return [ui.full === graphKey ? undefined : bar(), canvas, detail()];
   }
-  // The height a box takes at a given width, laid out off screen; 0 when the page can't tell.
-  function measure(content, width) {
-    if (!root.isConnected) return 0;
-    const probe = h('div', { class: 'st-measure', style: 'width:' + width + 'px' }, content);
-    root.append(probe);
-    const height = Math.ceil(probe.getBoundingClientRect().height);
-    probe.remove(); content.remove?.();
-    return height;
+  // The heights boxes take at their widths, laid out off screen together (one layout
+  // pass for all of them); 0s when the page can't tell.
+  function measureAll(items) {
+    if (!root.isConnected || !items.length) return items.map(() => 0);
+    const probes = items.map(([content, width]) => h('div', { class: 'st-measure', style: 'width:' + width + 'px' }, content));
+    const holder = h('div', { class: 'st-measures' }, probes);
+    root.append(holder);
+    const heights = probes.map(probe => Math.ceil(probe.getBoundingClientRect().height));
+    holder.remove();
+    for (const [content] of items) content.remove?.();
+    return heights;
   }
   // One part, in the side panel: what it is and what the code says about it.
   function layerCard(layer, owner, whatOf, classStep, { file, uses = [], runs = '', times = () => '' } = {}) {
@@ -1351,7 +1344,7 @@ function mountStages(root, post) {
 }
 
 // The client as a string for a webview script.
-const stagesClient = () => `const lineDiff = ${lineDiff.toString()};\nconst stepSearch = ${stepSearch.toString()};\nconst layeredLayout = ${layeredLayout.toString()};\nconst mountStages = ${mountStages.toString()};`;
+const stagesClient = () => `const lineDiff = ${lineDiff.toString()};\nconst flowText = (${flowWords.toString()})();\nconst stepSearch = ${stepSearch.toString()};\nconst layeredLayout = ${layeredLayout.toString()};\nconst mountStages = ${mountStages.toString()};`;
 
 // A standalone page (previews and tests); in VS Code the project panel hosts it.
 function stagesHTML() {

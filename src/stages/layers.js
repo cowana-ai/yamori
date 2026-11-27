@@ -202,27 +202,7 @@ function classLayers(source, def, { braces = false, scope } = {}) {
     steps.push({ layer: { name, type: name, op: true, plain: OPS[name] }, at: open + balanced(body, open).length + 1, index: steps.length });
   }
   steps.sort((a, b) => a.at - b.at || a.index - b.index);
-  const ordered = steps.map(step => step.layer), at = new Map(steps.map(step => [step.layer, step.at]));
-  // Shortcuts: x = x + part(...) adds a part's result back to its input;
-  // out += saved adds back a value saved before some parts ran.
-  const lines = body.split('\n'), starts = [];
-  lines.reduce((offset, line) => { starts.push(offset); return offset + line.length + 1; }, 0);
-  lines.forEach((line, row) => {
-    const match = /^\s*(\w+)\s*(?:=\s*\1\s*\+|\+=)\s*(.+?);?\s*$/.exec(line);
-    if (!match) return;
-    const from = starts[row], to = from + line.length;
-    let group = ordered.filter(layer => !layer.op && at.get(layer) >= from && at.get(layer) <= to);
-    if (!group.length) {
-      const saved = /^\s*([A-Za-z_]\w*)\s*$/.exec(match[2])?.[1];
-      if (!saved) return;
-      // From where it was first saved (identity = x), or from the start when it is an input.
-      let since = 0;
-      for (let r = 1; r < row; r++) if (new RegExp('^\\s*(?:(?:const|let|var)\\s+)?' + saved + '\\s*=[^=]').test(lines[r])) { since = starts[r]; break; }
-      group = ordered.filter(layer => !layer.op && at.get(layer) >= since && at.get(layer) < from);
-    }
-    const last = group[group.length - 1];
-    if (last) { last.residual = true; last.residualFrom = group[0].name; }
-  });
+  const ordered = steps.map(step => step.layer);
   const inputs = topLevel(runner?.params || '').map(param => param.split(/[:=]/)[0].trim().replace(/^[*.]+/, '').replace(/\?$/, '')).filter(param => param && param !== self);
   const returns = [...body.matchAll(/^\s*return\s+(.+?);?\s*$/gm)].pop()?.[1].trim().replace(/^\((.*)\)$/, '$1');
   const shown = ordered.slice(0, LIMITS.layers);
@@ -263,6 +243,38 @@ function classLayers(source, def, { braces = false, scope } = {}) {
     runs: runner?.name, runsLine: runner ? def.start + runner.line : undefined, initLine: def.start + init.line, inputs, outputs: returns ? topLevel(returns).filter(item => /^[\w.]+$/.test(item)) : [],
     layers: layersOut, flow, defaults: [...from],
   };
+}
+
+// Words for a class's flow, shared by the Inside view and its Obsidian note:
+// what each step is called and one sentence per step, built from the graph.
+// Self-contained, so the webview can use it as is.
+function flowWords() {
+  const OPERATOR = { '+': 'add', '-': 'subtract', '*': 'multiply', '/': 'divide', '//': 'divide (whole)', '%': 'remainder', '@': 'matrix product' };
+  const times = layer => layer.times !== undefined ? layer.times : String(layer.repeat || '').replace(/^(self|this|config|cfg|args)\./, '');
+  const nameOf = node => !node ? '' : node.kind === 'in' ? node.name : node.kind === 'out' ? 'the result' : node.kind === 'merge' ? 'the ' + (OPERATOR[node.name] || node.name) + ' result' : node.kind === 'op' ? node.name : node.name + (node.method ? '.' + node.method + '()' : '');
+  const list = items => items.length > 1 ? items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1] : items[0] || '';
+  // Who feeds a step and whom it feeds.
+  function links(flow) {
+    const at = new Map(flow.nodes.map(node => [node.id, node])), into = new Map(), out = new Map();
+    for (const [from, to] of flow.edges || []) { if (!at.has(from) || !at.has(to)) continue; (into.get(to) || into.set(to, []).get(to)).push(at.get(from)); (out.get(from) || out.set(from, []).get(from)).push(at.get(to)); }
+    return { into: id => into.get(id) || [], outOf: id => out.get(id) || [] };
+  }
+  // name: the class; whatOf(layer): what a part does in plain words.
+  function sentence(anatomy, node, { name, whatOf = layer => layer.plain || '', graph = links(anatomy.flow) }) {
+    const from = [...new Set(graph.into(node.id).map(nameOf))], to = [...new Set(graph.outOf(node.id).map(next => next.kind === 'out' ? 'what comes out' : nameOf(next)))];
+    const layer = node.kind === 'part' ? anatomy.layers.find(item => !item.op && item.name === node.name) : undefined, what = layer ? whatOf(layer) : node.plain;
+    const parts = [];
+    if (node.kind === 'in') parts.push(name + ' is given ' + node.name + '.');
+    else if (node.kind === 'out') parts.push(name + ' gives back ' + (node.names?.length ? list(node.names) : 'the result') + (from.length ? ', from ' + list(from) : '') + '.');
+    else if (node.kind === 'merge') parts.push(list(from) + ' are combined: ' + (OPERATOR[node.name] || node.name) + ' (' + node.name + ').');
+    else parts.push((layer ? node.name + ' (' + layer.type + ')' : node.name) + (node.value ? ' is read as a value' : from.length ? ' takes ' + list(from) : ' starts a path of its own: nothing earlier feeds it') + '.', what || '');
+    if (layer?.repeat) parts.push('It runs ' + times(layer) + ' times, each copy taking what the one before gave.');
+    for (const when of node.when || []) parts.push('This only happens ' + when + '.');
+    for (const loop of node.loop || []) parts.push('It runs ' + loop + '.');
+    if (to.length && node.kind !== 'out') parts.push('Next: ' + list(to) + '.');
+    return parts.filter(Boolean).join(' ');
+  }
+  return { OPERATOR, times, nameOf, list, links, sentence };
 }
 
 // The first sentence of a class's docstring (Python) or the comment above it (JS/TS).
@@ -352,4 +364,4 @@ function partLayers(classes, texts) {
   return out;
 }
 
-module.exports = { classLayers, classDoc, partLayers, plainFor, OPS, LIMITS };
+module.exports = { classLayers, classDoc, partLayers, flowWords, plainFor, OPS, LIMITS };

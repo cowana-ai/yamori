@@ -100,9 +100,10 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const db = dbFor(item, false);
     if (!db || !db.workflows().length || !item.vault) return;
     try {
-      const files = item.vault.syncSystem(db, item.entry.graph || { files: {} }, { notes: item.entry.notes });
+      const files = item.vault.syncSystem(db, item.entry.graph || { files: {} }, { notes: item.entry.notes, anatomy: item.notesLayers?.layers });
       item.lastSync = { at: new Date().toISOString(), notes: files.length, error: '' };
       watchVault(item);
+      refreshNotesLayers(item, db);
     } catch (error) { item.lastSync = { at: new Date().toISOString(), notes: 0, error: error.message }; item.notice = 'Notes were not written: ' + error.message; }
   }
 
@@ -290,9 +291,51 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       const used = [...classes.keys()].filter(name => name !== home.def.name && new RegExp('\\b' + name + '\\b').test(body));
       if (used.length) builtFrom[step.file + '#' + home.def.name] = used.slice(0, 8);
     }
-    // What each model class is made of (its layers, in the order forward runs them).
-    const layers = require('./layers').partLayers([...classes.values()], texts);
+    // What each class is made of and how data moves through it (shared cache with the notes).
+    const layers = (await classLayersFor(item, [...texts.keys()], texts)).layers;
     item.callLinks[workflowId] = { signature, links, builtFrom, layers };
+  }
+  // What classes are made of, read from code (no AI), cached by the files' content:
+  // the How it works view and the Obsidian notes ask for the same files often.
+  const CODE = /\.(py|ipynb|m?[jt]sx?|cjs)$/i;
+  function layersSignature(item, files) {
+    const graph = item.entry.graph || { files: {} };
+    const list = [...new Set(files)].filter(file => graph.files[file] && CODE.test(file)).sort();
+    return { list, signature: list.map(file => file + ':' + (graph.files[file].hash || graph.files[file].size || '')).join('|') };
+  }
+  async function classLayersFor(item, files, texts = new Map()) {
+    const { list, signature } = layersSignature(item, files);
+    item.layersCache ||= new Map();
+    if (item.layersCache.has(signature)) return item.layersCache.get(signature);
+    const { definitions } = require('./callgraph'), graph = item.entry.graph;
+    const read = new Map();
+    for (const file of list) { if (texts.has(file)) read.set(file, texts.get(file)); else { try { read.set(file, await map.readSource(item.entry, file)); } catch { /* Left out. */ } } }
+    const classes = [...read.keys()].flatMap(file => definitions(graph, file).filter(def => def.kind === 'class').map(def => ({ file, def })));
+    const result = { signature, layers: require('./layers').partLayers(classes, read) };
+    item.layersCache.set(signature, result);
+    while (item.layersCache.size > 8) item.layersCache.delete(item.layersCache.keys().next().value);
+    return result;
+  }
+  // The notes cover every class in the mapped steps' files and the files they import.
+  function notesFiles(item, db) {
+    const graph = item.entry.graph || { files: {}, edges: [] }, files = new Set();
+    for (const workflow of db.workflows()) for (const step of db.steps(workflow.id)) if (graph.files[step.file]) files.add(step.file);
+    for (const edge of graph.edges || []) if (files.has(edge.from) && graph.files[edge.to]) files.add(edge.to);
+    return [...files];
+  }
+  // Brings the notes' class reading up to date in the background, then writes the notes again.
+  function refreshNotesLayers(item, db) {
+    if (item.notesLayersBusy) return;
+    const files = notesFiles(item, db), { signature } = layersSignature(item, files);
+    if (item.notesLayers?.signature === signature) return;
+    item.notesLayersBusy = true;
+    classLayersFor(item, files).then(result => {
+      item.notesLayersBusy = false;
+      // The project may have closed meanwhile.
+      if (item.closed) return;
+      item.notesLayers = result;
+      try { sync(item); } catch { /* Notes are written on the next sync. */ }
+    }, () => { item.notesLayersBusy = false; });
   }
   // A message from the System tab: errors show in the tab.
   async function message(entry, value) {
@@ -613,7 +656,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     saved, updateChanged, post, state, projectFor, dbFor, vaultFor, sync, vaultChanged, request, budget, busy,
     // An agent finished a run (MCP `done`): summarize once, now.
     agentDone(entry) { projectFor(entry).scheduler.done(); },
-    dispose() { for (const item of projects.values()) { item.scheduler.dispose(); item.steerController?.abort(); item.doneWatch?.close(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
+    dispose() { for (const item of projects.values()) { item.closed = true; item.scheduler.dispose(); item.steerController?.abort(); item.doneWatch?.close(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); if (item.db) closeStageDb(item.db.file); } projects.clear(); }
   };
 }
 

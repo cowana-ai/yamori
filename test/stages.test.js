@@ -558,7 +558,9 @@ test('a class shows what it is made of: parts in the order they run, repeats, sh
   // In the order forward runs them (inner calls first), with the skip added back after the last.
   assert.deepEqual(names('net.py#Unit'), ['first', 'norm', 'second']);
   assert.equal(out['net.py#Unit'].doc, 'Two convolutions with a skip connection.');
-  assert.deepEqual(out['net.py#Unit'].layers.filter(layer => layer.residual).map(layer => [layer.name, layer.residualFrom]), [['second', 'first']]);
+  // The skip connection is where two paths join: what came in, and what second gave.
+  const joins = item => item.flow.nodes.filter(node => node.kind === 'merge').map(node => item.flow.edges.filter(([, to]) => to === node.id).map(([from]) => item.flow.nodes.find(other => other.id === from)).map(other => other.kind === 'in' ? 'in:' + other.name : other.name).sort());
+  assert.deepEqual(joins(out['net.py#Unit']), [['in:x', 'second']]);
   assert.match(out['net.py#Unit'].layers[0].plain, /pattern/);
   // Named pieces of a container run with it; a repeated project block points at its own class; math between parts shows.
   assert.deepEqual(names('net.py#Net'), ['stem.conv', 'stem.act', 'units', 'head', 'cross_entropy', 'spare']);
@@ -571,7 +573,8 @@ test('a class shows what it is made of: parts in the order they run, repeats, sh
   assert.deepEqual([out['net.py#Net'].inputs, out['net.py#Net'].outputs], [['x', 'y'], ['logits', 'loss']]);
   // Keras: call() runs it; h = h + part(h) is a shortcut.
   assert.equal(out['tagger.py#Tagger'].runs, 'call');
-  assert.deepEqual(out['tagger.py#Tagger'].layers.map(layer => [layer.name, !!layer.residual]), [['embed', false], ['mix', true]]);
+  assert.deepEqual(names('tagger.py#Tagger'), ['embed', 'mix']);
+  assert.deepEqual(joins(out['tagger.py#Tagger']), [['embed', 'mix']]);
   // Not a model: the method that uses the most parts sets the order; plain values are not parts.
   assert.equal(out['orders.py#Orders'].runs, 'place');
   assert.deepEqual(names('orders.py#Orders'), ['db', 'mail']);
@@ -654,4 +657,60 @@ test('a class shows how data flows through it: splits, merges, conditions, loops
   assert.equal(part('blocks').times, 3);
   assert.deepEqual(model.defaults.sort(), ['Settings', 'default arguments']);
   assert.equal(part('words').line, 11);
+});
+
+test('vault: an Inside note per class, with its flow as a diagram, step by step, its parts and links both ways', { skip }, async () => {
+  const fs = require('node:fs'), os = require('node:os');
+  const { Vault } = require('../src/stages/vault');
+  const { partLayers } = require('../src/stages/layers');
+  const ctx = await setup(), model = fakeModel(() => STAGES);
+  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
+  ctx.db.setPart(workflowId, { name: 'Agent loop', summary: 's', folder: '(root)', position: 0 });
+  const code = [
+    'class Runner:',
+    '    """Runs a plan, one tool at a time."""',
+    '    def __init__(self, cfg):',
+    '        self.tools = Toolbox(cfg.tools)',
+    '        self.log = Journal("runs")',
+    '    def run(self, plan, dry=False):',
+    '        result = self.tools.call(plan)',
+    '        if not dry:',
+    '            self.log.write(result + plan)',
+    '        return result',
+    'class Toolbox:',
+    '    def __init__(self, names):',
+    '        self.http = Client()',
+    '        self.cache = Store(64)',
+    '    def call(self, plan):',
+    '        hit = self.cache.get(plan)',
+    '        return self.http.post(hit)',
+  ].join('\n');
+  const anatomy = partLayers([{ file: 'agent/actor.py', def: { name: 'Runner', start: 1, end: 10 } }, { file: 'agent/actor.py', def: { name: 'Toolbox', start: 11, end: 17 } }], new Map([['agent/actor.py', code]]));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yamori-inside-'));
+  try {
+    const vault = new Vault({ root, vaultPath: path.join(root, 'vault') });
+    vault.syncSystem(ctx.db, ctx.graph, { notes: ctx.notes, anatomy });
+    const note = fs.readFileSync(path.join(vault.dir, 'Inside', 'Runner.md'), 'utf8');
+    assert.match(note, /^---\ntype: inside\nclass: "agent\/actor\.py#Runner"\nname: Runner/);
+    assert.match(note, /# Inside Runner\n\n`agent\/actor\.py` · \[\[Code\/agent\/actor\.py\|actor\.py\]\]/);
+    assert.match(note, /Runs a plan, one tool at a time\./);
+    // The diagram: inputs as pills, parts as boxes with their arguments, the condition on the arrow into the part it guards.
+    assert.match(note, /```mermaid\nflowchart TD\n {2}f0\(\["in: plan"\]\)\n/);
+    assert.match(note, /\["Toolbox · tools\.call\(\)<br\/>\(cfg\.tools\)"\]/);
+    assert.match(note, /\["Journal · log\.write\(\)<br\/>\(#quot;runs#quot;\)"\]/);
+    assert.match(note, / -- "when not dry" --> /);
+    assert.match(note, /\(\("\+ add"\)\)/);
+    // Step by step, with lines; parts link to the class notes they are; the class it is part of links back.
+    assert.match(note, /## Step by step\n\n1\. Runner is given plan\. Next: tools\.call\(\) and the add result\./);
+    assert.match(note, /4\. log \(Journal\) takes the add result\. This only happens when not dry\. · \[actor\.py:9\]\(vscode:/);
+    assert.match(note, /- \*\*tools\*\* · \[\[Inside\/Toolbox\|Toolbox\]\] \(cfg\.tools\): Made of Store, Client\. · \[actor\.py:4\]/);
+    assert.match(fs.readFileSync(path.join(vault.dir, 'Inside', 'Toolbox.md'), 'utf8'), /## Part of\n\n- \[\[Inside\/Runner\|Runner\]\] \(as `tools`\)/);
+    // The code note and the part note list the classes.
+    assert.match(fs.readFileSync(path.join(vault.dir, 'Code', 'agent', 'actor.py.md'), 'utf8'), /## Classes\n\n- \[\[Inside\/Runner\|Runner\]\]\n- \[\[Inside\/Toolbox\|Toolbox\]\]/);
+    assert.match(fs.readFileSync(path.join(vault.dir, 'Agent loop', 'Agent loop.md'), 'utf8'), /## What its classes are made of\n\n- \[\[Inside\/Runner\|Runner\]\]: Runs a plan, one tool at a time\./);
+    // Without the class any more, its note moves to the archive like other generated notes.
+    vault.syncSystem(ctx.db, ctx.graph, { notes: ctx.notes, anatomy: { 'agent/actor.py#Runner': anatomy['agent/actor.py#Runner'] } });
+    assert.ok(!fs.existsSync(path.join(vault.dir, 'Inside', 'Toolbox.md')));
+    assert.ok(fs.existsSync(path.join(vault.dir, '_archive', 'Inside', 'Toolbox.md')));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); ctx.db.close?.(); }
 });
