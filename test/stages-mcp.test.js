@@ -37,16 +37,23 @@ test('agents read stages, founder notes and the review log with no model call, a
     const init = await server.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'claude-code' } } });
     assert.match(init.result.instructions, /founder notes that get_stage returns are constraints/);
     const names = (await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.map(tool => tool.name);
-    for (const name of ['list_stages', 'get_stage', 'what_changed', 'add_note', 'propose_change', 'done']) assert.ok(names.includes(name), name);
+    for (const name of ['find', 'list_stages', 'get_stage', 'add_note', 'done']) assert.ok(names.includes(name), name);
+    // Rarely needed tools are not listed for agents, but older callers can still call them.
+    for (const name of ['what_changed', 'propose_change', 'search_name', 'project_map']) assert.ok(!names.includes(name), name);
     const before = ctx.db.usage({}).calls;
-    const list = JSON.parse(text(await server.call('list_stages', {})));
+    // Brief by default: compact text, one line per step.
+    const brief = text(await server.call('list_stages', {}));
+    assert.match(brief, /^1\. Plan \[plan\]/m); assert.match(brief, /^3\. Evaluate result \[evaluate\].*1 waiting for review/m);
+    const actBrief = text(await server.call('get_stage', { stage: 'act' }));
+    assert.match(actBrief, /Founder notes \(rules for edits here\):\n[^]*Never call paid tools/); assert.match(actBrief, /^- agent\/\S+:4-5 act/m);
+    const list = JSON.parse(text(await server.call('list_stages', { detail: 'full' })));
     assert.equal(list.workflow, 'run-agent'); assert.deepEqual(list.stages.map(stage => stage.name), ['Plan', 'Act', 'Evaluate result']);
     assert.equal(list.stages[2].pendingReview, 1);
-    const act = JSON.parse(text(await server.call('get_stage', { stage: 'act' })));
+    const act = JSON.parse(text(await server.call('get_stage', { stage: 'act', detail: 'full' })));
     assert.match(act.founderNotes, /Never call paid tools without a budget check/);
     assert.deepEqual(act.steps.map(step => step.symbol), ['act', 'run_step']);
     assert.deepEqual(act.steps[0].lines, [4, 5]);
-    const byName = JSON.parse(text(await server.call('get_stage', { stage: 'evaluate result' })));
+    const byName = JSON.parse(text(await server.call('get_stage', { stage: 'evaluate result', detail: 'full' })));
     assert.deepEqual(byName.pendingReview, ['Evaluate now retries twice before failing.']);
     const changed = JSON.parse(text(await server.call('what_changed', {})));
     assert.equal(changed.changes[0].summary, 'Evaluate now retries twice before failing.'); assert.equal(changed.changes[0].status, 'pending');
@@ -64,6 +71,31 @@ test('agents read stages, founder notes and the review log with no model call, a
     const readOnly = createServer({ root: ctx.root, store });
     assert.ok(!readOnly.tools.some(tool => ['get_stage', 'add_note'].includes(tool.name)));
     assert.ok((await readOnly.call('add_note', { stage: 'plan', text: 'x' })).isError);
+  } finally { ctx.cleanup(); }
+});
+
+test('find answers where/how in one call with the code, and agents get a short, annotated tool list', { skip }, async () => {
+  const ctx = await mapped();
+  try {
+    const { createServer } = require('../src/project/mcp');
+    const server = createServer({ root: ctx.root, cache: ctx.cache });
+    await server.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'codex' } } });
+    const graded = text(await server.call('find', { query: 'where are the results graded?' }));
+    assert.match(graded, /^Current source, read just now\.\n\nagent\/evaluator\.py:\d+-\d+ · grade/, 'plain words find the function first');
+    assert.match(graded, /\d+: def grade\(results\):/, 'with its code');
+    const named = text(await server.call('find', { query: 'run_step', code: true }));
+    assert.match(named, /^Current source, read just now\.\n\nagent\/actor\.py:8-9 · run_step · run-agent › Act/, 'an exact name comes first, with its part and step');
+    assert.match(named, /^Called from: agent\/actor\.py:5 \(act\) · Calls: call_tool \(agent\/tools\.py:1\)$/m, 'with who calls it and what it calls');
+    assert.match(named, /^8: def run_step\(step\):/m);
+    assert.match(text(await server.call('find', { query: 'kubernetes autoscaler' })), /Nothing in the map matches/);
+    assert.ok((await server.call('find', {})).isError);
+    assert.match(text(await server.call('read_source', { path: 'agent/actor.py', symbol: 'run_step' })), /lines 8-9 of/);
+    const listed = (await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result;
+    assert.ok(JSON.stringify(listed).length < 8000, 'agent tool definitions stay small: ' + JSON.stringify(listed).length);
+    assert.ok(listed.tools.length <= 13);
+    const hint = name => listed.tools.find(tool => tool.name === name).annotations;
+    assert.deepEqual(hint('find'), { readOnlyHint: true }); assert.deepEqual(hint('get_stage'), { readOnlyHint: true });
+    assert.equal(hint('save_plan').readOnlyHint, false); assert.equal(hint('add_note').destructiveHint, false);
   } finally { ctx.cleanup(); }
 });
 

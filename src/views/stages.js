@@ -345,7 +345,7 @@ function stepSearch() {
     return scored.filter(item => item.score === best).sort((a, b) => b.exact - a.exact || a.order - b.order).map(item => item.item);
   }
   const matches = (text, words) => tokensOf(text).some(token => words.some(word => close(word, token)));
-  return { queryWords, find, matches };
+  return { queryWords, find, matches, close, tokensOf };
 }
 
 function mountStages(root, post) {

@@ -1740,8 +1740,8 @@ require(path.join(current.extension, 'src', 'project', 'mcp.js')).main(process.a
 // Claude Code the same conversation resumes after a restart.
 const SESSION_RULES = `You are the founder's agent for this project, started from Yamori. Yamori shows them how the system works (How it works tab), plans on a canvas (Plan), and pseudocode beside the code (Read).
 - When they say this, here, that, or what I'm looking at, call the yamori get_view tool first: it tells you the file, lines, selection, Read file, and the System part, step or file they have open.
-- To explain how things fit together, use list_stages and get_stage (each step lists what it does and key details); notes there are the founder's rules, follow them.
-- The map is a summary. Before answering how something works in detail, read the code it points to (get_pseudocode, read_source, or your own file tools), and say what you found, not what you assume.
+- For where or how questions, call the yamori find tool: it returns the matching functions with their current code, callers and callees, so you can usually answer from it without grep or reading files, and its code needs no re-reading. Say what the code shows, not what you assume.
+- To explain how the parts fit together, use list_stages and get_stage; notes there are the founder's rules, follow them.
 - When they ask for a plan, write it with save_plan so it appears on Yamori's Plan canvas, then call show_in_yamori with tab "plan". Do not edit code until they approve.
 - In your own plan mode (/plan), finish the plan the usual way; Yamori puts it on the Plan canvas by itself. Name each file by its path in the project (and the function or lines) so every step lands on the right file.
 - After you explain a part, step or file, you may call show_in_yamori to bring it into view.

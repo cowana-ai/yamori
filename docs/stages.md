@@ -115,16 +115,27 @@ Changing the AI model or Yamori's prompts does not redo the map by itself.
 
 ## Agents (MCP)
 
-**Yamori: Connect Claude Code & Codex** registers Yamori's MCP server with Claude Code and Codex, and with Cursor (`~/.cursor/mcp.json`) when Cursor is installed. Agents get these tools:
+**Yamori: Connect Claude Code & Codex** registers Yamori's MCP server with Claude Code and Codex, and with Cursor (`~/.cursor/mcp.json`) when Cursor is installed. Agents see a short list of tools (13, about 7k characters of definitions), built to replace a search-then-read loop rather than add to it:
 
 | Tool | What it returns | Cost |
 |---|---|---|
-| `list_stages(workflow?)` | Without arguments: what the system does, its parts, how they connect, and the system notes. With a part: its steps in order | no AI |
-| `get_stage(workflow?, stage)` | A step's functions with current lines and cached pseudocode, plus the system, part and step notes as constraints | no AI |
-| `what_changed(workflow?, since_review?)` | Change sentences since the last review, with status and why | no AI |
+| `find(query, limit?, code?)` | Where or how something happens, in one call: the best-matching functions, classes or script sections, each with file:lines, what it does, its part and step, and its source lines. A question in plain words or an exact name | no AI |
+| `list_stages(workflow?, detail?)` | Without arguments: what the system does, its parts, how they connect, and the system notes. With a part: its steps in order | no AI |
+| `get_stage(workflow?, stage, detail?)` | A step's functions (file:lines, what each does) and the system, part and step notes as constraints | no AI |
+| `read_source(path, start_line?, end_line?, symbol?)` | Numbered source lines; `symbol` reads one function or class | no AI |
+| `file_info`, `get_pseudocode`, `get_view` | One file's definitions and links; its pseudocode; what you are looking at | no AI |
 | `add_note(workflow?, stage, text)` | Appends to the step's notes | file IO |
-| `done()` | Tells Yamori the editing run finished, so it updates each changed step once | file IO |
-| `propose_change(workflow?, stage, intent)` | Functions to touch for an intent, with the notes as constraints | one cheap AI call, at most one per 30 s and 20 a day, counted against `yamori.tokenBudget` |
+| `save_plan`, `show_in_yamori`, `done()`, `save_pseudocode` | Plans onto the canvas, bring something into view, end of an editing run (each changed step updates once), pseudocode for files with none | file IO |
+
+`list_stages` and `get_stage` answer in brief text by default. `detail: "full"` returns every field as JSON, including behaviors and cached pseudocode. Long answers are cut at a line with a hint on how to ask for less. Read tools are marked read-only (`readOnlyHint`), so clients can run them without asking.
+
+Older tools stay callable by name but are not listed: `what_changed`, `propose_change` (one cheap AI call, rate-limited and counted against `yamori.tokenBudget`), `search_name`, `find_symbol`, `search_pseudocode`, `project_map`, `start_here` and the git and conversation tools.
+
+**Measuring it.** `scripts/bench-mcp/` runs the same read-only questions with Claude Code and Codex in three setups: without Yamori, with it, and told to start with `find`. Each answer is graded against expected file and function names, and the report gives tokens, time, tool calls and accuracy for each. It spends real tokens on your own sign-ins and is not part of `npm test`:
+```bash
+node scripts/bench-mcp/run.js --tasks my-tasks.json --reps 2
+node scripts/bench-mcp/report.js
+```
 
 ## Storage
 
