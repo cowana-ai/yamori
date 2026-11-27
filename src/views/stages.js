@@ -177,6 +177,14 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-node.st-layer.repeat { box-shadow: 4px 4px 0 -1px var(--read-page), 4px 4px 0 0 color-mix(in srgb, oklch(76% .13 85) 60%, transparent), 8px 8px 0 -1px var(--read-page), 8px 8px 0 0 color-mix(in srgb, oklch(76% .13 85) 35%, transparent); width: calc(100% - 9px); height: calc(100% - 9px); overflow: visible; }
 #stages-view .st-node.st-layer.selected { border-color: var(--read-ink); box-shadow: 0 0 0 2px var(--read-ink); }
 #stages-view .st-node.st-layer.op { border-style: dashed; border-radius: 16px; background: var(--read-page); padding: 5px 12px; }
+#stages-view .st-layer-args { font-size: 11px; color: var(--read-muted); overflow-wrap: anywhere; }
+#stages-view .st-layer-badge.when { color: oklch(76% .12 240); }
+#stages-view .st-layer-badge.loop { color: oklch(76% .13 85); }
+#stages-view .st-node.st-layer-merge { border-radius: 999px; border-width: 1.5px; flex-direction: row; align-items: center; justify-content: center; gap: 5px; padding: 4px 8px; background: var(--read-page); }
+#stages-view .st-node.st-layer-merge b { font: 700 15px var(--vscode-editor-font-family, monospace); }
+#stages-view .st-node.st-layer-merge span { font-size: 11px; color: var(--read-muted); }
+#stages-view .st-node.st-layer-merge.selected, #stages-view .st-node.st-layer-end.selected { border-color: var(--read-ink); box-shadow: 0 0 0 2px var(--read-ink); }
+#stages-view .st-walk h2 { font-size: 14px; }
 #stages-view .st-layer-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
 #stages-view .st-layer-name { font-size: 11px; color: var(--read-muted); }
 #stages-view .st-layer-what { font-size: 12.5px; line-height: 1.4; }
@@ -191,7 +199,7 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-layer-row-what { color: var(--read-muted); font-size: 11px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 #stages-view .st-layer-down { display: block; color: var(--read-muted); font-size: 10px; line-height: 1; }
 #stages-view .st-layer-plus { color: oklch(74% .12 160); font-weight: 700; }
-#stages-view .st-node.st-layer-end { border-radius: 18px; border-style: dashed; background: var(--read-page); flex-direction: row; align-items: center; gap: 8px; padding: 6px 14px; cursor: default; }
+#stages-view .st-node.st-layer-end { border-radius: 18px; border-style: dashed; background: var(--read-page); flex-direction: row; align-items: center; gap: 8px; padding: 6px 14px; }
 #stages-view .st-built { font-size: 11px; color: var(--read-muted); margin: 4px 0 0; }
 #stages-view .st-built code, #stages-view .st-method code { font-size: 11px; color: var(--read-ink); }
 #stages-view .st-methods { margin: 6px -4px 2px; border-top: 1px solid color-mix(in srgb, var(--read-border) 70%, transparent); padding-top: 4px; display: grid; gap: 2px; }
@@ -495,7 +503,8 @@ function mountStages(root, post) {
   // An arrow from the right side of one box to the left side of another; backward arrows loop underneath.
   function route(from, to, edge = {}) {
     if (edge.down) { const x1 = from.x + from.w / 2, y1 = from.y + from.h, x2 = to.x + to.w / 2, y2 = to.y - 3; return { d: 'M' + x1 + ' ' + y1 + ' C' + x1 + ' ' + (y1 + y2) / 2 + ' ' + x2 + ' ' + (y1 + y2) / 2 + ' ' + x2 + ' ' + y2, lx: (x1 + x2) / 2, ly: (y1 + y2) / 2 }; }
-    if (edge.side) { const x1 = from.x + from.w, y1 = from.y + from.h / 2, x2 = to.x + to.w + 3, y2 = to.y + to.h / 2, out = Math.max(x1, x2) + 54; return { d: 'M' + x1 + ' ' + y1 + ' C' + out + ' ' + y1 + ' ' + out + ' ' + y2 + ' ' + x2 + ' ' + y2, lx: out - 10, ly: (y1 + y2) / 2 }; }
+    if (edge.side === 'left') { const x1 = from.x, y1 = from.y + from.h / 2, x2 = to.x - 3, y2 = to.y + to.h / 2, out = edge.out ?? Math.min(x1, x2) - 54; return { d: 'M' + x1 + ' ' + y1 + ' C' + out + ' ' + y1 + ' ' + out + ' ' + y2 + ' ' + x2 + ' ' + y2, lx: out + 10, ly: (y1 + y2) / 2 }; }
+    if (edge.side) { const x1 = from.x + from.w, y1 = from.y + from.h / 2, x2 = to.x + to.w + 3, y2 = to.y + to.h / 2, out = edge.out ?? Math.max(x1, x2) + 54; return { d: 'M' + x1 + ' ' + y1 + ' C' + out + ' ' + y1 + ' ' + out + ' ' + y2 + ' ' + x2 + ' ' + y2, lx: out - 10, ly: (y1 + y2) / 2 }; }
     const forward = to.x > from.x + from.w / 2;
     if (forward) {
       const x1 = from.x + from.w, y1 = from.y + from.h / 2, x2 = to.x - 3, y2 = to.y + to.h / 2, mid = (x1 + x2) / 2;
@@ -741,7 +750,7 @@ function mountStages(root, post) {
       canvas, picked ? flowStepDetail(picked) : undefined];
   }
   // Moving between a part's whole diagram and a step's path stays in full view.
-  function resetInside() { ui.flowMode = ui.flowLayer = undefined; ui.insideTrail = []; }
+  function resetInside() { ui.flowMode = ui.flowLayer = ui.walk = undefined; ui.insideTrail = []; }
   function keepFull(part, graphKey) {
     const [kind, id] = String(ui.full || '').split(':');
     if ((kind === 'pflow' || kind === 'ppath' || kind === 'pin') && id === part.id) ui.full = graphKey;
@@ -809,77 +818,147 @@ function mountStages(root, post) {
     // What a part is: its step's description, its docstring, plain words for a known layer,
     // or else what it is made of.
     const madeOf = ref => { const sub = state.partLayers?.[ref]; const types = sub ? sub.layers.filter(item => !item.op && !item.unused).map(item => item.type) : []; return types.length ? 'Made of ' + [...new Set(types)].join(', ') + '.' : ''; };
-    const whatOf = layer => (layer.own && classStep(layer.own)?.what) || layer.doc || layer.plain || (layer.own ? madeOf(layer.own) : '') || '';
+    const whatOf = layer => layer.op ? layer.plain || '' : (layer.own && classStep(layer.own)?.what) || layer.doc || layer.plain || (layer.own ? madeOf(layer.own) : '') || '';
     // Its parts are shown inside it when they are building blocks, not only raw learned numbers.
     const opened = layer => { const sub = layer.own && state.partLayers?.[layer.own]; return sub && sub.layers.filter(item => !item.op && !item.unused && item.type !== 'Parameter').length >= 2 ? sub : undefined; };
     const lines = (text, per) => Math.max(1, Math.ceil(String(text || '').length / per));
     const runs = anatomy.runs ? anatomy.runs + '()' : '';
     const used = anatomy.layers.filter(layer => !layer.unused), unused = anatomy.layers.filter(layer => layer.unused);
-    const W = 400, nodes = [], edges = [];
-    let y = 0;
-    const place = (id, w, hgt, content, gap = 30) => { nodes.push({ id, x: (W - w) / 2, y, w, h: hgt, content }); y += hgt + gap; return id; };
-    const end = (id, label, names) => place(id, 260, 34, h('div', { class: 'st-node st-layer-end' }, h('b', {}, label), names.length ? h('code', {}, names.join(', ')) : muted('the result')));
-    // One part: its type (the layer's name), what it does in plain words, and what is special about it.
-    const badges = layer => [
-      layer.repeat ? h('div', { class: 'st-layer-badge repeat' }, '× ' + String(layer.repeat).replace(/^(self|this|config|cfg|args)\./, '') + ' · the same part, repeated one after another') : undefined,
-      layer.residual ? h('div', { class: 'st-layer-badge shortcut' }, '↺ Then adds back what went into ' + layer.residualFrom + ' (a shortcut)') : undefined,
-      layer.optional ? h('div', { class: 'st-layer-badge' }, 'Only when a setting turns it on') : undefined,
+    // Words for combining two values, from Python's own operators.
+    const OPERATOR = { '+': 'add', '-': 'subtract', '*': 'multiply', '/': 'divide', '//': 'divide (whole)', '%': 'remainder', '@': 'matrix product' };
+    const layerNamed = name => anatomy.layers.find(layer => !layer.op && layer.name === name);
+    const file = key.split('#')[0], W = 380;
+    const times = layer => layer.times !== undefined ? layer.times : String(layer.repeat || '').replace(/^(self|this|config|cfg|args)\./, '');
+    // A part's arguments, values worked out where the code allows (768 for n_embd).
+    const argsOf = layer => layer.args?.length ? h('code', { class: 'st-layer-args', title: layer.type + '(' + layer.args.map(arg => (arg.name ? arg.name + '=' : '') + arg.code).join(', ') + ')' }, '(' + layer.args.map(arg => (arg.name ? arg.name + '=' : '') + (arg.value ?? arg.code)).join(', ') + ')') : undefined;
+    const badges = (layer, node) => [
+      layer.repeat ? h('div', { class: 'st-layer-badge repeat' }, '× ' + times(layer) + ' · the same part, one copy after another') : undefined,
+      node?.value ? h('div', { class: 'st-layer-badge' }, 'Read as a value, not run') : undefined,
+      node?.method ? h('div', { class: 'st-layer-badge' }, 'Calls its ' + node.method + '()') : undefined,
+      ...(node?.when || []).map(when => h('div', { class: 'st-layer-badge when' }, '◇ Only ' + when)),
+      ...(node?.loop || []).map(loop => h('div', { class: 'st-layer-badge loop' }, '↻ Runs ' + loop)),
+      layer.optional ? h('div', { class: 'st-layer-badge' }, 'Only created when a setting asks for it') : undefined,
       layer.unused ? h('div', { class: 'st-layer-badge' }, runs ? 'Not used by ' + runs : 'Not used by its main method') : undefined].filter(Boolean);
     const inner = layer => {
       const sub = opened(layer);
       if (!sub) return layer.own && state.partLayers?.[layer.own] ? link('flowInside', { ref: layer.own }, 'Look inside ' + layer.type + ' →', { title: 'Show ' + layer.type + ' on its own' }) : undefined;
-      const parts = sub.layers.filter(item => !item.unused);
+      // In the order its own flow runs, each with its condition; additions as "+ add".
+      const steps = (sub.flow?.nodes || []).filter(node => node.kind === 'part' || node.kind === 'op' || node.kind === 'merge');
+      const rows = steps.length ? steps.map(node => node.kind === 'part' ? { ...(sub.layers.find(item => item.name === node.name) || { name: node.name, type: node.name }), when: node.when } : node.kind === 'op' ? { op: true, type: node.name, plain: node.plain, when: node.when } : { merge: node.name, when: node.when })
+        : sub.layers.filter(item => !item.unused);
       return h('div', { class: 'st-layer-inner' }, h('div', { class: 'st-layer-inner-head' }, (layer.repeat ? 'Inside each ' : 'Inside ') + layer.type + ':'),
-        parts.map((item, index) => h('div', { class: 'st-layer-row' + (item.op ? ' op' : '') }, index ? h('span', { class: 'st-layer-down' }, '↓') : undefined,
-          h('span', { class: item.op ? 'st-opname' : 'st-classname small' }, marked(item.type, words)), item.op ? undefined : h('code', {}, ' ' + item.name), item.residual ? h('span', { class: 'st-layer-plus', title: 'Adds back what went into ' + item.residualFrom }, ' ↺ +') : undefined,
-          whatOf(item) ? h('div', { class: 'st-layer-row-what' }, marked(whatOf(item), words)) : undefined)),
+        rows.map((item, index) => h('div', { class: 'st-layer-row' + (item.op ? ' op' : '') }, index ? h('span', { class: 'st-layer-down' }, '↓') : undefined,
+          item.merge ? h('span', { class: 'st-layer-plus' }, item.merge + ' ' + (OPERATOR[item.merge] || 'combine') + ' (joins two paths)') : [h('span', { class: item.op ? 'st-opname' : 'st-classname small' }, marked(item.type, words)), item.op ? undefined : h('code', {}, ' ' + item.name)],
+          item.when?.length ? h('span', { class: 'st-layer-badge when' }, ' ◇ ' + item.when.join('; ')) : undefined,
+          !item.merge && whatOf(item) ? h('div', { class: 'st-layer-row-what' }, marked(whatOf(item), words)) : undefined)),
         link('flowInside', { ref: layer.own }, 'Look inside ' + layer.type + ' →', { title: 'Show ' + layer.type + ' on its own' }));
     };
-    const heightOf = layer => {
+    const heightOf = (layer, node) => {
       const sub = opened(layer), what = whatOf(layer);
-      if (layer.op) return 26 + 15 * lines(what, 58);
-      return 44 + (what ? 17 * lines(what, 52) : 0) + badges(layer).length * 19 + (layer.own && !sub && state.partLayers?.[layer.own] ? 20 : 0)
-        + (sub ? 50 + sub.layers.filter(item => !item.unused).reduce((sum, item, index) => sum + 19 + (index ? 11 : 0) + (whatOf(item) ? 14 * Math.min(2, lines(whatOf(item), 60)) : 0), 0) : 0) + (layer.repeat ? 10 : 0);
+      return 44 + (layer.args?.length ? 16 : 0) + (what ? 17 * lines(what, 50) : 0) + badges(layer, node).length * 19 + (layer.own && !sub && state.partLayers?.[layer.own] ? 20 : 0)
+        + (sub ? 50 + sub.layers.filter(item => !item.unused).reduce((sum, item, index) => sum + 19 + (index ? 11 : 0) + (whatOf(item) ? 14 * Math.min(2, lines(whatOf(item), 58)) : 0), 0) : 0) + (layer.repeat ? 10 : 0);
     };
-    const box = layer => {
-      const selected = ui.flowLayer === layer.name, what = whatOf(layer);
-      if (layer.op) return h('div', { class: 'st-node st-layer op' + (selected ? ' selected' : ''), data: { act: 'flowLayer', name: layer.name }, role: 'button', tabindex: 0, title: layer.type + ': math done between parts' },
-        h('div', {}, h('span', { class: 'st-opname' }, '∑ ' + layer.type)), what ? h('div', { class: 'st-layer-what' }, marked(what, words)) : undefined);
-      return h('div', { class: 'st-node st-layer' + (layer.own ? ' own' : '') + (layer.repeat ? ' repeat' : '') + (layer.unused ? ' dim' : '') + (selected ? ' selected' : ''), data: { act: 'flowLayer', name: layer.name }, role: 'button', tabindex: 0, title: layer.name + ' = ' + layer.type + '(…)' + (layer.own ? ' · defined in ' + layer.own.split('#')[0] : '') },
-        h('div', { class: 'st-layer-head' }, h('span', { class: 'st-classname' }, marked(layer.type, words)), h('code', { class: 'st-layer-name' }, marked(layer.name, words))),
-        what ? h('div', { class: 'st-layer-what' }, marked(what, words)) : h('div', { class: 'st-layer-what st-muted' }, 'A part made from ' + layer.type + '.'),
-        badges(layer), inner(layer));
-    };
-    let previous = anatomy.inputs.length ? end('in', 'Goes in', anatomy.inputs) : undefined;
-    const ids = new Map();
-    // Boxes are measured in the page when it can, so any text fits; else estimated.
-    const sized = (layer, w) => { const content = box(layer), measured = measure(content, w); return [content, measured ? measured + (layer.repeat ? 10 : 0) : heightOf(layer)]; };
-    used.forEach((layer, index) => {
-      const w = layer.op ? 320 : W, [content, hgt] = sized(layer, w), id = place('l:' + index, w, hgt, content);
-      ids.set(layer.name, id);
-      if (previous) edges.push({ from: previous, to: id, down: true, hot: true });
-      previous = id;
+    const flow = anatomy.flow || { nodes: [], edges: [] }, flowNodes = flow.nodes, at = new Map(flowNodes.map(node => [node.id, node]));
+    const into = id => (flow.edges || []).filter(([, to]) => to === id).map(([from]) => at.get(from)).filter(Boolean);
+    const outOf = id => (flow.edges || []).filter(([from]) => from === id).map(([, to]) => at.get(to)).filter(Boolean);
+    const nameOf = node => !node ? '' : node.kind === 'in' ? node.name : node.kind === 'out' ? 'the result' : node.kind === 'merge' ? 'the ' + (OPERATOR[node.name] || node.name) + ' result' : node.kind === 'op' ? node.name : node.name + (node.method ? '.' + node.method + '()' : '');
+    const walking = ui.walk !== undefined && ui.walkKey === key ? Math.max(0, Math.min(flowNodes.length - 1, ui.walk)) : undefined, current = walking !== undefined ? flowNodes[walking] : undefined;
+    const isSelected = node => current ? current === node : ui.flowLayer === (node.kind === 'part' ? node.name : 'node:' + node.id);
+    // One box per step of the flow.
+    function flowContent(node) {
+      const pick = { act: 'flowLayer', name: node.kind === 'part' ? node.name : 'node:' + node.id }, on = isSelected(node) ? ' selected' : '';
+      const where = node.line ? ' · ' + file + ':' + node.line : '';
+      if (node.kind === 'in' || node.kind === 'out') return h('div', { class: 'st-node st-layer-end' + on, data: pick, role: 'button', tabindex: 0 }, h('b', {}, node.kind === 'in' ? 'Goes in' : 'Comes out'), node.kind === 'in' ? h('code', {}, node.name) : node.names?.length ? h('code', {}, node.names.join(', ')) : muted('the result'));
+      if (node.kind === 'merge') return h('div', { class: 'st-node st-layer-merge' + on, data: pick, role: 'button', tabindex: 0, title: 'Combines ' + into(node.id).map(nameOf).join(' and ') + where }, h('b', {}, node.name), h('span', {}, OPERATOR[node.name] || 'combine'), ...(node.when || []).map(when => h('span', { class: 'st-layer-badge when' }, '◇')));
+      if (node.kind === 'op') return h('div', { class: 'st-node st-layer op' + on, data: pick, role: 'button', tabindex: 0, title: node.name + where },
+        h('div', {}, h('span', { class: 'st-opname' }, '∑ ' + node.name)), node.plain ? h('div', { class: 'st-layer-what' }, marked(node.plain, words)) : undefined, ...(node.when || []).map(when => h('div', { class: 'st-layer-badge when' }, '◇ Only ' + when)));
+      const layer = layerNamed(node.name) || { name: node.name, type: node.name };
+      return h('div', { class: 'st-node st-layer' + (layer.own ? ' own' : '') + (layer.repeat ? ' repeat' : '') + on, data: pick, role: 'button', tabindex: 0, title: layer.name + ' = ' + layer.type + '(…)' + where },
+        h('div', { class: 'st-layer-head' }, h('span', { class: 'st-classname', title: layer.plain || '' }, marked(layer.type, words)), h('code', { class: 'st-layer-name' }, marked(layer.name, words) )),
+        argsOf(layer),
+        whatOf(layer) ? h('div', { class: 'st-layer-what' }, marked(whatOf(layer), words)) : h('div', { class: 'st-layer-what st-muted' }, 'A part made from ' + layer.type + '.'),
+        badges(layer, node), inner(layer));
+    }
+    const widthOf = node => node.kind === 'merge' ? 92 : node.kind === 'in' || node.kind === 'out' ? 220 : node.kind === 'op' ? 300 : W;
+    const estimate = node => node.kind === 'merge' ? 34 : node.kind === 'in' || node.kind === 'out' ? 34 : node.kind === 'op' ? 30 + 15 * lines(node.plain, 52) + (node.when?.length || 0) * 19 : heightOf(layerNamed(node.name) || {}, node);
+    // Laid out top to bottom: rows from the flow's order, side by side where it splits.
+    const sized = flowNodes.map(node => { const content = flowContent(node), measured = measure(content, widthOf(node)); return { node, content, w: widthOf(node), h: measured ? measured + (layerNamed(node.name)?.repeat && node.kind === 'part' ? 10 : 0) : estimate(node) }; });
+    const layout = layeredLayout(flowNodes.map(node => ({ id: node.id })), (flow.edges || []).map(([from, to]) => ({ from, to })), { width: 1, height: W, gapX: 0, gapY: 46 });
+    // A source other than an input (a part read with nothing fed in) sits just above where it is used.
+    const row = new Map(flowNodes.map(node => [node.id, layout.positions.get(node.id).layer]));
+    for (const node of flowNodes) {
+      if (node.kind === 'in' || into(node.id).length) continue;
+      const below = outOf(node.id).map(next => row.get(next.id));
+      if (below.length) row.set(node.id, Math.max(0, Math.min(...below) - 1));
+    }
+    const rows = [];
+    for (const item of sized) (rows[row.get(item.node.id)] ||= []).push(item);
+    // Each row centered on one line down the middle, in the layout's left-to-right order.
+    const nodes = [], GAP = 40, SLOT = W + 40;
+    let y = 0;
+    for (const items of rows) {
+      if (!items) continue;
+      items.sort((a, b) => layout.positions.get(a.node.id).y - layout.positions.get(b.node.id).y);
+      const tallest = Math.max(...items.map(item => item.h));
+      items.forEach((item, index) => nodes.push({ id: item.node.id, x: (index - (items.length - 1) / 2) * SLOT - item.w / 2, y: y + (tallest - item.h) / 2, w: item.w, h: item.h, content: item.content }));
+      y += tallest + GAP;
+    }
+    const left = Math.min(0, ...nodes.map(node => node.x - 90));
+    for (const node of nodes) node.x -= left;
+    const placed = new Map(nodes.map(node => [node.id, node])), rowOf = id => row.get(id);
+    const edges = (flow.edges || []).filter(([from, to]) => placed.has(from) && placed.has(to)).map(([from, to]) => {
+      const a = placed.get(from), b = placed.get(to), far = rowOf(to) - rowOf(from) > 1;
+      // Arrows that skip rows go round the boxes between them, on the nearer side.
+      let side, out;
+      if (far) {
+        const between = nodes.filter(node => rowOf(node.id) > rowOf(from) && rowOf(node.id) < rowOf(to));
+        const leftmost = Math.min(a.x, b.x, ...between.map(node => node.x)) - 26, rightmost = Math.max(a.x + a.w, b.x + b.w, ...between.map(node => node.x + node.w)) + 26;
+        const middle = (a.x + a.w / 2 + b.x + b.w / 2) / 2;
+        side = rightmost - middle <= middle - leftmost ? 'right' : 'left';
+        out = side === 'right' ? rightmost : leftmost;
+      }
+      const lit = current ? to === current.id || from === current.id : true;
+      return { from, to, down: !side, side, out, hot: lit && !flow.order, soft: !!flow.order, dim: !!current && !lit, title: nameOf(at.get(from)) + ' → ' + nameOf(at.get(to)) };
     });
-    if (previous && (anatomy.outputs.length || anatomy.runs)) { const id = end('out', 'Comes out', anatomy.outputs); edges.push({ from: previous, to: id, down: true, hot: true }); previous = id; }
-    // A shortcut: what went into the first part of the group skips ahead and is added after the last.
-    used.forEach((layer, index) => {
-      if (!layer.residual) return;
-      const first = used.findIndex(item => item.name === layer.residualFrom), from = first > 0 ? 'l:' + (first - 1) : nodes[0]?.id === 'in' ? 'in' : undefined;
-      const to = index + 1 < used.length ? 'l:' + (index + 1) : nodes.some(node => node.id === 'out') ? 'out' : undefined;
-      if (from && to) edges.push({ from, to, side: true, soft: true, label: '+ shortcut', title: 'What went into ' + layer.residualFrom + ' is added to what ' + layer.name + ' gives' });
-    });
-    if (unused.length) { y += 10; unused.forEach((layer, index) => { const [content, hgt] = sized(layer, W); place('u:' + index, W, hgt, content, 16); }); }
-    const height = Math.max(0, y - 30);
+    if (unused.length) { y += 10; unused.forEach((layer, index) => { const content = flowContent({ kind: 'part', name: layer.name, id: 'u' + index }), measured = measure(content, W); nodes.push({ id: 'u:' + index, x: -left - W / 2, y, w: W, h: measured || heightOf(layer), content }); y += (measured || heightOf(layer)) + 16; }); }
+    const width = Math.max(W, ...nodes.map(node => node.x + node.w)) + 90, height = Math.max(0, y - GAP);
     const crumbs = [rootKey, ...trail.filter(item => item !== rootKey)];
+    const defaults = anatomy.defaults?.length ? 'Numbers use ' + anatomy.defaults.join(', ') + '; a run can pass other values.' : '';
     const bar = () => h('div', { class: 'st-flowbar' },
       act('flowBack', {}, '← Whole part', { title: 'Back to every step of this part' }), modeSwitch(clicked.step),
       crumbs.length > 1 ? h('span', { class: 'st-crumbs' }, crumbs.map((item, index) => [index ? ' › ' : '', index === crumbs.length - 1 ? h('b', {}, shortName(item)) : link('flowInside', { depth: index }, shortName(item))])) : h('b', {}, 'Inside ' + name),
-      muted('Top to bottom' + (runs ? ', in the order ' + runs + ' uses them' : '') + '. Click a part for more.'));
-    const selected = anatomy.layers.find(layer => layer.name === ui.flowLayer);
-    const detail = () => selected ? layerCard(selected, name, whatOf, classStep) : key === rootKey ? flowStepDetail(clicked.step)
-      : h('div', { class: 'st-detail st-flow-detail' }, h('h2', {}, name), h('p', {}, classStep(key)?.what || anatomy.doc || madeOf(key)), h('p', { class: 'st-muted' }, 'A part of ' + shortName(crumbs[crumbs.length - 2] || rootKey) + '.'), link('openFile', { file: key.split('#')[0] }, 'About ' + fileName(key.split('#')[0])));
+      flowNodes.length > 1 ? act('walk', { key, at: walking === undefined ? 0 : '' }, walking === undefined ? '▶ Step through' : '■ Stop', { title: 'Follow the data one step at a time' }) : undefined,
+      muted((flow.order ? 'Top to bottom in the order ' + (runs || 'it') + ' uses them' : 'Arrows show what feeds what' + (runs ? ' in ' + runs : '')) + '. ' + defaults));
+    // Step through: one sentence per step, built from the graph.
+    const sentence = node => {
+      const from = [...new Set(into(node.id).map(nameOf))], to = [...new Set(outOf(node.id).map(next => next.kind === 'out' ? 'what comes out' : nameOf(next)))], list = items => items.length > 1 ? items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1] : items[0] || '';
+      const layer = node.kind === 'part' ? layerNamed(node.name) : undefined, what = layer ? whatOf(layer) : node.plain;
+      const parts = [];
+      if (node.kind === 'in') parts.push(name + ' is given ' + node.name + '.');
+      else if (node.kind === 'out') parts.push(name + ' gives back ' + (node.names?.length ? list(node.names) : 'the result') + (from.length ? ', from ' + list(from) : '') + '.');
+      else if (node.kind === 'merge') parts.push(list(from) + ' are combined: ' + (OPERATOR[node.name] || node.name) + ' (' + node.name + ').');
+      else parts.push((layer ? node.name + ' (' + layer.type + ')' : node.name) + (node.value ? ' is read as a value' : from.length ? ' takes ' + list(from) : ' starts a path of its own: nothing earlier feeds it') + '.', what || '');
+      if (layer?.repeat) parts.push('It runs ' + times(layer) + ' times, each copy taking what the one before gave.');
+      for (const when of node.when || []) parts.push('This only happens ' + when + '.');
+      for (const loop of node.loop || []) parts.push('It runs ' + loop + '.');
+      if (to.length && node.kind !== 'out') parts.push('Next: ' + list(to) + '.');
+      return parts.filter(Boolean).join(' ');
+    };
+    const walkCard = () => h('div', { class: 'st-detail st-flow-detail st-walk' },
+      h('h2', {}, 'Step ' + (walking + 1) + ' of ' + flowNodes.length, spacer(), link('walk', { key, at: '' }, 'Stop')),
+      h('p', {}, sentence(current)),
+      current.line ? h('div', { class: 'st-row' }, link('jump', { file, line: current.line }, file + ':' + current.line, { title: 'Open this line' })) : undefined,
+      h('div', { class: 'st-row' }, act('walk', { key, at: walking - 1 }, '← Back', { disabled: walking === 0 ? true : undefined }), act('walk', { key, at: walking + 1 }, 'Next →', { disabled: walking === flowNodes.length - 1 ? true : undefined })));
+    const selectedLayer = anatomy.layers.find(layer => !layer.op && layer.name === ui.flowLayer), selectedNode = /^node:/.test(ui.flowLayer || '') ? at.get(ui.flowLayer.slice(5)) : undefined;
+    const uses = layer => flowNodes.filter(node => node.kind === 'part' && node.name === layer.name);
+    const detail = () => current ? walkCard() : selectedLayer ? layerCard(selectedLayer, name, whatOf, classStep, { file, uses: uses(selectedLayer), runs, times })
+      : selectedNode ? h('div', { class: 'st-detail st-flow-detail' }, h('h2', {}, selectedNode.kind === 'merge' ? selectedNode.name + ' ' + (OPERATOR[selectedNode.name] || 'combine') : selectedNode.kind === 'in' ? 'Goes in: ' + selectedNode.name : selectedNode.kind === 'out' ? 'Comes out' : '∑ ' + selectedNode.name, spacer(), link('flowLayer', { name: ui.flowLayer }, 'Close')), h('p', {}, sentence(selectedNode)), selectedNode.line ? link('jump', { file, line: selectedNode.line }, file + ':' + selectedNode.line) : undefined)
+      : key === rootKey ? flowStepDetail(clicked.step)
+      : h('div', { class: 'st-detail st-flow-detail' }, h('h2', {}, name), h('p', {}, classStep(key)?.what || anatomy.doc || madeOf(key)), h('p', { class: 'st-muted' }, 'A part of ' + shortName(crumbs[crumbs.length - 2] || rootKey) + '.'), link('openFile', { file }, 'About ' + fileName(file)));
     ui.flowPlaces = { key: graphKey, hits: [] };
-    const canvas = graphView(graphKey, { nodes, edges, width: W + 120, height, minHeight: 320, maxHeight: 760, minZoom: 0.7, label: 'Inside ' + name, aside: detail(), toolbar: bar });
+    const focus = current ? placed.get(current.id) : undefined;
+    if (focus) ui.flowSelected = { key: graphKey, x: focus.x, y: focus.y, w: focus.w, h: focus.h };
+    const canvas = graphView(graphKey, { nodes, edges, width, height, minHeight: 320, maxHeight: 760, minZoom: 0.7, label: 'Inside ' + name, aside: detail(), toolbar: bar });
     return [ui.full === graphKey ? undefined : bar(), canvas, detail()];
   }
   // The height a box takes at a given width, laid out off screen; 0 when the page can't tell.
@@ -892,14 +971,18 @@ function mountStages(root, post) {
     return height;
   }
   // One part, in the side panel: what it is and what the code says about it.
-  function layerCard(layer, owner, whatOf, classStep) {
+  function layerCard(layer, owner, whatOf, classStep, { file, uses = [], runs = '', times = () => '' } = {}) {
     const step = layer.own && classStep(layer.own), what = whatOf(layer);
+    const conditions = [...new Set(uses.flatMap(node => node.when || []))];
     return h('div', { class: 'st-detail st-flow-detail' },
-      h('h2', {}, layer.op ? '∑ ' + layer.type : layer.type, spacer(), link('flowLayer', { name: layer.name }, 'Close')),
-      h('p', { class: 'st-muted' }, layer.op ? 'Math that ' + owner + ' does between its parts.' : owner + ' keeps it as ' + layer.name + '.'),
+      h('h2', {}, layer.type, spacer(), link('flowLayer', { name: layer.name }, 'Close')),
+      h('p', { class: 'st-muted' }, owner + ' keeps it as ' + layer.name + '.'),
       what ? h('p', {}, what) : h('p', { class: 'st-muted' }, 'No plain-words note for ' + layer.type + ' yet.'),
-      layer.repeat ? h('p', {}, 'Repeated ' + String(layer.repeat).replace(/^(self|this|config|cfg|args)\./, '') + ' times: the output of one copy goes into the next.') : undefined,
-      layer.residual ? h('p', {}, 'Shortcut: what went into ' + layer.residualFrom + ' is added to what ' + layer.name + ' gives, so the original signal is never lost.') : undefined,
+      layer.args?.length ? h('p', {}, 'Made with ', h('code', {}, layer.type + '(' + layer.args.map(arg => (arg.name ? arg.name + '=' : '') + (arg.value !== undefined && arg.value !== arg.code ? arg.value + ' ‹' + arg.code + '›' : arg.code)).join(', ') + ')')) : undefined,
+      layer.repeat ? h('p', {}, 'Repeated ' + times(layer) + ' times: the output of one copy goes into the next.') : undefined,
+      conditions.length ? h('p', {}, 'Runs only ' + conditions.join('; or ') + '.') : undefined,
+      h('div', { class: 'st-row' }, layer.line ? link('jump', { file, line: layer.line }, 'Made at ' + file + ':' + layer.line, { title: 'Where the constructor creates it' }) : undefined,
+        ...uses.filter(node => node.line).map(node => link('jump', { file, line: node.line }, 'Used at ' + file + ':' + node.line, { title: 'Where ' + (runs || 'the code') + ' uses it' }))),
       layer.own && state.partLayers?.[layer.own] ? h('div', { class: 'st-row' }, link('flowInside', { ref: layer.own }, 'Look inside ' + layer.type + ' →')) : undefined,
       layer.own && !step ? h('div', { class: 'st-row' }, link('openFile', { file: layer.own.split('#')[0] }, 'About ' + fileName(layer.own.split('#')[0]))) : undefined,
       step ? flowStepDetail(step) : undefined);
@@ -1175,8 +1258,9 @@ function mountStages(root, post) {
         else ui.flowStep = ui.flowStep === data.key ? undefined : data.key;
         render(); return;
       case 'flowMode': ui.flowMode = data.mode; ui.flowLayer = undefined; render(); return;
+      case 'walk': ui.walkKey = data.key; ui.walk = data.at === '' || data.at === undefined ? undefined : Number(data.at); ui.flowLayer = undefined; render(); if (ui.walk !== undefined) requestAnimationFrame(revealSelected); return;
       case 'flowLayer': ui.flowLayer = ui.flowLayer === data.name ? undefined : data.name; render(); return;
-      case 'flowInside': { const trail = ui.insideTrail || []; ui.insideTrail = data.depth !== undefined ? trail.slice(0, Number(data.depth)) : trail.includes(data.ref) ? trail.slice(0, trail.indexOf(data.ref) + 1) : [...trail, data.ref]; ui.flowLayer = undefined; render(); return; }
+      case 'flowInside': { ui.walk = undefined; const trail = ui.insideTrail || []; ui.insideTrail = data.depth !== undefined ? trail.slice(0, Number(data.depth)) : trail.includes(data.ref) ? trail.slice(0, trail.indexOf(data.ref) + 1) : [...trail, data.ref]; ui.flowLayer = undefined; render(); return; }
       case 'flowRoot': (ui.flowStep = ui.flowRoot = data.key, resetInside()); render(); return;
       case 'resetLayout': if (state.layouts) delete state.layouts[data.key]; delete ui.views[data.key]; send('layout', { key: data.key, reset: true }); render(); return;
       case 'fullGraph': ui.full = ui.full === data.key ? undefined : data.key; render(); return;

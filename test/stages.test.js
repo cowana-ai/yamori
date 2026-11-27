@@ -581,3 +581,77 @@ test('a class shows what it is made of: parts in the order they run, repeats, sh
   assert.equal(out['cart.ts#Cart'].doc, 'Keeps the cart in sync.');
   assert.deepEqual(out['cart.ts#Cart'].inputs, ['cart']);
 });
+
+// How data moves through a class's main method, read from the code: what feeds
+// each part, where values are combined, which calls run only under a condition.
+test('a class shows how data flows through it: splits, merges, conditions, loops and worked-out sizes', () => {
+  const { partLayers } = require('../src/stages/layers');
+  const text = [
+    'WIDTH = 64',
+    '@dataclass',
+    'class Settings:',
+    '    """What the model is built with."""',
+    '    width: int = WIDTH',
+    '    depth: int = 3',
+    '    vocab: int = 1000',
+    'class Model(nn.Module):',
+    '    def __init__(self, settings, heads=4):',
+    '        super().__init__()',
+    '        self.words = Embed(settings.vocab, settings.width)',
+    '        self.places = Embed(512, settings.width)',
+    '        self.blocks = ModuleList([Unit(settings.width * heads) for _ in range(settings.depth)])',
+    '        self.out = Project(settings.width, settings.vocab, bias=False)',
+    '        self.scale = Weights(settings.width)',
+    '    def forward(self, ids, answers=None):',
+    '        n, t = ids.size()',
+    '        where = torch.arange(0, t)',
+    '        x = self.words(ids) + self.places(where)',
+    '        for unit in self.blocks:',
+    '            x = x + unit(x)',
+    '        x = x * self.scale',
+    '        if answers is not None:',
+    '            guesses = self.out(x)',
+    '            miss = F.cross_entropy(guesses, answers)',
+    '        else:',
+    '            guesses = self.out(x[:, -1])',
+    '            miss = None',
+    '        return guesses, miss',
+    'class Unit(nn.Module):',
+    '    def __init__(self, width):',
+    '        super().__init__()',
+    '        self.mix = Project(width, width)',
+    '    def forward(self, x):',
+    '        return self.mix(x)',
+  ].join('\n');
+  const lines = text.split('\n'), classes = [];
+  lines.forEach((line, i) => { const m = /^class (\w+)/.exec(line); if (m) classes.push({ file: 'model.py', def: { name: m[1], start: i + 1 - (lines[i - 1]?.startsWith('@') ? 1 : 0) } }); });
+  classes.forEach((item, i) => { item.def.end = i + 1 < classes.length ? classes[i + 1].def.start - 1 : lines.length; });
+  const model = partLayers(classes, new Map([['model.py', text]]))['model.py#Model'];
+  const label = node => node.kind === 'in' ? 'in:' + node.name : node.kind === 'out' ? 'out' : node.kind === 'merge' ? node.name : node.name;
+  const byId = new Map(model.flow.nodes.map(node => [node.id, node]));
+  const feeds = name => model.flow.nodes.filter(node => label(node) === name).map(node => model.flow.edges.filter(([, to]) => to === node.id).map(([from]) => label(byId.get(from))).sort());
+
+  // words reads the input; places reads only positions made from the input's length (not its data), so nothing feeds it.
+  assert.deepEqual(feeds('words'), [['in:ids']]);
+  assert.deepEqual(feeds('places'), [[]]);
+  // Two values added make a node of their own; so does the shortcut inside the loop and the scaling by a part read as a value.
+  assert.deepEqual(feeds('+'), [['places', 'words'], ['+', 'blocks']]);
+  assert.deepEqual(feeds('*'), [['+', 'scale']]);
+  assert.ok(model.flow.nodes.find(node => node.name === 'scale').value);
+  // The loop over a list of parts is that part; each branch of an if carries its condition.
+  assert.deepEqual(feeds('blocks'), [['+']]);
+  const outs = model.flow.nodes.filter(node => node.name === 'out');
+  assert.deepEqual(outs.map(node => node.when), [['when answers is not None'], ['when answers is None']]);
+  assert.deepEqual(feeds('cross_entropy'), [['in:answers', 'out']]);
+  assert.deepEqual(model.flow.nodes.find(node => node.kind === 'out').names, ['guesses', 'miss']);
+  assert.ok(model.flow.nodes.every(node => node.kind === 'in' || node.kind === 'out' || node.line > 0));
+
+  // Sizes from defaults: another class's fields (a module constant behind one), the constructor's own defaults.
+  const part = name => model.layers.find(layer => layer.name === name);
+  assert.deepEqual(part('words').args.map(arg => arg.value), ['1000', '64']);
+  assert.deepEqual(part('out').args.map(arg => [arg.name, arg.value ?? arg.code]), [[undefined, '64'], [undefined, '1000'], ['bias', 'False']]);
+  assert.equal(part('blocks').args[0].value, '256');
+  assert.equal(part('blocks').times, 3);
+  assert.deepEqual(model.defaults.sort(), ['Settings', 'default arguments']);
+  assert.equal(part('words').line, 11);
+});

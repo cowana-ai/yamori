@@ -1,4 +1,5 @@
 'use strict';
+const dataflow = require('./dataflow');
 
 // What a class is made of, read from its code with no AI: the parts its
 // constructor creates (self.x = Linear(...), this.db = new Store(...), lists
@@ -116,7 +117,7 @@ function layersOf(name, expr, depth = 0) {
     return topLevel(inner).filter(item => !/^\w+\s*=/.test(item)).flatMap((item, index) => layersOf(name + '[' + index + ']', item, depth + 1));
   }
   // A class-like call (capitalized) is a part; plain values and helper calls are not.
-  return /^[A-Z]/.test(call.name) ? [{ name, type: call.name }] : [];
+  return /^[A-Z]/.test(call.name) ? [{ name, type: call.name, args: call.args }] : [];
 }
 
 // Methods of a class: name, parameters and body. Python by indentation,
@@ -128,7 +129,7 @@ function methodsOf(text, braces) {
     for (const match of text.matchAll(head)) {
       if (/^(if|for|while|switch|catch|function|return)$/.test(match[1])) continue;
       const open = match.index + match[0].length - 1;
-      out.push({ name: match[1], params: match[2], body: text.slice(match.index, open + 1) + balanced(text, open) + '}' });
+      out.push({ name: match[1], params: match[2], body: text.slice(match.index, open + 1) + balanced(text, open) + '}', line: text.slice(0, match.index).split('\n').length - 1 });
     }
     return out;
   }
@@ -143,13 +144,13 @@ function methodsOf(text, braces) {
       body.push(line);
     }
     const joined = body.join('\n');
-    out.push({ name: match[2], params: balanced(joined, joined.indexOf('(')), body: joined });
+    out.push({ name: match[2], params: balanced(joined, joined.indexOf('(')), body: joined, line: i });
   }
   return out;
 }
 
 // The parts a constructor assigns to self.x / this.x.
-function partsAssigned(init, braces) {
+function partsAssigned(init, braces, line = 0) {
   const parts = [];
   const assign = braces ? /(?:^|[\n;{])\s*this\.(\w+)\s*(?::\s*[\w.<>[\], ]+)?=\s*/g : /(?:^|\n)\s*self\.(\w+)\s*(?::\s*[\w.[\], ]+)?=\s*/g;
   for (const match of init.matchAll(assign)) {
@@ -162,19 +163,20 @@ function partsAssigned(init, braces) {
       else if (')]}'.includes(c)) { if (--depth < 0) break; }
       else if ((c === '\n' || (braces && c === ';')) && depth <= 0) break;
     }
-    for (const layer of layersOf(match[1], init.slice(from, end))) if (!parts.some(other => other.name === layer.name)) parts.push(layer);
+    const at = line + init.slice(0, match.index + (match[0].startsWith('\n') ? 1 : 0)).split('\n').length - 1;
+    for (const layer of layersOf(match[1], init.slice(from, end))) if (!parts.some(other => other.name === layer.name)) parts.push({ ...layer, line: at });
   }
   return parts;
 }
 
 // What one class is made of, or undefined when its constructor creates no parts.
-function classLayers(source, def, { braces = false } = {}) {
+function classLayers(source, def, { braces = false, scope } = {}) {
   const code = braces ? String(source || '').replace(/(^|[^:])\/\/.*$/gm, '$1') : stripComments(String(source || ''));
   const text = code.split('\n').slice(def.start - 1, def.end).join('\n');
   const methods = methodsOf(text, braces);
   const init = methods.find(method => INIT.includes(method.name));
   if (!init) return undefined;
-  const layers = partsAssigned(init.body, braces);
+  const layers = partsAssigned(init.body, braces, def.start + init.line);
   if (!layers.length) return undefined;
   const self = braces ? 'this' : 'self', base = layer => layer.via || layer.name.replace(/\[\d+\]$/, '');
   // The method that runs the parts: forward/call when there is one, else the one using the most of them.
@@ -223,9 +225,43 @@ function classLayers(source, def, { braces = false } = {}) {
   });
   const inputs = topLevel(runner?.params || '').map(param => param.split(/[:=]/)[0].trim().replace(/^[*.]+/, '').replace(/\?$/, '')).filter(param => param && param !== self);
   const returns = [...body.matchAll(/^\s*return\s+(.+?);?\s*$/gm)].pop()?.[1].trim().replace(/^\((.*)\)$/, '$1');
+  const shown = ordered.slice(0, LIMITS.layers);
+  // How data moves through the main method (Python): what feeds each part, merges, conditions, loops.
+  // Elsewhere, the parts in order.
+  let flow;
+  if (runner && !braces) flow = dataflow.methodFlow(runner.body, { self, parts: layers, ops: OPS, params: inputs, line: def.start + runner.line });
+  if (!flow || !flow.nodes.some(node => node.kind === 'part')) {
+    const chain = shown.filter(layer => !layer.unused);
+    flow = { nodes: [...inputs.map(name => ({ kind: 'in', name })), ...chain.map(layer => layer.op ? { kind: 'op', name: layer.type } : { kind: 'part', name: layer.name, line: layer.line }), ...(runner ? [{ kind: 'out', names: returns ? topLevel(returns) : [] }] : [])].map((node, index) => ({ ...node, id: 'f' + index })) };
+    flow.edges = flow.nodes.slice(1).map((node, index) => [flow.nodes[inputs.length && index < inputs.length ? 0 : index].id, node.id]).filter(([from, to]) => from !== to);
+    if (inputs.length > 1) flow.edges = [...inputs.map((_, index) => ['f' + index, 'f' + inputs.length]), ...flow.edges.filter(([from]) => Number(from.slice(1)) >= inputs.length)];
+    // Only the order is known here, not what feeds what.
+    flow.order = true;
+  }
+  for (const node of flow.nodes) if (node.kind === 'op') node.plain = OPS[node.name];
+  // A part's arguments, worked out from defaults where possible (768 rather than n_embd).
+  const resolve = scope ? scope(init) : undefined, from = new Set();
+  const layersOut = shown.map(layer => {
+    if (layer.op) return layer;
+    const out = { ...layer, plain: plainFor(layer.type) };
+    delete out.args;
+    if (resolve && layer.args !== undefined) {
+      const call = dataflow.parseExpr('f(' + layer.args + ')');
+      if (call.k === 'call') out.args = call.args.slice(0, 6).map(arg => {
+        const found = arg.star ? undefined : dataflow.evaluate(arg.value, resolve), code = dataflow.show(arg.value);
+        for (const item of found?.from || []) from.add(item);
+        return { name: arg.name, code: code.length > 40 ? code.slice(0, 39) + '…' : code, value: found && typeof found.value !== 'object' || found && Array.isArray(found.value) ? dataflow.format(found.value) : undefined };
+      });
+    }
+    if (resolve && layer.repeat && !/^each of /.test(layer.repeat)) {
+      const found = dataflow.evaluate(dataflow.parseExpr(layer.repeat), resolve);
+      if (found && typeof found.value === 'number') { out.times = found.value; for (const item of found.from || []) from.add(item); }
+    }
+    return out;
+  });
   return {
-    runs: runner?.name, inputs, outputs: returns ? topLevel(returns).filter(item => /^[\w.]+$/.test(item)) : [],
-    layers: ordered.slice(0, LIMITS.layers).map(layer => layer.op ? layer : { ...layer, plain: plainFor(layer.type) }),
+    runs: runner?.name, runsLine: runner ? def.start + runner.line : undefined, initLine: def.start + init.line, inputs, outputs: returns ? topLevel(returns).filter(item => /^[\w.]+$/.test(item)) : [],
+    layers: layersOut, flow, defaults: [...from],
   };
 }
 
@@ -239,17 +275,71 @@ function classDoc(source, def, braces) {
     return above.length ? clip(above.filter(line => !/^\s*@/.test(line)).join(' ')) : undefined;
   }
   const quotes = '"'.repeat(3) + '|' + "'".repeat(3);
-  const match = new RegExp('^\\s*[rRuU]?(' + quotes + ')([\\s\\S]*?)\\1').exec(lines.slice(def.start, Math.min(def.end, def.start + 12)).join('\n'));
+  // Decorators come first in the range: start after the class line.
+  let start = def.start - 1;
+  while (start < def.end && !/^\s*class\b/.test(lines[start] || '')) start++;
+  const match = new RegExp('^\\s*[rRuU]?(' + quotes + ')([\\s\\S]*?)\\1').exec(lines.slice(start + 1, Math.min(def.end, start + 13)).join('\n'));
   return match ? clip(match[2]) : undefined;
 }
 
 // Every class in these files that is made of parts, keyed 'file#Class'.
 // A part whose type is one of these classes points at it (own), so a view can open it.
+// Names a class's constructor can resolve to values: its locals, its parameters'
+// defaults, the class's own fields, module constants, and a field of another
+// class in these files (config.n_embd -> a config class's default) when only one has it.
+function scopes(classes, texts) {
+  const statementsOf = new Map(), constants = new Map(), fields = new Map();
+  const tree = file => { if (!statementsOf.has(file)) { try { statementsOf.set(file, dataflow.statements(stripComments(texts.get(file)))); } catch { statementsOf.set(file, []); } } return statementsOf.get(file); };
+  const assigned = list => { const out = new Map(); for (const st of list || []) if (st.k === 'assign') for (const target of st.targets) { if (target.k === 'name') out.set(target.v, st.value); } return out; };
+  for (const { file, def } of classes) {
+    if (!texts.has(file) || !/\.(py|ipynb)$/i.test(file)) continue;
+    if (!constants.has(file)) constants.set(file, assigned(tree(file)));
+    const text = stripComments(texts.get(file)).split('\n').slice(def.start - 1, def.end).join('\n');
+    let body = [];
+    try { body = dataflow.statements(text).find(st => st.k === 'class')?.body || []; } catch { /* Left out. */ }
+    fields.set(def.name, { file, values: assigned(body) });
+  }
+  return (file, def) => init => {
+    const own = fields.get(def.name), params = new Map(), types = new Map(), locals = new Map(), selfs = new Map();
+    for (const param of topLevel(init.params || '')) {
+      const match = /^\*{0,2}(\w+)\s*(?::\s*([^=]+?))?\s*(?:=\s*([\s\S]+))?$/.exec(param);
+      if (!match) continue;
+      if (match[2]) types.set(match[1], match[2].trim().split('.').pop());
+      if (match[3]) params.set(match[1], dataflow.parseExpr(match[3]));
+    }
+    try {
+      for (const st of dataflow.statements(init.body)[0]?.body || []) if (st.k === 'assign') for (const target of st.targets) {
+        if (target.k === 'name') locals.set(target.v, st.value);
+        else if (target.k === 'attr' && target.obj.k === 'name' && target.obj.v === 'self') selfs.set(target.name, st.value);
+      }
+    } catch { /* Left out. */ }
+    const visiting = new Set();
+    const resolve = chain => {
+      const key = chain.join('.');
+      if (visiting.has(key) || visiting.size > 30) return undefined;
+      visiting.add(key);
+      try {
+        const ev = (expr, tag) => { const found = expr && dataflow.evaluate(expr, resolve); return found && tag ? { ...found, from: [...new Set([...(found.from || []), tag])] } : found; };
+        if (chain.length === 1) { const name = chain[0]; return locals.has(name) ? ev(locals.get(name)) : params.has(name) ? ev(params.get(name), 'default arguments') : constants.get(file)?.has(name) ? ev(constants.get(file).get(name)) : undefined; }
+        const name = chain[chain.length - 1], holder = chain.slice(0, -1);
+        if (holder.length === 1 && holder[0] === 'self') { if (own?.values.has(name)) return ev(own.values.get(name), def.name + ' defaults'); if (selfs.has(name)) return ev(selfs.get(name)); }
+        const typed = holder.length === 1 && types.get(holder[0]);
+        if (typed && fields.get(typed)?.values.has(name)) return ev(fields.get(typed).values.get(name), typed);
+        const having = [...fields].filter(([, item]) => item.values.has(name));
+        if (having.length === 1 && having[0][0] !== def.name) return ev(having[0][1].values.get(name), having[0][0]);
+        return undefined;
+      } finally { visiting.delete(key); }
+    };
+    return resolve;
+  };
+}
+
 function partLayers(classes, texts) {
-  const out = {}, bracesFor = file => /\.(m?[jt]sx?|cjs)$/i.test(file);
+  const out = {}, bracesFor = file => /\.(m?[jt]sx?|cjs)$/i.test(file), scopeOf = scopes(classes, texts);
   for (const { file, def } of classes) {
     if (!texts.has(file) || !(bracesFor(file) || /\.(py|ipynb)$/i.test(file))) continue;
-    const found = classLayers(texts.get(file), def, { braces: bracesFor(file) });
+    let found;
+    try { found = classLayers(texts.get(file), def, { braces: bracesFor(file), scope: bracesFor(file) ? undefined : scopeOf(file, def) }); } catch { found = undefined; }
     if (found) out[file + '#' + def.name] = { ...found, doc: classDoc(texts.get(file), def, bracesFor(file)) };
   }
   const known = new Map(classes.map(({ file, def }) => [def.name, { key: file + '#' + def.name, doc: texts.has(file) ? classDoc(texts.get(file), def, bracesFor(file)) : undefined }]));
