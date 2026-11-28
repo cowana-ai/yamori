@@ -393,6 +393,12 @@ button.go:disabled { opacity: .4; }
 
 body[data-planning="true"] .tools { display:none; }
 /* A goal on an empty canvas; the plan itself is the navigation. */
+.plan-onboarding { text-align: center; max-width: 380px; margin: 0 auto 14px; color: var(--read-ink); }
+.plan-onboarding h3 { margin: 0 0 6px; font: 700 17px/1.3 var(--vscode-font-family, system-ui); }
+.plan-onboarding p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; }
+.plan-onboarding-example { font-style: italic; color: var(--read-muted); }
+.plan-onboarding-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 10px; }
+.plan-onboarding-note { color: var(--read-muted); font-size: 12px !important; }
 #plan-panel { position: absolute; z-index: 4; right: 20px; top: 20px; height: auto; max-height: calc(100% - 40px); width: min(420px,calc(100% - 40px)); border: 1px solid var(--read-border); border-radius: 8px; padding: 18px; box-shadow: none; }
 #plan-panel[data-ready="false"] { right: auto; left: 50%; top: 40%; transform: translate(-50%,-50%); border: 0; background: transparent; }
 #plan-panel[data-ready="false"] .plan-head button, #plan-panel[data-ready="false"] .plan-context { display:none; }
@@ -1474,6 +1480,18 @@ function drawPlan() {
   head.append(undo, redo, close);
   if (selected && planSets.steps.has(selected)) head.append(node('p', selected + (plan.steps.some(step => step.file === selected && step.newFile) ? ' · proposed new file' : ''), 'plan-inspector-path'));
   panel.append(head);
+  // An empty canvas explains where plans come from: the agent in the terminal.
+  if (!hasSteps && !busy) {
+    const intro = node('section', undefined, 'plan-onboarding'); intro.setAttribute('aria-label', 'How to get a plan');
+    intro.append(node('h3', 'No plan yet'), node('p', 'Ask your agent in the terminal to make a plan and send it to Yamori. It appears here as steps on your files, so you can read it, comment and approve before any code changes.'));
+    const example = 'Plan how to … and send the plan to Yamori.', sample = node('p', '“' + example + '”', 'plan-onboarding-example');
+    const actions = node('div', undefined, 'plan-onboarding-actions');
+    const open = node('button', state.agentSession ? 'Show agent terminal' : 'Open agent in terminal', 'go'); open.title = 'Starts your agent in the VS Code terminal, connected to Yamori'; open.addEventListener('click', () => send('agentSession'));
+    const copy = node('button', 'Copy example'); copy.title = 'Copy the example request, then finish it in the terminal'; copy.addEventListener('click', () => { navigator.clipboard?.writeText(example).then(() => { copy.textContent = 'Copied'; }, () => {}); });
+    actions.append(open, copy);
+    intro.append(sample, actions, node('p', 'Plans from Claude Code /plan and Codex Plan mode show up here too.', 'plan-onboarding-note'));
+    panel.append(intro);
+  }
   if (hasSteps && selected) {
     const steps = plan.steps.filter(step => step.file === selected), index = Math.max(0, steps.findIndex(step => step.id === expandedStep));
     const nav = node('div', undefined, 'step-navigation');
