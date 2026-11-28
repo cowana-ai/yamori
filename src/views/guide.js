@@ -722,6 +722,8 @@ body[data-chat-focused="true"] #canvas, body[data-chat-focused="true"] #drawer, 
 #plan-panel .plan-chatbar { display:flex !important; position:fixed; left:20px; right:20px; bottom:12px; align-items:center; gap:14px; padding:10px 14px; background:var(--read-surface); border:1px solid var(--read-border); z-index:8; font-size:12px; color:var(--read-muted); }
 #plan-panel .plan-chatbar .plan-chatbar-text { flex:1; }
 #plan-panel:not([data-inspecting="true"]) > .plan-chatbar { display:flex !important; }
+/* The empty-canvas guide stays visible above the chat bar, and clickable. */
+#plan-panel:not([data-inspecting="true"]) > .plan-onboarding { display:block !important; position:fixed; left:50%; top:38%; transform:translate(-50%,-50%); width:min(420px,calc(100% - 40px)); margin:0; padding:18px 20px; background:var(--read-page); border:1px solid var(--read-border); border-radius:8px; pointer-events:auto; z-index:7; }
 body[data-view="stages"] .search, body[data-view="stages"] #rescan { display:none; }
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${LOGO}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
@@ -1481,7 +1483,7 @@ function drawPlan() {
   if (selected && planSets.steps.has(selected)) head.append(node('p', selected + (plan.steps.some(step => step.file === selected && step.newFile) ? ' · proposed new file' : ''), 'plan-inspector-path'));
   panel.append(head);
   // An empty canvas explains where plans come from: the agent in the terminal.
-  if (!hasSteps && !busy) {
+  if (!hasSteps && !busy && state.terminalChat) {
     const intro = node('section', undefined, 'plan-onboarding'); intro.setAttribute('aria-label', 'How to get a plan');
     intro.append(node('h3', 'No plan yet'), node('p', 'Ask your agent in the terminal to make a plan and send it to Yamori. It appears here as steps on your files, so you can read it, comment and approve before any code changes.'));
     const example = 'Plan how to … and send the plan to Yamori.', sample = node('p', '“' + example + '”', 'plan-onboarding-example');
