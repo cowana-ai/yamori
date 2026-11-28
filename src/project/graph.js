@@ -20,7 +20,7 @@ const isContextFile = rel => CONTEXT_EXTENSIONS.has(posix.extname(rel).toLowerCa
 const prioritizeFiles = rels => [...rels].sort((a, b) => (isContextFile(a) ? 1 : 0) - (isContextFile(b) ? 1 : 0) || (a < b ? -1 : a > b ? 1 : 0));
 const MAX_FILE_BYTES = 500000, MAX_FILES = 500, MAX_REFS = 600, MAX_PATH_STEPS = 15;
 // Version 2 adds definition end lines and test cases; older scans rebuild once.
-const GRAPH_VERSION = 3;
+const GRAPH_VERSION = 4;
 const IMPORT_WEIGHT = 3, MAX_LINKS_PER_FILE = 12;
 const TEST_PATH = /(^|\/)(tests?|__tests__|specs?)\/|(^|\/)(test_[^/]*|tests?\.[^/.]+|conftest\.py)$|_test\.[^/.]+$|\.(test|spec)\.[^/.]+$/i;
 // In these languages a file must import what it uses, so shared names only
@@ -186,6 +186,24 @@ function definitionEnd(node) {
   }
   return node.endPosition.row + 1;
 }
+// The type a Go method (func (m *Model) Forward) or a Rust impl function
+// (impl Model { fn forward }) belongs to; other languages nest methods in the class.
+function ownerOf(grammar, node) {
+  const decl = node.parent;
+  if (grammar === 'go' && decl?.type === 'method_declaration') {
+    return /\(\s*(?:[A-Za-z_]\w*\s+)?\*?\s*([A-Za-z_]\w*)/.exec(decl.childForFieldName?.('receiver')?.text || '')?.[1];
+  }
+  if (grammar === 'rust' && decl?.type === 'function_item') {
+    for (let current = decl.parent; current; current = current.parent) {
+      if (current.type === 'function_item') return undefined;
+      if (current.type === 'impl_item') {
+        const type = String(current.childForFieldName?.('type')?.text || '').replace(/<[\s\S]*>/g, '');
+        return /([A-Za-z_]\w*)\s*$/.exec(type)?.[1];
+      }
+    }
+  }
+  return undefined;
+}
 function fromCaptures(grammar, captures, rel, text) {
   const defs = [], refs = new Map(), statements = new Map(), seen = new Set();
   // Test files also keep where each name is used, to find what each test calls.
@@ -204,7 +222,15 @@ function fromCaptures(grammar, captures, rel, text) {
     if (name === 'test.name') { const open = cases.findLast(item => item.line <= line && item.end >= line && !item.name); if (open) open.name = value.slice(0, 120); continue; }
     if (name.startsWith('def.')) {
       const key = value + ':' + line;
-      if (!seen.has(key)) { seen.add(key); defs.push({ name: value, kind: name.slice(4), line, start: definitionStart(node), end: definitionEnd(node) }); }
+      if (!seen.has(key)) {
+        seen.add(key);
+        let kind = name.slice(4);
+        // A Go struct is the language's class; Go and Rust methods sit outside it.
+        if (grammar === 'go' && kind === 'type' && node.parent?.childForFieldName?.('type')?.type === 'struct_type') kind = 'class';
+        const owner = ownerOf(grammar, node);
+        if (owner && kind === 'function') kind = 'method';
+        defs.push({ name: value, kind, line, start: definitionStart(node), end: definitionEnd(node), ...(owner ? { owner } : {}) });
+      }
       continue;
     }
     const statement = statementOf(node), id = statement.id ?? statement.startIndex;

@@ -393,6 +393,12 @@ button.go:disabled { opacity: .4; }
 
 body[data-planning="true"] .tools { display:none; }
 /* A goal on an empty canvas; the plan itself is the navigation. */
+.plan-onboarding { text-align: center; max-width: 380px; margin: 0 auto 14px; color: var(--read-ink); }
+.plan-onboarding h3 { margin: 0 0 6px; font: 700 17px/1.3 var(--vscode-font-family, system-ui); }
+.plan-onboarding p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; }
+.plan-onboarding-example { font-style: italic; color: var(--read-muted); }
+.plan-onboarding-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 10px; }
+.plan-onboarding-note { color: var(--read-muted); font-size: 12px !important; }
 #plan-panel { position: absolute; z-index: 4; right: 20px; top: 20px; height: auto; max-height: calc(100% - 40px); width: min(420px,calc(100% - 40px)); border: 1px solid var(--read-border); border-radius: 8px; padding: 18px; box-shadow: none; }
 #plan-panel[data-ready="false"] { right: auto; left: 50%; top: 40%; transform: translate(-50%,-50%); border: 0; background: transparent; }
 #plan-panel[data-ready="false"] .plan-head button, #plan-panel[data-ready="false"] .plan-context { display:none; }
@@ -716,6 +722,8 @@ body[data-chat-focused="true"] #canvas, body[data-chat-focused="true"] #drawer, 
 #plan-panel .plan-chatbar { display:flex !important; position:fixed; left:20px; right:20px; bottom:12px; align-items:center; gap:14px; padding:10px 14px; background:var(--read-surface); border:1px solid var(--read-border); z-index:8; font-size:12px; color:var(--read-muted); }
 #plan-panel .plan-chatbar .plan-chatbar-text { flex:1; }
 #plan-panel:not([data-inspecting="true"]) > .plan-chatbar { display:flex !important; }
+/* The empty-canvas guide stays visible above the chat bar, and clickable. */
+#plan-panel:not([data-inspecting="true"]) > .plan-onboarding { display:block !important; position:fixed; left:50%; top:38%; transform:translate(-50%,-50%); width:min(420px,calc(100% - 40px)); margin:0; padding:18px 20px; background:var(--read-page); border:1px solid var(--read-border); border-radius:8px; pointer-events:auto; z-index:7; }
 body[data-view="stages"] .search, body[data-view="stages"] #rescan { display:none; }
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${LOGO}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
@@ -1474,6 +1482,18 @@ function drawPlan() {
   head.append(undo, redo, close);
   if (selected && planSets.steps.has(selected)) head.append(node('p', selected + (plan.steps.some(step => step.file === selected && step.newFile) ? ' · proposed new file' : ''), 'plan-inspector-path'));
   panel.append(head);
+  // An empty canvas explains where plans come from: the agent in the terminal.
+  if (!hasSteps && !busy && state.terminalChat) {
+    const intro = node('section', undefined, 'plan-onboarding'); intro.setAttribute('aria-label', 'How to get a plan');
+    intro.append(node('h3', 'No plan yet'), node('p', 'Ask your agent in the terminal to make a plan and send it to Yamori. It appears here as steps on your files, so you can read it, comment and approve before any code changes.'));
+    const example = 'Plan how to … and send the plan to Yamori.', sample = node('p', '“' + example + '”', 'plan-onboarding-example');
+    const actions = node('div', undefined, 'plan-onboarding-actions');
+    const open = node('button', state.agentSession ? 'Show agent terminal' : 'Open agent in terminal', 'go'); open.title = 'Starts your agent in the VS Code terminal, connected to Yamori'; open.addEventListener('click', () => send('agentSession'));
+    const copy = node('button', 'Copy example'); copy.title = 'Copy the example request, then finish it in the terminal'; copy.addEventListener('click', () => { navigator.clipboard?.writeText(example).then(() => { copy.textContent = 'Copied'; }, () => {}); });
+    actions.append(open, copy);
+    intro.append(sample, actions, node('p', 'Plans from Claude Code /plan and Codex Plan mode show up here too.', 'plan-onboarding-note'));
+    panel.append(intro);
+  }
   if (hasSteps && selected) {
     const steps = plan.steps.filter(step => step.file === selected), index = Math.max(0, steps.findIndex(step => step.id === expandedStep));
     const nav = node('div', undefined, 'step-navigation');
@@ -1508,7 +1528,7 @@ function drawPlan() {
     const choice = node('button', label); choice.setAttribute('aria-pressed', String(mode === value)); choice.setAttribute('data-mode', value); choice.title = tip; choice.disabled = !!busy; choice.addEventListener('click', () => send('projectMode', { mode: value })); modes.append(choice);
   }
   const transfer = node('button', 'Continue from…', 'conversation-handoff'); transfer.title = 'Move an existing Codex or Claude conversation into Yamori, or open this conversation in your agent'; transfer.disabled = !!busy; transfer.addEventListener('click', () => send('handoff')); modes.append(transfer);
-  if (info.nativeSession?.linked) { const linked = node('span', '↔ ' + (info.nativeSession.provider === 'claude' ? 'Claude' : 'Codex'), 'conversation-linked'); linked.title = 'Native session ' + info.nativeSession.id + '. External updates sync when you return.'; modes.append(linked); }
+  if (info.nativeSession?.linked) { const linked = node('span', '↔ ' + ({ claude: 'Claude', codex: 'Codex', cursor: 'Cursor' }[info.nativeSession.provider] || 'Agent'), 'conversation-linked'); linked.title = 'Native session ' + info.nativeSession.id + '. External updates sync when you return.'; modes.append(linked); }
   if (info.conversationHasMore) { const earlier = node('button', 'Earlier messages', 'conversation-earlier'); earlier.title = 'Load older messages from this project’s local history'; earlier.addEventListener('click', () => send('conversationEarlier')); modes.append(earlier); }
   const focusChat = node('button', undefined, 'conversation-focus'); focusChat.setAttribute('aria-pressed', String(chatFocused)); focusChat.setAttribute('aria-label', chatFocused ? 'Back to canvas' : 'Focus chat'); const focusIcon = node('span', chatFocused ? '> <' : '< >', 'focus-icon'); focusIcon.setAttribute('aria-hidden', 'true'); focusChat.append(focusIcon, document.createTextNode(chatFocused ? ' Back to canvas' : ' Focus chat')); focusChat.title = chatFocused ? 'Show the project canvas beside this conversation' : 'Give the conversation the whole view'; focusChat.addEventListener('click', () => { chatFocused = !chatFocused; drawPlan(); }); modes.append(focusChat);
   if (chatFocused) { const newPlan = node('button', 'New plan'); newPlan.disabled = !!busy; newPlan.addEventListener('click', () => { clearTimeout(planSendTimer); pendingGoal = ''; planComposer = undefined; send('planClear'); }); modes.append(newPlan); }
@@ -1917,12 +1937,12 @@ function render(s) {
   const agents = $('agents'); agents.replaceChildren();
   if (s.agents && s.files) {
     if (s.agents.connected) agents.append(node('span', 'Agents: connected'));
-    else { agents.append(node('span', 'Your Claude Code and Codex sessions can use this map and its pseudocode.')); const go = node('button', 'Connect agents'); go.title = 'Register the Yamori knowledge server with your own Claude Code and Codex (asks first)'; go.addEventListener('click', () => send('connectAgents')); agents.append(go); }
+    else { agents.append(node('span', 'Your Claude Code, Codex and Cursor agents can use this map and its pseudocode.')); const go = node('button', 'Connect agents'); go.title = 'Register the Yamori knowledge server with your own Claude Code, Codex and Cursor (asks first)'; go.addEventListener('click', () => send('connectAgents')); agents.append(go); }
   }
   const notes = $('notes');
   notes.textContent = s.notesBusy ? 'Stop' : s.waitingForAI ? 'Set up AI' : n.done && (n.done < n.total || n.outdated) ? 'Update AI notes' : n.done ? 'AI notes ✓' : 'Write AI notes';
   notes.disabled = !s.notesBusy && !!s.busy;
-  notes.title = s.notesBusy ? 'Stop writing AI notes; finished files are kept' : s.waitingForAI ? 'Install or sign in to Claude or ChatGPT; AI notes then start by themselves' : s.autoNotes ? 'AI notes are written automatically after each scan. Press to write them now (also retries after an error).' : 'Ask your selected AI for a one-line purpose per file, project terms and a reading order';
+  notes.title = s.notesBusy ? 'Stop writing AI notes; finished files are kept' : s.waitingForAI ? 'Install or sign in to Claude, ChatGPT or Cursor; AI notes then start by themselves' : s.autoNotes ? 'AI notes are written automatically after each scan. Press to write them now (also retries after an error).' : 'Ask your selected AI for a one-line purpose per file, project terms and a reading order';
   $('rescan').disabled = !!s.busy;
   hits = planMode ? undefined : searchHits();
   syncPlan(s);

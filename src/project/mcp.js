@@ -83,7 +83,7 @@ function options(argv) {
   return { store: value('store'), root: value('root'), log: value('log'), cache: value('cache') };
 }
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; } }
-const AGENT_NAMES = { 'claude-code': 'Claude Code', claude: 'Claude Code', codex: 'Codex', 'codex-mcp-client': 'Codex', 'codex_mcp_client': 'Codex' };
+const AGENT_NAMES = { 'claude-code': 'Claude Code', claude: 'Claude Code', codex: 'Codex', 'codex-mcp-client': 'Codex', 'codex_mcp_client': 'Codex', cursor: 'Cursor', 'cursor-vscode': 'Cursor', 'cursor-agent': 'Cursor' };
 const agentName = info => AGENT_NAMES[String(info?.name || '').toLowerCase()] || (info?.name ? String(info.name).slice(0, 60) : 'an agent');
 
 // The standing store: located from the agent's folder, built if missing,

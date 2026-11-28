@@ -1602,7 +1602,8 @@ module.exports = function readerPanel({ engine, vscode, os, setting, connectionO
     async function chooseProvider() {
       const picked = await vscode.window.showQuickPick([
         { label: 'Codex', description: 'Use your local Codex sign-in', value: 'codex' },
-        { label: 'Claude Code', description: 'Use your local Claude Code sign-in', value: 'claude' }
+        { label: 'Claude Code', description: 'Use your local Claude Code sign-in', value: 'claude' },
+        { label: 'Cursor', description: 'Use your local Cursor CLI sign-in', value: 'cursor' }
       ], { title: 'Choose a provider', placeHolder: 'CLI providers use their own saved sign-in and plan limits.' });
       if (!picked || picked.value === provider || !PROVIDERS[picked.value]) return;
       cancel(); codePreview.cancel();

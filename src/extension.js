@@ -239,7 +239,7 @@ function connectionOptions(globalState, provider, api = vscode) {
   // Without a choice, both providers think at low effort. On a dense 162-line
   // file Opus started writing after 2 s at low, against 77 s at medium.
   const effort = override === 'auto' ? null : typeof override === 'string' ? override : model ? choice.effort ?? null : 'low';
-  return { provider, model, effort, cliPath: setting(api, provider === 'claude' ? 'claudePath' : 'codexPath') };
+  return { provider, model, effort: provider === 'cursor' ? null : effort, cliPath: cliPathFor(api, provider) };
 }
 
 // Project map: one local graph (plus optional AI notes and moved node
@@ -321,8 +321,9 @@ async function migratePreferences(context) {
 }
 
 // ---- Setup and the founder's own agents (src/agents) ----
-function cliPathFor(api, owner) { return setting(api, owner === 'claude' ? 'claudePath' : 'codexPath'); }
-const { setupTerminal, setupView, createSetup, chooseInstalledProvider } = require('./agents/setup')({ vscode, os, engine, setting, cliPathFor });
+const PATH_SETTINGS = { claude: 'claudePath', codex: 'codexPath', cursor: 'cursorPath' };
+function cliPathFor(api, owner) { return setting(api, PATH_SETTINGS[owner] || 'codexPath'); }
+const { setupTerminal, setupView, createSetup, chooseInstalledProvider } = require('./agents/setup')({ vscode, os, engine, cliPathFor });
 const { writeLauncher, SESSION_RULES, APPROVED_PROMPT, planComments, createAgentSessions, agentPlan, stripRulesBlock, stripHooks, connectAgents } = require('./agents/sessions')({ vscode, os, engine, connectionOptions, cliPathFor });
 const { createProjectMap } = require('./panels/project-map')({ engine, vscode, setting, cliPathFor, connectionOptions, quickModel, openNotebookAt, connectAgents, planComments, APPROVED_PROMPT });
 
@@ -444,9 +445,11 @@ async function activate(context) {
     const { model, effort, cliPath } = connectionOptions(context.globalState, owner);
     const binary = await findCLI(owner, cliPath);
     const reasoning = !effort ? [] : owner === 'claude' ? ['--effort', effort] : ['-c', 'model_reasoning_effort=' + JSON.stringify(effort)];
-    const sessionContext = owner === 'claude' ? ['--append-system-prompt', firstTurn.readingContext] :
+    // Cursor's CLI has no system-prompt option, so its first message carries the reading context.
+    const sessionContext = owner === 'claude' ? ['--append-system-prompt', firstTurn.readingContext] : owner === 'cursor' ? [] :
       ['-c', 'developer_instructions=' + JSON.stringify(firstTurn.readingContext).replace(/\x7f/g, '\\u007f')];
-    const launch = cliLaunch(binary, [...(model ? ['--model', model] : []), ...reasoning, ...sessionContext, '--', firstTurn.question]);
+    const question = owner === 'cursor' ? firstTurn.readingContext + '\n\n' + firstTurn.question : firstTurn.question;
+    const launch = cliLaunch(binary, [...(model ? ['--model', model] : []), ...(owner === 'cursor' ? [] : reasoning), ...sessionContext, '--', question]);
     current = readerTerminals.get(key)?.terminal;
     if (current && !current.exitStatus) { current.show(); return; }
     // The Python extension skips auto-activation for terminals created with this

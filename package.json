@@ -25,6 +25,7 @@
       "restrictedConfigurations": [
         "yamori.codexPath",
         "yamori.claudePath",
+        "yamori.cursorPath",
         "yamori.refinementSteps",
         "yamori.reviewModel",
         "yamori.parallelRequests",
@@ -84,11 +85,11 @@
       },
       {
         "command": "yamori.connectAgents",
-        "title": "Yamori: Connect Claude Code & Codex"
+        "title": "Yamori: Connect Claude Code, Codex & Cursor"
       },
       {
         "command": "yamori.disconnectAgents",
-        "title": "Yamori: Disconnect Claude Code & Codex"
+        "title": "Yamori: Disconnect Claude Code, Codex & Cursor"
       },
       {
         "command": "yamori.connectClaude",
@@ -307,6 +308,12 @@
           "default": "",
           "scope": "machine",
           "description": "Optional absolute path to Claude Code CLI. Otherwise detected automatically, including the copy inside Claude Desktop."
+        },
+        "yamori.cursorPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional absolute path to the Cursor CLI (cursor-agent). Otherwise detected automatically."
         },
         "yamori.tokenBudgetPerFilePerDay": {
           "type": "integer",

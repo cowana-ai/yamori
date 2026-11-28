@@ -30,7 +30,7 @@ module.exports = function agentSessions({ vscode, os, engine, connectionOptions,
     ].join('\n'));
     return { launcher, runtime: process.execPath, env: { ...NODE_RUNTIME_ENV } };
   }
-  // One agent session per project in the VS Code terminal: Claude Code or Codex,
+  // One agent session per project in the VS Code terminal: Claude Code, Codex or Cursor,
   // connected to Yamori's MCP server, told to look at what the founder has open
   // and to plan onto Yamori's canvas. It survives closing Yamori's panels; with
   // Claude Code the same conversation resumes after a restart.
@@ -75,6 +75,10 @@ module.exports = function agentSessions({ vscode, os, engine, connectionOptions,
         const resume = id && claudeTranscript(id);
         if (!resume) { id = require('node:crypto').randomUUID(); await context.globalState.update(key, id); }
         args = [...(resume ? ['--resume', id] : ['--session-id', id]), '--append-system-prompt', SESSION_RULES, '--mcp-config', JSON.stringify({ mcpServers: { yamori: { type: 'stdio', ...server } } }), ...(model ? ['--model', model] : [])];
+      } else if (provider === 'cursor') {
+        // Cursor's CLI takes no system prompt or per-run MCP config: the rules are its
+        // first message, and Yamori's tools come from ~/.cursor/mcp.json (Connect agents).
+        args = ['--approve-mcps', ...(model ? ['--model', model] : []), '--', SESSION_RULES + '\n\nReply only "Ready." now.'];
       } else {
         args = ['-c', 'developer_instructions=' + JSON.stringify(SESSION_RULES), '-c', 'mcp_servers.yamori.command=' + JSON.stringify(server.command), '-c', 'mcp_servers.yamori.args=' + JSON.stringify(server.args), '-c', 'mcp_servers.yamori.env={ELECTRON_RUN_AS_NODE="1"}', ...(model ? ['--model', model] : [])];
       }

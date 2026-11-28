@@ -16,7 +16,9 @@ const LEVELS = {
   overview: { label: 'Overview', hint: 'The goal and main ideas', instruction: 'Give the goal and 3–6 main ideas, normally under 160 words. Group routine setup, logging and cleanup. Keep the core decisions and insights needed to understand the workflow.' },
   logic: { label: 'Logic', hint: 'Readable steps and important decisions', instruction: 'Write a friendly walkthrough with 4–10 concise action lines per idea where useful. Keep exact constants, boundaries, exceptions and side effects when they change behavior. Group by purpose, not one block per method. Use short sentences, explicit decisions, indentation and useful mathematics. Preserve meaningful branches, state changes and the order of effects; break a complicated idea into smaller named parts. Avoid academic algorithm notation, input/output declarations, unsolicited worked examples and tutorial paragraphs. A short derivation that explains the actual computation is part of the logic, not an optional tutorial.' },
 };
-const PROVIDERS = { codex: 'Codex', claude: 'Claude Code' };
+const PROVIDERS = { codex: 'Codex', claude: 'Claude Code', cursor: 'Cursor' };
+const BINARIES = { codex: 'codex', claude: 'claude', cursor: 'cursor-agent' };
+const PACKAGES = { codex: '@openai/codex', claude: '@anthropic-ai/claude-code' };
 const ORDER = ['overview', 'logic'];
 const LENGTH_GUIDANCE = promptText('engine/length-guidance');
 function schemaFor(level) {
@@ -343,13 +345,15 @@ async function findCLI(provider, configured, system = {}) {
   const platform = system.platform || process.platform, env = system.env || process.env;
   const home = system.home || os.homedir(), io = system.fs || fs;
   const windows = platform === 'win32', paths = windows ? path.win32 : path.posix;
-  const name = provider === 'claude' ? 'claude' : 'codex';
-  const packageName = provider === 'claude' ? '@anthropic-ai/claude-code' : '@openai/codex';
+  const name = BINARIES[provider] || 'codex';
+  const packageName = PACKAGES[provider];
   const names = windows ? [name + '.exe', name + '.cmd', name + '.ps1', name + '.bat', name] : [name];
   const directories = [
     ...String(env.PATH || env.Path || env.path || '').split(paths.delimiter).map(dir => dir.replace(/^"(.*)"$/, '$1')).filter(Boolean),
     paths.join(home, '.local', 'bin'),
-    ...(windows ? [paths.join(env.APPDATA || paths.join(home, 'AppData', 'Roaming'), 'npm')] : ['/opt/homebrew/bin', '/usr/local/bin'])
+    ...(windows ? [paths.join(env.APPDATA || paths.join(home, 'AppData', 'Roaming'), 'npm')] : ['/opt/homebrew/bin', '/usr/local/bin']),
+    // Cursor's own installer (cursor.com/install) puts cursor-agent here on Windows.
+    ...(windows && provider === 'cursor' ? [paths.join(env.LOCALAPPDATA || paths.join(home, 'AppData', 'Local'), 'cursor-agent')] : [])
   ].filter(dir => paths.isAbsolute(dir));
   const candidates = configured ? [configured.trim().replace(/^"(.*)"$/, '$1')] : [
     ...directories.flatMap(dir => names.map(name => paths.join(dir, name))),
@@ -367,6 +371,7 @@ async function findCLI(provider, configured, system = {}) {
       if (!(await io.stat(candidate)).isFile()) continue;
       await io.access(candidate, windows || /\.[cm]?js$/i.test(candidate) ? 0 : 1);
       if (windows && /\.(?:cmd|bat|ps1)$/i.test(candidate)) {
+        if (!packageName) { launcherFound = true; continue; }
         launcherFound = true;
         // Resolve standard npm launchers to their JS entry instead of passing
         // model names or JSON schemas through cmd.exe / PowerShell quoting.
@@ -383,7 +388,7 @@ async function findCLI(provider, configured, system = {}) {
     } catch { /* Try another installed executable. */ }
   }
   if (launcherFound) throw new Error(`${PROVIDERS[provider]} has a Windows launcher Yamori could not resolve. Install the native CLI, or set Yamori's executable path to its .exe file.`);
-  throw new Error(`${PROVIDERS[provider]} was not found on this computer. Use Set up AI to install it${provider === 'claude' ? '' : ' (or install the ChatGPT desktop app)'}, or set its executable path in Yamori settings.`);
+  throw new Error(`${PROVIDERS[provider]} was not found on this computer. Use Set up AI to install it${provider === 'codex' ? ' (or install the ChatGPT desktop app)' : ''}, or set its executable path in Yamori settings.`);
 }
 // Claude Desktop keeps Claude Code under <app data>/Claude/claude-code/<version>/...
 // (macOS: .../claude.app/Contents/MacOS/claude). Newest version first; the
@@ -448,6 +453,7 @@ function readStatus(provider, { code, out, timedOut }) {
   }
   if (/not\s+(?:logged|signed)\s+in|no\s+credentials|login\s+required|please\s+(?:log|sign)\s*in/i.test(out)) return { signedIn: false, problem: 'Not signed in' };
   if (/expired/i.test(out)) return { signedIn: false, problem: 'Sign-in expired' };
+  if (provider === 'cursor' && code === 0 && /logged\s+in/i.test(out)) return { signedIn: true, account: (stripAnsi(out).match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/) || [''])[0].slice(0, 120) };
   if (provider === 'codex' && code === 0 && /logged\s+in/i.test(out)) return { signedIn: true, account: /chatgpt/i.test(out) ? 'ChatGPT account' : /api\s*key/i.test(out) ? 'API key' : '' };
   return { signedIn: null, problem: code === 0 ? '' : 'Sign-in could not be checked.' };
 }
@@ -457,7 +463,7 @@ async function providerStatus(provider, configured = '', { fresh = false, system
   catch (error) { return { provider, installed: false, signedIn: false, ready: false, problem: 'Not installed', detail: error.message }; }
   const key = provider + '\0' + binary, cached = statusCache.get(key);
   if (!fresh && cached && cached.expires > Date.now()) return cached.value;
-  const read = readStatus(provider, await statusProcess(binary, provider === 'claude' ? ['auth', 'status'] : ['login', 'status'], timeout));
+  const read = readStatus(provider, await statusProcess(binary, provider === 'claude' ? ['auth', 'status'] : provider === 'cursor' ? ['status'] : ['login', 'status'], timeout));
   const value = { provider, installed: true, path: binary, source: cliSource(binary), ...read, ready: read.signedIn !== false };
   // Good answers are kept for 10 minutes; anything else is asked again next time.
   if (value.signedIn === true) statusCache.set(key, { value, expires: Date.now() + 600000 }); else statusCache.delete(key);
@@ -542,7 +548,7 @@ function runProcess(binary, args, input, options = {}) {
 const CHAT_SCHEMA = { type: 'object', additionalProperties: false, properties: { message: { type: 'string' } }, required: ['message'] };
 const IMPLEMENTATION_SCHEMA = { type: 'object', additionalProperties: false, properties: { status: { type: 'string', enum: ['completed', 'blocked'] }, summary: { type: 'string' } }, required: ['status', 'summary'] };
 async function implementPlan({ provider, cliPath, model, effort, cwd, prompt, signal, onProgress, onSession, mode = 'work', session, tools, fallbackPrompt }) {
-  if (!PROVIDERS[provider]) throw new Error('Choose Codex or Claude Code first.');
+  if (!PROVIDERS[provider]) throw new Error('Choose Codex, Claude Code or Cursor first.');
   const binary = await findCLI(provider, cliPath), dir = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-implement-'));
   const output = path.join(dir, 'result.json'), schema = path.join(dir, 'schema.json');
   let pending = '', envelope, failed, usage, nativeSession, streamed = '';
@@ -589,6 +595,11 @@ async function implementPlan({ provider, cliPath, model, effort, cwd, prompt, si
     if (provider === 'codex') {
       const raw = await streamCodex(binary, prompt, outputSchema, { cwd, model, effort, tools, signal, execution: mode, resumeId: prior, onSession: remember, onText: writing, onUsage: value => { usage = value; emit({ usage }); }, onPhase: phase => emit({ phase }), onActivity: phase => emit({ kind: 'tool', phase }) });
       await fs.writeFile(output, raw);
+    } else if (provider === 'cursor') {
+      // Chat stays in Cursor's read-only Ask mode; an approved plan may edit, with commands sandboxed.
+      const reply = await runCursor(binary, cursorPrompt(prompt, outputSchema), { cwd, model, mode: readOnly ? 'ask' : 'work', resumeId: prior, signal, timeout: 30 * 60 * 1000, onText: writing, onSession: remember, onPhase: phase => emit({ phase }), onActivity: phase => emit({ kind: 'tool', phase }) });
+      if (reply.usage) { usage = reply.usage; emit({ usage }); }
+      await fs.writeFile(output, cursorJson(reply.text));
     } else {
       // acceptEdits permits file changes, but never bypasses command permissions.
       const capabilities = await claudeCapabilities(binary, signal);
@@ -599,7 +610,7 @@ async function implementPlan({ provider, cliPath, model, effort, cwd, prompt, si
     if (failed) throw new Error(redact(String(failed)));
     if (provider === 'claude' && (!envelope || envelope.is_error || envelope.permission_denials?.length)) throw new Error(redact(String(envelope?.result || 'Claude could not finish. Some operations may require permission in Claude Code.')));
     let result;
-    try { result = JSON.parse(provider === 'codex' ? await fs.readFile(output, 'utf8') : JSON.stringify(envelope.structured_output)); } catch { throw new Error('The agent did not return a valid completion report.'); }
+    try { result = JSON.parse(provider !== 'claude' ? await fs.readFile(output, 'utf8') : JSON.stringify(envelope.structured_output)); } catch { throw new Error('The agent did not return a valid completion report.'); }
     if (readOnly) { if (typeof result?.message !== 'string' || !result.message.trim()) throw new Error('The agent returned an empty reply.'); return { summary: redact(result.message).slice(0, 30000), usage, ...(nativeSession ? { session: nativeSession } : {}) }; }
     if (!['completed', 'blocked'].includes(result?.status) || typeof result.summary !== 'string' || !result.summary.trim()) throw new Error('The agent did not confirm completion.');
     if (result.status !== 'completed') throw new Error(redact(result.summary));
@@ -686,6 +697,88 @@ function partialView(raw) {
   }
   view.sections = view.sections.filter(s => s.pseudocode);
   return view;
+}
+
+// ---- Cursor (cursor-agent) --------------------------------------------------
+// Cursor's CLI has no output schema, so the schema travels in the prompt and
+// the reply is checked as JSON here, then by each caller's own validation.
+const stripAnsi = text => String(text || '').replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
+function cursorPrompt(prompt, schema) {
+  return prompt.replace(TOOLS_SECTION, '') + '\n\n' + render('engine/cursor-output-format', { schema_json: JSON.stringify(schema) });
+}
+function cursorJson(text) {
+  let body = String(text || '').trim();
+  const fence = !body.startsWith('{') && body.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) body = fence[1].trim();
+  const start = body.indexOf('{'), end = body.lastIndexOf('}');
+  if (start < 0 || end < start) throw new Error('Cursor did not return the JSON answer Yamori asked for. Retry, or choose another model.');
+  body = body.slice(start, end + 1);
+  try { JSON.parse(body); } catch { throw new Error('Cursor returned incomplete JSON. Retry, or choose another model.'); }
+  return body;
+}
+const cursorHelpCache = new Map();
+async function cursorCapabilities(binary, signal) {
+  if (cursorHelpCache.has(binary)) return cursorHelpCache.get(binary);
+  let help = '';
+  try { help = await runProcess(binary, ['--help'], '', { provider: 'cursor', signal, timeout: 15000 }); } catch (error) { if (signal?.aborted) throw error; }
+  const capabilities = { mode: /--mode\b/.test(help), trust: /--trust\b/.test(help), sandbox: /--sandbox\b/.test(help), partial: /--stream-partial-output\b/.test(help) };
+  if (help) cursorHelpCache.set(binary, capabilities);
+  return capabilities;
+}
+function cursorTool(call) {
+  const [kind, body] = Object.entries(call || {})[0] || [];
+  if (!kind) return 'Using a Cursor tool';
+  const name = kind === 'function' ? body?.name || 'tool' : kind.replace(/ToolCall$/, '');
+  const args = body?.args || {}, target = args.path || args.command || args.pattern || args.globPattern || '';
+  return name + (target ? ': ' + String(target).slice(0, 200) : '');
+}
+function cursorUsage(u) {
+  if (!u || typeof u !== 'object') return undefined;
+  const n = (...keys) => keys.map(key => u[key]).find(Number.isFinite) || 0;
+  return { input: n('input_tokens', 'inputTokens'), output: n('output_tokens', 'outputTokens'), cacheRead: n('cache_read_input_tokens', 'cacheReadTokens'), cacheWrite: n('cache_creation_input_tokens', 'cacheWriteTokens') };
+}
+// One print-mode run. 'ask' is Cursor's read-only mode; 'work' (an approved
+// plan) applies edits with --force and keeps commands in Cursor's sandbox.
+async function runCursor(binary, prompt, { cwd, model, mode = 'ask', resumeId, signal, timeout, onText, onPhase, onActivity, onThinking, onSession, run = runProcess } = {}) {
+  const capabilities = await cursorCapabilities(binary, signal);
+  if (mode !== 'work' && !capabilities.mode) throw new Error('This Cursor CLI has no read-only Ask mode. Run "cursor-agent update" in a terminal, then retry.');
+  const args = ['-p', '--output-format', 'stream-json', ...(capabilities.partial ? ['--stream-partial-output'] : []), ...(capabilities.trust ? ['--trust'] : []),
+    ...(mode === 'work' ? ['--force', ...(capabilities.sandbox ? ['--sandbox', 'enabled'] : [])] : ['--mode', 'ask']),
+    ...(model ? ['--model', model] : []), ...(resumeId ? ['--resume', resumeId] : []), prompt];
+  let pending = '', streamed = '', result, sessionId, selected, usage;
+  const line = text => {
+    let event; try { event = JSON.parse(text); } catch { return; }
+    if (event.session_id && event.session_id !== sessionId) { sessionId = event.session_id; onSession?.(sessionId); }
+    if (event.type === 'system' && event.subtype === 'init') { selected = typeof event.model === 'string' ? event.model : selected; onPhase?.('Reading the code', selected); }
+    if (event.type === 'thinking') onThinking?.();
+    if (event.type === 'tool_call' && event.subtype === 'started') { streamed = ''; onActivity?.(cursorTool(event.tool_call)); }
+    if (event.type === 'assistant') {
+      const chunk = (event.message?.content || []).filter(block => block.type === 'text').map(block => block.text || '').join('');
+      streamed = capabilities.partial ? streamed + chunk : chunk;
+      if (streamed) onText?.(streamed);
+    }
+    if (event.type === 'result') { result = event; usage = cursorUsage(event.usage) || usage; }
+  };
+  const onStdout = chunk => { pending += chunk; let newline; while ((newline = pending.indexOf('\n')) >= 0) { const next = pending.slice(0, newline); pending = pending.slice(newline + 1); line(next); } };
+  onPhase?.('Starting Cursor');
+  await run(binary, args, '', { cwd, provider: 'cursor', signal, onStdout, timeout });
+  if (pending.trim()) line(pending);
+  if (!result) throw new Error('Cursor ended without an answer. Use Set up AI to check its sign-in, then retry.');
+  if (result.is_error || (result.subtype && result.subtype !== 'success')) throw new Error(redact(String(result.result || result.error || 'Cursor could not complete the request.')).slice(0, 1800));
+  return { text: typeof result.result === 'string' && result.result.trim() ? result.result : streamed, sessionId, model: selected, usage };
+}
+async function cursorModels(binary, signal, run = runProcess) {
+  let out = '';
+  try { out = await run(binary, ['models'], '', { provider: 'cursor', signal, timeout: 20000 }); } catch (error) { if (signal?.aborted) throw error; }
+  const seen = new Set(), models = [];
+  for (const row of stripAnsi(out).split('\n')) {
+    const match = row.trim().match(/^([A-Za-z0-9][\w.:\[\]-]*)\s+-\s+(.+)$/);
+    if (!match || seen.has(match[1])) continue;
+    seen.add(match[1]);
+    const marked = /\((?:current|default)\)/i.test(match[2]);
+    models.push({ id: match[1], label: match[2].replace(/\s*\((?:current|default)\)\s*/gi, ' ').trim(), description: 'Cursor model; access depends on your plan', isDefault: marked, efforts: [], effort: null });
+  }
+  return models.length ? models : [{ id: 'auto', label: 'Auto', description: 'Cursor picks the model', isDefault: true, efforts: [], effort: null }];
 }
 
 function requestTimeout(effort) { return effort === 'low' ? 180000 : effort === 'medium' || !effort ? 300000 : 600000; }
@@ -800,6 +893,7 @@ function streamCodex(binary, prompt, schema, { cwd, signal, onText, onPhase, mod
 
 async function listModels(provider, cliPath, signal) {
   if (provider === 'claude') return ['sonnet', 'opus', 'haiku', 'fable'].map(id => ({ id, label: id[0].toUpperCase() + id.slice(1), description: 'Claude Code alias; access depends on your account', effort: 'low' }));
+  if (provider === 'cursor') return cursorModels(await findCLI(provider, cliPath), signal);
   if (provider !== 'codex') throw new Error('Unknown provider.');
   const binary = await findCLI(provider, cliPath);
   const response = await streamCodex(binary, '', undefined, { cwd: os.tmpdir(), signal, listModels: true });
@@ -1098,7 +1192,7 @@ function disposePlanningSession(session) {
   session.ready = false; const codex = session.codex; session.codex = undefined; codex?.dispose(); session.claudeId = undefined;
   const dir = session.dir; session.dir = undefined; if (dir) void fs.rm(dir, { recursive: true, force: true }).catch(() => {});
 }
-async function requestStructured({ prompt, schema, provider, cliPath, model = '', effort = provider === 'claude' ? null : 'low', signal, onProgress: listener, onUsage, showPreview = true, tools, readRoot, planning = false, session, onQuestion, recoveryContext = '' }) {
+async function requestStructured({ prompt, schema, provider, cliPath, model = '', effort = provider === 'codex' ? 'low' : null, signal, onProgress: listener, onUsage, showPreview = true, tools, readRoot, planning = false, session, onQuestion, recoveryContext = '' }) {
   const envelopeKind = planning && session && (schema === PLAN_SCHEMA || schema === PLAN_PATCH_SCHEMA) ? schema === PLAN_SCHEMA ? 'draft' : 'patch' : undefined;
   if (envelopeKind) {
     schema = PLAN_SESSION_SCHEMA;
@@ -1121,7 +1215,7 @@ async function requestStructured({ prompt, schema, provider, cliPath, model = ''
     if (!onProgress || signal?.aborted || Date.now() - lastThinking < 400) return;
     lastThinking = Date.now(); onProgress({ phase: 'Thinking', stage: 'think', thinkingTokens: tokens });
   };
-  if (provider === 'codex' || provider === 'claude') {
+  if (PROVIDERS[provider]) {
     const binary = await findCLI(provider, cliPath);
     const retained = planning && session ? session : undefined;
     const signature = JSON.stringify([provider, binary, model, effort, tools]);
@@ -1131,8 +1225,10 @@ async function requestStructured({ prompt, schema, provider, cliPath, model = ''
     // The knowledge server logs each lookup; the activity trail follows it.
     const nativeRead = provider === 'claude' && !!readRoot;
     const workingDir = nativeRead ? readRoot : planning && tools?.projectRoot ? tools.projectRoot : dir;
-    const log = tools && path.join(dir, 'calls.jsonl');
-    const server = tools && { ...tools, args: [...tools.args, '--log', log] };
+    // Cursor has no per-run MCP config; it answers from the inline project context.
+    const lookups = provider !== 'cursor' && tools;
+    const log = lookups && path.join(dir, 'calls.jsonl');
+    const server = lookups && { ...tools, args: [...tools.args, '--log', log] };
     let logOffset = log ? (await fs.readFile(log, 'utf8').catch(() => '')).length : 0, tailing;
     const tail = async () => {
       if (!log || tailing) return;
@@ -1172,6 +1268,14 @@ async function requestStructured({ prompt, schema, provider, cliPath, model = ''
         await runProcess(binary, ['exec', '--ignore-user-config', ...(model ? ['--model', model] : []), ...(effort ? ['-c', 'model_reasoning_effort=' + effort] : []), '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--disable', 'shell_tool', '--disable', 'apps', '--disable', 'plugins', '--disable', 'hooks', '--color', 'never', '--output-schema', schemaFile, '--output-last-message', output, '-'], prompt, { cwd: dir, provider, signal, timeout: requestTimeout(effort) });
         raw = await fs.readFile(output, 'utf8');
         }
+      } else if (provider === 'cursor') {
+        const resumeId = retained && (retained.ready || retained.resumeId) ? retained.claudeId || retained.resumeId : undefined;
+        const reply = await runCursor(binary, cursorPrompt(prompt, schema), { cwd: workingDir, model, mode: 'ask', resumeId, signal, timeout: requestTimeout(effort), onText: progress,
+          onPhase: (phase, selectedModel) => onProgress?.({ phase, model: selectedModel, stage: /^Starting/.test(phase) ? 'start' : 'think' }), onActivity: phase => onProgress?.({ phase, stage: 'think' }), onThinking: () => onProgress?.({ phase: 'Thinking', stage: 'think' }) });
+        if (reply.model) actualModel = reply.model;
+        if (reply.usage) { usage = reply.usage; listener?.({ stage: 'usage', phase: 'Token usage updated', usage }); }
+        raw = cursorJson(reply.text);
+        if (retained) { retained.claudeId = reply.sessionId || retained.claudeId; retained.ready = true; }
       } else {
         let envelope, toolError, pending = '', streamed = '';
         const structuredBlocks = new Set();
@@ -1303,7 +1407,7 @@ async function writeParts({ level, parts, writer, source, tools, signal, onProgr
   const toolCalls = results.reduce((sum, item) => sum + (item.toolCalls || 0), 0);
   return { raw: JSON.stringify({ title: results[0].title, summary: results[0].summary, sections: results.flatMap(item => item.sections) }), actualModel: results.find(item => item.model)?.model, toolCalls, parts: count };
 }
-async function generate({ source, level, provider, cliPath, model = '', effort = provider === 'claude' ? null : 'low', signal, onProgress, onUsage, onFocusedRefresh, readRoot, gist, edit, revision, sourceRefresh, initialDraft, refinementSteps: requestedSteps = 0, tools, fast, parts, parallel = 1, background = false, review }) {
+async function generate({ source, level, provider, cliPath, model = '', effort = provider === 'codex' ? 'low' : null, signal, onProgress, onUsage, onFocusedRefresh, readRoot, gist, edit, revision, sourceRefresh, initialDraft, refinementSteps: requestedSteps = 0, tools, fast, parts, parallel = 1, background = false, review }) {
   if (gist) return generateGist({ source, ...gist, provider, cliPath, model, effort, fast, signal, onUsage, onProgress });
   const steps = refinementSteps(requestedSteps);
   const single = edit || Number.isInteger(sourceRefresh?.index), patch = !!sourceRefresh?.patch;
@@ -1520,4 +1624,4 @@ async function reviewDraft({ initial, source, level, provider, cliPath, model = 
   }
 
 }
-module.exports = { requestSchema, hardReviewBlocks, gistPrompt, GIST_SCHEMA, GIST_VERSION, GIST_LIMIT, compactSource, partialReply, CHAT_SCHEMA, implementPlan, IMPLEMENTATION_SCHEMA, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, WRITING_RULES, LABEL_RULE, flowPrompt, parseFlow, FLOW_SCHEMA, FLOW_FORMAT_VERSION, reviewModel, reviewDraft, writeParts, partPrompt, clampToPart, providerStatus, clearProviderStatus, readStatus, cliSource, isSetupProblem, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, TOOLS_SECTION, MCP_NAME, describeToolCall, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, projectContextData, reviewSchema, refinementContext, selectionPrompt, parseSelection, SELECTION_SCHEMA, refineExplanation, reviewPrompt, refinementPrompt, parseReview, refinementSteps, REFINEMENT_VERSION, READ_COST_WEIGHT, REVIEW_SCHEMA, listEfforts, listModels, editPrompt, revisionPrompt, refreshPrompt, partialView, streamCodex, schemaFor, lowerView, ORDER, LEVELS, PROVIDERS, SCHEMA, PROMPT_FORMAT_VERSION, cacheKey, promptFor, parseResult, findCLI, cliLaunch, runProcess, generate, hash };
+module.exports = { cursorJson, cursorPrompt, runCursor, cursorModels, requestSchema, hardReviewBlocks, gistPrompt, GIST_SCHEMA, GIST_VERSION, GIST_LIMIT, compactSource, partialReply, CHAT_SCHEMA, implementPlan, IMPLEMENTATION_SCHEMA, disposePlanningSession, planPatchPrompt, parsePlanPatch, PLAN_PATCH_SCHEMA, planPrompt, parsePlan, stepDetailPrompt, parseStepDetail, rankPrompt, parseRank, PLAN_SCHEMA, STEP_DETAIL_SCHEMA, RANK_SCHEMA, WRITING_RULES, LABEL_RULE, flowPrompt, parseFlow, FLOW_SCHEMA, FLOW_FORMAT_VERSION, reviewModel, reviewDraft, writeParts, partPrompt, clampToPart, providerStatus, clearProviderStatus, readStatus, cliSource, isSetupProblem, simulationPrompt, parseSimulation, SIMULATION_SCHEMA, fastModel, TOOLS_SECTION, MCP_NAME, describeToolCall, requestStructured, notesPrompt, parseNotes, mapSummaryPrompt, parseMapSummary, NOTES_SCHEMA, MAP_SUMMARY_SCHEMA, projectContextData, reviewSchema, refinementContext, selectionPrompt, parseSelection, SELECTION_SCHEMA, refineExplanation, reviewPrompt, refinementPrompt, parseReview, refinementSteps, REFINEMENT_VERSION, READ_COST_WEIGHT, REVIEW_SCHEMA, listEfforts, listModels, editPrompt, revisionPrompt, refreshPrompt, partialView, streamCodex, schemaFor, lowerView, ORDER, LEVELS, PROVIDERS, SCHEMA, PROMPT_FORMAT_VERSION, cacheKey, promptFor, parseResult, findCLI, cliLaunch, runProcess, generate, hash };

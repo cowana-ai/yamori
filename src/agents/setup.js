@@ -5,11 +5,12 @@
 const path = require('node:path');
 const { setupHTML } = require('../views/setup');
 
-module.exports = function setupScreen({ vscode, os, engine, setting, cliPathFor }) {
+module.exports = function setupScreen({ vscode, os, engine, cliPathFor }) {
   const { PROVIDERS, cliLaunch, findCLI, providerStatus, clearProviderStatus } = engine;
   // ---- Setup: which AI explains code, and one button to make it ready ----
-  const OWNERS = ['claude', 'codex'];
-  const AI_NAMES = { claude: 'Claude', codex: 'ChatGPT' };
+  const OWNERS = ['claude', 'codex', 'cursor'];
+  const AI_NAMES = { claude: 'Claude', codex: 'ChatGPT', cursor: 'Cursor' };
+  const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' };
   // The terminal behind Sign in / Install. Commands are fixed here; the webview
   // only names the provider. A failed install waits so its messages stay visible.
   function setupTerminal(context, api, owner, kind, binary, system = {}) {
@@ -19,7 +20,16 @@ module.exports = function setupScreen({ vscode, os, engine, setting, cliPathFor 
     let options;
     if (kind === 'signIn' && binary) {
       const launch = cliLaunch(binary, owner === 'claude' ? ['auth', 'login'] : ['login']);
-      options = { name: owner === 'claude' ? 'Yamori · Claude sign-in' : 'Yamori · ChatGPT sign-in', shellPath: launch.command, shellArgs: launch.args, env: launch.env, cwd: home };
+      options = { name: 'Yamori · ' + AI_NAMES[owner] + ' sign-in', shellPath: launch.command, shellArgs: launch.args, env: launch.env, cwd: home };
+    } else if (owner === 'cursor') {
+      // Cursor's official installer (cursor.com/install), then its browser sign-in.
+      options = windows ? {
+        name: 'Yamori · Install Cursor CLI', cwd: home, shellPath: powershell,
+        shellArgs: ['-NoProfile', '-NoExit', '-Command', '$ErrorActionPreference = "Stop"; irm \'https://cursor.com/install?win32=true\' | iex; cursor-agent login']
+      } : {
+        name: 'Yamori · Install Cursor CLI', cwd: home, shellPath: '/bin/bash',
+        shellArgs: ['-lc', 'set -o pipefail; { curl -fsSL https://cursor.com/install | /bin/bash && "$HOME/.local/bin/cursor-agent" login; }' + pause]
+      };
     } else if (owner === 'claude') {
       options = windows ? {
         name: 'Yamori · Install Claude Code', cwd: home, shellPath: powershell,
@@ -47,7 +57,7 @@ module.exports = function setupScreen({ vscode, os, engine, setting, cliPathFor 
   // Cards for the setup screen, most ready first. Pure, so tests can read it.
   function setupView(statuses, { chosen, working = {}, pending, done } = {}) {
     const card = owner => {
-      const s = statuses[owner] || {}, name = AI_NAMES[owner], cli = owner === 'claude' ? 'Claude Code' : 'Codex';
+      const s = statuses[owner] || {}, name = AI_NAMES[owner], cli = CLI_NAMES[owner];
       const lines = [s.installed
         ? { state: 'yes', text: cli + ' installed' + (s.source && s.source !== 'Command line' ? ' · from ' + s.source : '') }
         : { state: 'no', text: cli + ' not installed' }];
@@ -56,18 +66,18 @@ module.exports = function setupScreen({ vscode, os, engine, setting, cliPathFor 
       let action;
       if (working[owner]) action = { label: 'Show the ' + (working[owner] === 'install' ? 'install' : 'sign-in') + ' terminal', hint: 'Finish there (and in your browser). This page updates when you come back.' };
       else if (s.ready) action = { label: 'Use ' + name, hint: 'Explanations use your ' + name + ' plan. Yamori never asks for an API key.' };
-      else if (s.installed) action = { label: owner === 'claude' ? 'Sign in to Claude' : 'Sign in with ChatGPT', hint: 'Opens a terminal and your browser. Sign in there; this page updates when you come back.' };
-      else action = { label: 'Install ' + cli, hint: owner === 'claude' ? 'Runs Anthropic’s official installer in a terminal, then opens sign-in. About a minute.' : 'Installs OpenAI’s Codex CLI in a terminal (with npm or Homebrew), then opens sign-in.' };
+      else if (s.installed) action = { label: owner === 'codex' ? 'Sign in with ChatGPT' : 'Sign in to ' + name, hint: 'Opens a terminal and your browser. Sign in there; this page updates when you come back.' };
+      else action = { label: 'Install ' + cli, hint: owner === 'claude' ? 'Runs Anthropic’s official installer in a terminal, then opens sign-in. About a minute.' : owner === 'cursor' ? 'Runs Cursor’s official CLI installer in a terminal, then opens sign-in. About a minute.' : 'Installs OpenAI’s Codex CLI in a terminal (with npm or Homebrew), then opens sign-in.' };
       const alt = s.installed && s.signedIn !== false && !working[owner] ? { label: s.signedIn === true ? 'Use a different account' : 'Sign in' } : undefined;
       return { id: owner, name, product: cli + ' · uses your ' + name + ' plan', lines, action, alt, ready: !!s.ready, badge: s.ready ? (chosen === owner ? 'In use' : 'Ready') : '' };
     };
     const rank = owner => (statuses[owner]?.ready ? 0 : statuses[owner]?.installed ? 2 : 4) + (owner === chosen ? 0 : 1);
     const cards = [...OWNERS].sort((a, b) => rank(a) - rank(b)).map(card);
-    const other = OWNERS.find(owner => owner !== chosen);
+    const other = OWNERS.find(owner => owner !== chosen && statuses[owner]?.ready) || OWNERS.find(owner => owner !== chosen);
     const notice = PROVIDERS[chosen] && statuses[chosen] && !statuses[chosen].ready && statuses[other]?.ready ? `${AI_NAMES[chosen]} isn’t ready (${statuses[chosen].problem || 'not set up'}). ${AI_NAMES[other]} is ready to use instead.`
-      : OWNERS.every(owner => statuses[owner] && !statuses[owner].installed) ? 'Neither is on this computer yet. Pick the one whose plan you have; the install runs in a terminal you can watch.' : '';
-    const view = { title: 'Set up Yamori', lead: 'Yamori explains code with an AI you already use: Claude or ChatGPT. Choose one; setup takes about a minute and uses your own sign-in.',
-      next: pending?.label || '', notice, cards, foot: 'Yamori runs Claude Code or Codex on this computer with your sign-in and plan limits.' };
+      : OWNERS.every(owner => statuses[owner] && !statuses[owner].installed) ? 'None of them is on this computer yet. Pick the one whose plan you have; the install runs in a terminal you can watch.' : '';
+    const view = { title: 'Set up Yamori', lead: 'Yamori explains code with an AI you already use: Claude, ChatGPT or Cursor. Choose one; setup takes about a minute and uses your own sign-in.',
+      next: pending?.label || '', notice, cards, foot: 'Yamori runs Claude Code, Codex or the Cursor CLI on this computer with your sign-in and plan limits.' };
     if (done) {
       const s = statuses[done] || {};
       view.done = { title: '✓ Yamori will use ' + AI_NAMES[done], text: (s.account ? 'Signed in · ' + s.account + '. ' : '') + 'Change it any time from AI ▾ in a Yamori tab, or with Yamori: Set Up AI.',
@@ -157,8 +167,8 @@ module.exports = function setupScreen({ vscode, os, engine, setting, cliPathFor 
 
   async function chooseInstalledProvider(context, api = vscode, discover = findCLI) {
     if (context.globalState.get('provider') !== undefined) return;
-    const owners = ['codex', 'claude'];
-    const installed = await Promise.allSettled(owners.map(owner => discover(owner, setting(api, owner === 'claude' ? 'claudePath' : 'codexPath'))));
+    const owners = ['codex', 'claude', 'cursor'];
+    const installed = await Promise.allSettled(owners.map(owner => discover(owner, cliPathFor(api, owner))));
     const index = installed.findIndex(result => result.status === 'fulfilled');
     if (index >= 0 && context.globalState.get('provider') === undefined) await context.globalState.update('provider', owners[index]);
   }

@@ -926,7 +926,7 @@ module.exports = function projectMapPanel({ engine, vscode, setting, cliPathFor,
       const chosen = await api.window.showQuickPick?.([
         { label: 'Continue a Codex conversation', action: 'codex', description: 'Import a local conversation from this project and resume its native context' },
         { label: 'Continue a Claude Code conversation', action: 'claude', description: 'Import a local conversation from this project and resume its native context' },
-        { label: 'Open current conversation in agent terminal', action: 'open', description: 'Resume the same native session in Codex or Claude Code' },
+        { label: 'Open current conversation in agent terminal', action: 'open', description: 'Resume the same native session in Codex, Claude Code or Cursor' },
         { label: 'Sync linked conversation', action: 'sync', description: 'Read external updates locally, without an AI call' },
         { label: 'Copy project context', action: 'copy', description: 'For moving to another provider or a web-only chat' },
         { label: 'Paste a conversation handoff', action: 'paste', description: 'Import context from a web-only or exported chat' }
@@ -1155,7 +1155,7 @@ module.exports = function projectMapPanel({ engine, vscode, setting, cliPathFor,
       },
       async connection(tier) {
         const provider = context.globalState.get('provider');
-        if (!PROVIDERS[provider]) throw new Error('Set up Claude Code or Codex first (Yamori: Set Up AI).');
+        if (!PROVIDERS[provider]) throw new Error('Set up Claude Code, Codex or Cursor first (Yamori: Set Up AI).');
         const main = connectionOptions(context.globalState, provider, api);
         return tier === 'main' ? main : { ...main, ...(await quickModel(provider, main.cliPath, api) || {}) };
       },
