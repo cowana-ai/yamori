@@ -51,6 +51,20 @@ function adoptPlan(plans, plan, text, journal) {
   return plans;
 }
 
+// The founder approved the plan in Yamori and the terminal agent has finished
+// its run (MCP done): the plan moves to history, its active steps marked done.
+function finishApprovedPlan(plans, journal, now = Date.now()) {
+  const plan = plans?.current;
+  if (!plan?.approvedAt) return false;
+  journal.ensure(plans);
+  const steps = (plan.steps || []).map(step => step.status === 'skipped' || plan.dismissed?.includes(step.file) ? step : { ...step, status: 'done' });
+  plans.history = [...(plans.history || []), { ...plan, steps, completedAt: now }].slice(-5);
+  plans.current = undefined;
+  plans.conversation.mode = 'work';
+  journal.add(plans, { role: 'assistant', mode: 'work', kind: 'completion', text: 'The terminal agent finished the approved plan: ' + (plan.summary || plan.goal) + '. The plan moved to history.' });
+  return true;
+}
+
 function createSessionTools({ store, root, project, normalizePlan, journal }) {
   const handlers = {
     get_view() {
@@ -80,7 +94,13 @@ function createSessionTools({ store, root, project, normalizePlan, journal }) {
     }
   };
   void root;
-  return { handlers };
+  // Runs after the stage tools' done: clears an approved plan from the canvas.
+  async function finishPlan() {
+    let finished = false;
+    await project.updateStoreFile(store(), 'plan', plans => { const next = { ...plans }; finished = finishApprovedPlan(next, journal); return finished ? next : undefined; });
+    return finished;
+  }
+  return { handlers, finishPlan };
 }
 
-module.exports = { adoptPlan, createSessionTools, SESSION_READ_TOOLS, SESSION_WRITE_TOOLS, VIEW_FILE, SHOW_FILE };
+module.exports = { adoptPlan, finishApprovedPlan, createSessionTools, SESSION_READ_TOOLS, SESSION_WRITE_TOOLS, VIEW_FILE, SHOW_FILE };

@@ -493,7 +493,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
           if (entry.closed) return;
           const value = await cache.json(entry.store.file(name.slice(0, -5)));
           if (!value || typeof value !== 'object') return;
-          if (name === 'plan.json') { if (entry.planController || entry.planDirty || !value.conversation || JSON.stringify(entry.plans) === JSON.stringify(value)) return; entry.plans = value; entry.planError = ''; }
+          if (name === 'plan.json') { if (entry.planController || entry.planDirty || !value.conversation || JSON.stringify(entry.plans) === JSON.stringify(value)) return; entry.plans = value; entry.planError = ''; bump(entry); }
           else if (name === 'explanations.json') entry.explanations = value;
           else if (name === 'notes.json' && value.files && !entry.notesController) entry.notes = value;
           else if (name === 'graph.json' && value.version === project.GRAPH_VERSION && !entry.scanning) entry.graph = value;
@@ -1049,8 +1049,12 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     const plan = currentPlan(entry); if (!plan || !entry.graph || !raw || typeof raw !== 'object') return;
     // A late model answer must never replace edits made while it was running.
     if (entry.planController) { entry.planController.abort(); entry.planController = undefined; entry.planBusy = undefined; entry.planError = 'AI request stopped because you edited the plan. Your edits were kept.'; }
-    const { plan: clean } = planner.normalizePlan({ ...raw, id: plan.id, createdAt: plan.createdAt, models: plan.models, tokens: plan.tokens, calls: plan.calls }, entry.graph);
+    const { plan: clean } = planner.normalizePlan({ ...raw, id: plan.id, createdAt: plan.createdAt, models: plan.models, tokens: plan.tokens, calls: plan.calls, approvedAt: plan.approvedAt }, entry.graph);
     entry.plans.current = clean; entry.planNotes = (entry.planNotes || []).filter(item => item.kind !== 'problem');
+    if (setting(api, 'chatInTerminal', true) !== false) {
+      const typed = planComments(plan, clean);
+      if (typed) void agentSessions?.open(entry, { prefill: typed, preserveFocus: true }).catch(() => {});
+    }
     void planEffects(entry).then(() => post(entry)).catch(() => {});
     void planEstimate(entry).then(() => post(entry)).catch(() => {});
     planSave(entry);
@@ -1105,6 +1109,16 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     if (api.workspace.isTrusted === false) { entry.pendingImplementation = { id, fingerprint: hash(JSON.stringify(plan)) }; entry.planError = 'Trust this workspace in the Workspace Trust screen to let the agent edit files. Your approved plan is kept.'; post(entry); await api.commands.executeCommand?.('workbench.trust.manage'); return; }
     const steps = plan.steps.filter(step => step.status !== 'skipped' && step.status !== 'done' && !plan.dismissed?.includes(step.file));
     if (!steps.length) { entry.planError = 'There are no active changes to implement.'; post(entry); return; }
+    // With chat in the terminal, the agent there implements: it is told, reads the
+    // plan with get_plan, and its done moves the plan to history.
+    if (setting(api, 'chatInTerminal', true) !== false && agentSessions) {
+      plan.approvedAt = Date.now(); entry.planError = ''; projectConversation(entry).mode = 'work';
+      journal.add(entry.plans, { role: 'user', mode: 'work', kind: 'approval', text: 'Approved the plan: ' + (plan.summary || plan.goal), details: { planId: plan.id } });
+      bump(entry); await savePlanNow(entry); post(entry);
+      try { await agentSessions.open(entry, { prefill: APPROVED_PROMPT(steps.length), submit: true }); }
+      catch (error) { plan.approvedAt = undefined; entry.planError = 'Could not reach your agent session: ' + error.message + ' Your plan was kept.'; bump(entry); planSave(entry); post(entry); }
+      return;
+    }
     const controller = new AbortController(); entry.planController = controller; projectConversation(entry).mode = 'work';
     entry.planBusy = { stage: 'implement', text: 'Starting implementation…' }; entry.planError = ''; entry.planActivity = []; post(entry);
     try {
@@ -1743,10 +1757,28 @@ const SESSION_RULES = `You are the founder's agent for this project, started fro
 - For where or how questions, call the yamori find tool: it returns the matching functions with their current code, callers and callees, so you can usually answer from it without grep or reading files, and its code needs no re-reading. Say what the code shows, not what you assume.
 - To explain how the parts fit together, use list_stages and get_stage; notes there are the founder's rules, follow them.
 - When they ask for a plan, write it with save_plan so it appears on Yamori's Plan canvas, then call show_in_yamori with tab "plan". Do not edit code until they approve.
+- Words on your prompt that start with [Plan comment] are the founder's comments on the canvas, gathered until they send them: answer them and, if they change the plan, save it again with save_plan.
+- When they press Approve in Yamori you get a message saying so: read the plan with get_plan (its steps, comments and rejected files), implement it, run the relevant checks, then call done; done clears the plan from the canvas.
 - In your own plan mode (/plan), finish the plan the usual way; Yamori puts it on the Plan canvas by itself. Name each file by its path in the project (and the function or lines) so every step lands on the right file.
 - After you explain a part, step or file, you may call show_in_yamori to bring it into view.
 - After a run that edited code, call done once.
 Keep answers short and plain; the founder may not read code.`;
+// What the terminal agent is told when the founder presses Approve in Yamori.
+const APPROVED_PROMPT = count => 'I approved the plan on Yamori\'s Plan canvas (' + count + ' change' + (count === 1 ? '' : 's') + '). Read it with get_plan, including my comments and rejected files, implement it, run the relevant checks, then call done.';
+// Comments the founder added on the canvas since the last edit, as one line for
+// the agent's prompt. They gather there until the founder sends them.
+function planComments(before, after) {
+  const out = [];
+  (after?.steps || []).forEach((step, index) => {
+    const now = String(step.note || '').trim(), old = String(before?.steps?.find(item => item.id === step.id)?.note || '').trim();
+    if (!now || now === old) return;
+    const added = old && now.startsWith(old) ? now.slice(old.length).trim() : now;
+    if (!added) return;
+    const where = step.file + (step.newFile ? '' : ':' + step.startLine + (step.endLine !== step.startLine ? '-' + step.endLine : ''));
+    out.push('[Plan comment · step ' + (index + 1) + ' “' + step.title + '” (' + where + ')] ' + added.replace(/\s*\n\s*/g, ' / '));
+  });
+  return out.length ? out.join(' ') + ' ' : '';
+}
 function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
   const open = new Map();
   const name = entry => 'Yamori chat · ' + path.basename(entry.root.fsPath);
@@ -1787,13 +1819,14 @@ function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
       if (!PROVIDERS[context.globalState.get('provider')]) return;
       await start(entry);
     },
-    async open(entry, { prefill = '' } = {}) {
+    async open(entry, { prefill = '', submit = false, preserveFocus = false } = {}) {
       if (api.workspace.isTrusted === false) throw new Error('Trust this workspace to start an agent session.');
       if (!api.window.createTerminal) throw new Error('The integrated terminal is unavailable.');
       const existing = alive(entry), terminal = existing || await start(entry);
-      terminal.show(false);
-      // Puts words on the agent's prompt without sending them; you finish the question.
-      if (prefill) setTimeout(() => terminal.sendText(prefill, false), existing ? 0 : 2500);
+      terminal.show(preserveFocus);
+      // Puts words on the agent's prompt; without submit they wait there for you to send.
+      // Enter goes separately, so the agent's prompt takes the text as typed, not as a paste.
+      if (prefill) setTimeout(() => { terminal.sendText(prefill, false); if (submit) setTimeout(() => terminal.sendText('\r', false), 150); }, existing ? 0 : 2500);
       return terminal;
     }
   };
@@ -4109,4 +4142,4 @@ function createReader(context, navigation) {
   };
   return reader;
 }
-module.exports = { createAgentSessions, SESSION_RULES, createSelectionQuestions, connectAgents, agentPlan, stripRulesBlock, stripHooks, writeLauncher, hoverMarkdown, createProjectMap, createSetup, setupView, setupTerminal, connectionOptions, chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext };
+module.exports = { createAgentSessions, SESSION_RULES, APPROVED_PROMPT, planComments, createSelectionQuestions, connectAgents, agentPlan, stripRulesBlock, stripHooks, writeLauncher, hoverMarkdown, createProjectMap, createSetup, setupView, setupTerminal, connectionOptions, chooseInstalledProvider, setting, activate, migratePreferences, collectCallContext };

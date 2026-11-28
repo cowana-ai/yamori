@@ -163,6 +163,7 @@ function normalizePlan(raw, graph, { maxSteps = MAX_USER_STEPS } = {}) {
     messages: (Array.isArray(raw?.messages) ? raw.messages : []).slice(-100).filter(message => ['user', 'assistant'].includes(message?.role)).map(message => ({ role: message.role, text: clip(message.text, 3000) })),
     starting: (Array.isArray(raw?.starting) ? raw.starting : []).filter(rel => known.has(rel)).slice(0, 30), dismissed: (Array.isArray(raw?.dismissed) ? raw.dismissed : []).filter(rel => known.has(rel)).slice(0, 30), steps,
     ...(['agent', 'native'].includes(raw?.origin) ? { origin: raw.origin } : {}),
+    ...(Number(raw?.approvedAt) > 0 ? { approvedAt: Number(raw.approvedAt) } : {}),
     ...(raw?.native && typeof raw.native === 'object' ? { native: { agent: raw.native.agent === 'codex' ? 'codex' : 'claude', hash: clip(raw.native.hash, 32), at: Number(raw.native.at) || Date.now() } } : {}),
     ...(raw?.models && typeof raw.models === 'object' ? { models: { draft: clip(raw.models.draft, 80), escalated: !!raw.models.escalated, improved: !!raw.models.improved } } : {}),
     ...(raw?.tokens && typeof raw.tokens === 'object' ? { tokens: { sent: Number(raw.tokens.sent) || 0, whole: Number(raw.tokens.whole) || 0, used: Number(raw.tokens.used) || 0 } } : {}),

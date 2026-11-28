@@ -4547,7 +4547,7 @@ test('approved implementation uses writing tools, honors selected settings and r
 
 test('approving a plan executes once, excludes rejected and finished steps, archives only success and keeps failures', async () => {
   let release, calls = [], stopped = false;
-  const h = await readerHarness({ autoNotes: false }, { engine: () => ({ implementPlan: options => {
+  const h = await readerHarness({ autoNotes: false, chatInTerminal: false }, { engine: () => ({ implementPlan: options => {
     calls.push(options); options.onProgress({ phase: 'Editing pipeline/plan.py', usage: { input: 100, output: 10 } });
     return new Promise((resolve, reject) => { release = resolve; options.signal.addEventListener('abort', () => { stopped = true; reject(new Error('Cancelled.')); }, { once: true }); });
   } }) });
@@ -4587,7 +4587,7 @@ test('approving a plan executes once, excludes rejected and finished steps, arch
 test('planning can inspect Markdown profiles and prompts in Restricted Mode without asking for attachments', async () => {
   const fs = require('node:fs/promises'), path = require('node:path'), real = require('../src/ai/engine');
   let inspected = false, captured, implemented = false;
-  const h = await readerHarness({ autoNotes: false }, { trusted: false, engine: () => ({ implementPlan: async () => { implemented = true; return { summary: 'Implemented and checked.' }; }, requestStructured: async options => {
+  const h = await readerHarness({ autoNotes: false, chatInTerminal: false }, { trusted: false, engine: () => ({ implementPlan: async () => { implemented = true; return { summary: 'Implemented and checked.' }; }, requestStructured: async options => {
     if (options.schema !== real.PLAN_SCHEMA) throw new Error('Unexpected model request.');
     captured = options; assert.ok(options.tools, 'static project tools remain available without workspace trust');
     assert.equal(options.tools.projectRoot, h.root); assert.equal(options.tools.env.ELECTRON_RUN_AS_NODE, '1');
@@ -4647,7 +4647,7 @@ test('native Codex planning uses the project cwd and reports MCP startup failure
 
 test('project chat continues through planning, implementation, testing and a new plan with native session references', async () => {
   const calls = [], planningCalls = [], queue = [GOOD_PLAN];
-  const h = await readerHarness({ autoNotes: false }, { engine: () => ({ ...planEngine(planningCalls, queue)(), implementPlan: async options => {
+  const h = await readerHarness({ autoNotes: false, chatInTerminal: false }, { engine: () => ({ ...planEngine(planningCalls, queue)(), implementPlan: async options => {
     calls.push(options); const session = { provider: 'codex', cwd: options.cwd, id: 'native-project-session' }; options.onSession?.(session);
     options.onProgress?.({ kind: 'tool', phase: options.mode === 'chat' ? 'Reading writer.py' : 'Running requested checks' });
     options.onProgress?.({ stage: 'write', reply: 'The writer' }); options.onProgress?.({ stage: 'write', reply: 'The writer' }); options.onProgress?.({ stage: 'write', reply: 'The writer numbers its loops.' });

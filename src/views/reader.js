@@ -300,7 +300,8 @@ ${BASE_STYLES}header { position: sticky; top: 0; z-index: 5; padding: 14px 20px 
 body.vscode-light:not([data-palette="slate"]) .brand img, body[data-palette="paper"] .brand img { filter: brightness(0); }
 .wordmark { font: 800 18px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: -.05em; }
 .ai-settings { position: relative; margin: 0; border: 0; overflow: visible; background: transparent; font-size: 11px; }
-.ai-settings > summary { cursor: pointer; list-style: none; max-width: 25ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 2px; color: var(--read-muted); }
+.ai-settings > summary { cursor: pointer; list-style: none; max-width: 25ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 8px; color: var(--read-ink); font-size: 12px; font-weight: 600; border: 1px solid var(--read-ink); background: var(--read-surface); }
+.ai-settings > summary:hover, #colors:hover { background: var(--read-note-bg); }
 .ai-settings > summary::-webkit-details-marker { display: none; }
 .ai-controls { position: absolute; right: 0; top: 32px; min-width: 210px; display: grid; padding: 8px; border: 1px solid var(--read-ink); box-shadow: 3px 3px 0 var(--read-ink); background: var(--read-surface); z-index: 6; }
 .ai-controls button { text-align: left; overflow-wrap: anywhere; }
@@ -308,7 +309,7 @@ body.vscode-light:not([data-palette="slate"]) .brand img, body[data-palette="pap
 .segments button { font-size: 12px; padding: 4px 8px; border-bottom: 2px solid transparent; }
 .segments button[aria-pressed="true"] { font-weight: 700; border-bottom-color: var(--read-ink); }
 #refresh { margin-left: auto; font-size: 12px; border: 1px solid var(--read-border); }
-#colors { font-size: 11px; color: var(--read-muted); }
+#colors { font-size: 12px; font-weight: 600; color: var(--read-ink); border: 1px solid var(--read-ink); background: var(--read-surface); padding: 3px 8px; }
 .crumb { min-width: 0; flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 6px; color: var(--read-muted); font: 12px/1.6 ui-monospace, monospace; }
 .crumb strong { color: var(--read-ink); font-weight: 700; }
 .control-label { font: 600 10px/1.6 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; color: var(--read-muted); }

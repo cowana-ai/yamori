@@ -65,6 +65,7 @@ const AGENT_TEXT = {
   read_source: { description: `Numbered lines of a project file (up to ${MAX_LINES}): a line range, or symbol for one function or class.` },
   get_view: { description: "What the founder is looking at now: editor file, cursor and selection, the Yamori tab and selection. Use when they say this, here or that." },
   save_pseudocode: { description: 'Save pseudocode you wrote for a file with none (or outdated), in the format pseudocode_guide gives. Never replaces current pseudocode Yamori wrote.' },
+  get_plan: { description: "The plan on Yamori's Plan canvas as the founder left it: steps, their comments, rejected files, and whether they approved it." },
   save_plan: { description: "Put a plan on Yamori's Plan canvas for the founder to review: one step per change, each on a project file, saying what changes and why in plain words." },
   show_in_yamori: { description: 'Bring a part, step, file (at a line) or the Plan canvas into view in Yamori.' },
   add_note: { description: "Add a note to a step (the founder sees it): decisions and constraints you found, not progress." },
@@ -148,7 +149,7 @@ function createServer({ store, root, log, cache }) {
       const plan = readJson(path.join(located.dir, 'plan.json'))?.current;
       if (!plan) return { available: false, hint: 'No saved plan yet. The human can create one in Yamori’s Plan canvas.' };
       const rel = file === undefined ? undefined : plan.steps?.some(step => step.file === file && step.newFile) ? file : mapped(graph, file);
-      return { available: true, proposal: true, goal: plan.goal, summary: plan.summary, updatedAt: plan.updatedAt, rejectedFiles: plan.dismissed || [],
+      return { available: true, proposal: true, approved: !!plan.approvedAt, goal: plan.goal, summary: plan.summary, updatedAt: plan.updatedAt, rejectedFiles: plan.dismissed || [],
         steps: (plan.steps || []).filter(step => (!rel || step.file === rel) && (include_skipped || step.status !== 'skipped' && !plan.dismissed?.includes(step.file))).map(step => ({ id: step.id, file: step.file, sourceLines: step.newFile ? null : [step.startLine, step.endLine], ...(step.newFile ? { newFile: true } : {}), title: step.title, change: step.change, why: step.why, status: step.status, ...(step.note ? { comment: step.note } : {}), ...(include_pseudocode ? { before: step.before || '', proposed: step.after || '' } : {}) })),
         guidance: 'Read the real source before editing. Preserve human comments and rejections. A plan is not an applied patch. Source ranges may be outdated after edits. Proposed new files do not exist yet and have null sourceLines.' };
     },
@@ -350,11 +351,18 @@ FORMAT FOR save_pseudocode
   // The founder's own agent session: what is on their screen, plans onto the canvas, showing things in Yamori.
   const sessionTools = createSessionTools({ store: () => located.dir, root: () => located.root, project, normalizePlan: (raw, graph) => require('./plan').normalizePlan(raw, graph), journal: require('./conversation') });
   for (const [name, handler] of Object.entries(sessionTools.handlers)) handlers[name] = handler;
+  // done also ends a plan the founder approved in Yamori: it leaves the canvas for history.
+  const stageDone = handlers.done;
+  handlers.done = async (...args) => {
+    const text = await stageDone(...args);
+    const finished = await sessionTools.finishPlan().catch(() => false);
+    return finished ? text + ' The approved plan is finished and moved to history on the Plan canvas.' : text;
+  };
   const WRITES = [...WRITE_TOOLS, ...STAGE_WRITE_TOOLS, ...SESSION_WRITE_TOOLS];
   // Yamori's own explanation requests keep their read-only tool set; stages are for the user's agents.
   // Agents see a short list: fewer, sharper tools cost fewer tokens and get used.
   // The rest stay callable by name for older callers.
-  const AGENT_SHOWN = ['find', 'list_stages', 'get_stage', 'read_source', 'file_info', 'get_pseudocode', 'get_view', 'save_plan', 'show_in_yamori', 'add_note', 'done', 'pseudocode_guide', 'save_pseudocode'];
+  const AGENT_SHOWN = ['find', 'list_stages', 'get_stage', 'read_source', 'file_info', 'get_pseudocode', 'get_view', 'get_plan', 'save_plan', 'show_in_yamori', 'add_note', 'done', 'pseudocode_guide', 'save_pseudocode'];
   // Write tools' fields are named plainly; their per-field notes are dropped for agents.
   const lean = schema => JSON.parse(JSON.stringify(schema, (key, value) => key === 'description' && typeof value === 'string' ? undefined : value));
   const everything = [FIND_TOOL, ...READ_TOOLS, ...STAGE_READ_TOOLS, ...SESSION_READ_TOOLS, ...WRITES].map(tool => AGENT_TEXT[tool.name] ? { ...tool, ...AGENT_TEXT[tool.name] } : tool)

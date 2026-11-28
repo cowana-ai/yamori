@@ -227,6 +227,9 @@ body.vscode-light:not([data-palette="slate"]) #stages-view .st-decision, body[da
 #stages-view .st-full-aside h2 { font-size: 14px; margin: 0 0 6px; }
 #stages-view .st-full-aside .st-chip { white-space: normal; word-break: break-all; text-align: left; }
 #stages-view .st-full-aside button:not(.st-link) { height: 24px; padding: 0 8px; font-size: 12px; }
+#stages-view .st-full-aside button.st-chip { height: auto; min-height: 24px; padding: 3px 8px; line-height: 1.4; max-width: 100%; }
+#stages-view .st-full-aside .st-row { row-gap: 6px; }
+#stages-view .st-full-aside, #stages-view .st-full-aside h2, #stages-view .st-full-aside li { overflow-wrap: anywhere; }
 #stages-view .st-canvas.full { position: fixed; inset: 0; border: 0; z-index: 50; height: auto; resize: none; box-shadow: 0 8px 40px rgba(0,0,0,.45); background-color: var(--read-page); }
 #stages-view .st-full-title { margin-right: 10px; font-size: 13px; }
 #stages-view .st-canvas-hidden { display: flex; gap: 8px; align-items: center; margin: 8px 0; padding: 8px 10px; border: 1px dashed var(--read-border); }
@@ -1050,7 +1053,7 @@ function mountStages(root, post) {
       h('h2', {}, step.what || step.symbol, spacer(), link('flowStep', { key: '' }, 'Close')),
       h('div', { class: 'st-row' }, act('jump', { file: step.file, line: step.line_start || 1 }, step.symbol + ' · ' + step.file + ':' + (step.line_start || '?'), { class: 'st-chip', title: 'Open the source line' }),
         link('flow', { file: step.file, line: step.line_start || 1 }, 'Read it beside the code'), link('openFile', { file: step.file }, 'About this file'),
-        state.terminalChat ? link('agentSession', { prefill: 'About ' + step.symbol + ' in ' + step.file + ': ' }, 'Ask in terminal') : undefined),
+        state.terminalChat ? go('agentSession', { prefill: 'About ' + step.symbol + ' in ' + step.file + ': ' }, 'Ask in terminal…', { title: 'Opens your agent session with this step on the prompt' }) : undefined),
       caller ? h('p', { class: 'st-muted' }, 'Called by: ' + (caller.what || caller.symbol)) : undefined,
       step.details?.length ? h('ul', { class: 'st-behaviors' }, step.details.map(item => h('li', {}, behaviorChip(item.kind), ' ', item.text))) : h('p', { class: 'st-muted' }, 'No key behaviors recorded for this step.'));
   }

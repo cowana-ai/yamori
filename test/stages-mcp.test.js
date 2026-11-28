@@ -92,7 +92,7 @@ test('find answers where/how in one call with the code, and agents get a short, 
     assert.match(text(await server.call('read_source', { path: 'agent/actor.py', symbol: 'run_step' })), /lines 8-9 of/);
     const listed = (await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result;
     assert.ok(JSON.stringify(listed).length < 8000, 'agent tool definitions stay small: ' + JSON.stringify(listed).length);
-    assert.ok(listed.tools.length <= 13);
+    assert.ok(listed.tools.length <= 14);
     const hint = name => listed.tools.find(tool => tool.name === name).annotations;
     assert.deepEqual(hint('find'), { readOnlyHint: true }); assert.deepEqual(hint('get_stage'), { readOnlyHint: true });
     assert.equal(hint('save_plan').readOnlyHint, false); assert.equal(hint('add_note').destructiveHint, false);

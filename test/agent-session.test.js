@@ -82,3 +82,37 @@ test('one persistent agent session per project: started once with Yamori\'s tool
     assert.equal(created.length, 2); assert.match(created[1].options.shellArgs.join(' '), new RegExp('--resume ' + id));
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test('an approved plan leaves the canvas for history when the terminal agent calls done', async () => {
+  const ctx = await standing();
+  try {
+    const names = (await ctx.server.handle({ jsonrpc: '2.0', id: 3, method: 'tools/list' })).result.tools.map(tool => tool.name);
+    assert.ok(names.includes('get_plan'), 'the terminal agent can read the approved plan');
+    await ctx.server.call('save_plan', { goal: 'Retry failed replies', steps: [{ file: 'agents/email/inbox.py', startLine: 5, endLine: 6, title: 'Retry the send', change: 'Try sending twice.' }] });
+    // Not approved: done leaves the plan alone.
+    assert.doesNotMatch(text(await ctx.server.call('done', {})), /moved to history/);
+    const file = path.join(ctx.store, 'plan.json'), plans = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(plans.current);
+    plans.current.approvedAt = Date.now(); plans.current.steps[0].note = 'Keep the timeout short.';
+    fs.writeFileSync(file, JSON.stringify(plans));
+    const plan = JSON.parse(text(await ctx.server.call('get_plan', {})));
+    assert.equal(plan.approved, true); assert.equal(plan.steps[0].comment, 'Keep the timeout short.');
+    assert.match(text(await ctx.server.call('done', {})), /approved plan is finished and moved to history/);
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(after.current, undefined);
+    assert.equal(after.history.at(-1).goal, 'Retry failed replies'); assert.equal(after.history.at(-1).steps[0].status, 'done'); assert.ok(after.history.at(-1).completedAt);
+    assert.equal(after.conversation.messages.at(-1).kind, 'completion');
+  } finally { ctx.cleanup(); }
+});
+
+test('plan comments become one line for the agent prompt; only what was added since the last edit', () => {
+  const stub = { exports: {} };
+  const srcRequire = id => require(id.startsWith('.') ? path.join(__dirname, '..', 'src', id) : id);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? {} : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: path.join(__dirname, '..', 'src'), console, URL, URLSearchParams });
+  const { planComments, APPROVED_PROMPT } = stub.exports;
+  const step = { id: 's1', file: 'a.py', startLine: 3, endLine: 9, title: 'Retry', note: '' };
+  assert.equal(planComments({ steps: [step] }, { steps: [step] }), '');
+  assert.equal(planComments({ steps: [step] }, { steps: [{ ...step, note: 'Shorter\nplease' }] }), '[Plan comment · step 1 “Retry” (a.py:3-9)] Shorter / please ');
+  assert.equal(planComments({ steps: [{ ...step, note: 'One' }] }, { steps: [{ ...step, note: 'One\nTwo' }] }), '[Plan comment · step 1 “Retry” (a.py:3-9)] Two ');
+  assert.doesNotMatch(APPROVED_PROMPT(2), /\n/); assert.match(APPROVED_PROMPT(2), /get_plan.*done/);
+});

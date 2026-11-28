@@ -1422,7 +1422,7 @@ function drawStep(step, index) {
   const change = node('textarea', undefined, 'step-field'); change.value = step.change; change.rows = Math.max(5, Math.ceil(step.change.length / 55)); change.placeholder = 'What to change, in plain words'; change.setAttribute('aria-label', 'What to change in step ' + (index + 1));
   change.addEventListener('input', () => { step.change = change.value; }); change.addEventListener('change', touchPlan);
   const why = node('textarea', undefined, 'step-field'); why.rows = 3; why.value = step.why || ''; why.placeholder = 'Why'; why.addEventListener('input', () => { step.why = why.value; }); why.addEventListener('change', touchPlan);
-  const note = node('textarea', undefined, 'step-field'); note.value = step.note || ''; note.rows = 1; note.placeholder = 'Your note (kept with the plan)'; note.addEventListener('input', () => { step.note = note.value; }); note.addEventListener('change', touchPlan);
+  const note = node('textarea', undefined, 'step-field'); note.value = step.note || ''; note.rows = 1; note.placeholder = state.terminalChat ? 'Your comment (gathers on your agent’s prompt in the terminal; send it there)' : 'Your note (kept with the plan)'; note.addEventListener('input', () => { step.note = note.value; }); note.addEventListener('change', touchPlan);
   const chips = node('div', undefined, 'impact');
   if (impact) {
     if (impact.usedBy?.length) { const chip = node('span', 'used by ' + impact.usedBy.length); chip.title = impact.usedBy.map(link => link.file).join(', '); chips.append(chip); }
@@ -1523,9 +1523,9 @@ function drawPlan() {
   if (actions) {
     actions.hidden = !planMode;
     fresh.disabled = ['implement', 'handoff'].includes(busy?.stage);
-    const approve = node('button', busy?.stage === 'implement' ? 'Implementing…' : 'Approve & implement', 'go');
+    const approve = node('button', busy?.stage === 'implement' ? 'Implementing…' : state.terminalChat && plan?.approvedAt ? 'Approved · agent working' : 'Approve & implement', 'go');
     approve.disabled = !!busy || !!info.question || !plan?.steps.some(step => !['done', 'skipped'].includes(step.status) && !plan.dismissed?.includes(step.file));
-    approve.title = 'Allow the selected agent to edit project files and run checks. Clear the plan after successful completion.';
+    approve.title = state.terminalChat ? (plan?.approvedAt ? 'Your agent in the terminal was told to implement this plan; the plan clears when it calls done. Press to tell it again.' : 'Tell your agent in the terminal to implement this plan. The plan clears when it finishes (calls done).') : 'Allow the selected agent to edit project files and run checks. Clear the plan after successful completion.';
     approve.addEventListener('click', () => { if (!approve.disabled) { flushPlan(); send('planExecute', { id: plan.id }); } });
     const fitButton = node('button', 'Fit canvas'); fitButton.addEventListener('click', fit);
     const copyPlan = node('button', 'Copy plan'); copyPlan.disabled = !hasSteps; copyPlan.addEventListener('click', () => { flushPlan(); send('planCopy', {}); });
