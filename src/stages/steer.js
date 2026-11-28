@@ -95,7 +95,7 @@ async function previewSteer({ db, view, notes, intent, io, request, run, provide
   const sources = steerSources(view.steps, texts);
   if (!sources.length) throw new Error('This stage has no readable code to change.');
   const prompt = steerPrompt({ stage: view, notes, intent: intent.trim(), sources });
-  const estimate = run.check(estimatePrompt(prompt, provider, model));
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
   const response = await request({ prompt, schema: STEER_SCHEMA, tier: 'main', signal });
   run.log({ model: response.model || model, usage: response.usage, workflowId, stageId: view.id, estimate, note: 'steer preview · ' + sources.length + ' source range' + (sources.length === 1 ? '' : 's'), trigger: 'stages.steer' });
   const preview = buildPreview(response.raw, sources, texts);

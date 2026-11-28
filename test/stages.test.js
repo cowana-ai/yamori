@@ -3,7 +3,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const path = require('node:path');
 const project = require('../src/project/graph');
 const { StageDb, available } = require('../src/stages/db');
-const { createRun, normalizeBudget } = require('../src/stages/budget');
+const { createRun } = require('../src/stages/budget');
 const stages = require('../src/stages/generate');
 const { createStageScheduler, timing } = require('../src/stages/scheduler');
 
@@ -43,7 +43,7 @@ async function setup() {
   const ctx = { db, graph, notes: notesFor(graph), explanations: explanationsFor(graph), provider: 'claude', model: 'cheap-model' };
   return ctx;
 }
-const runFor = (db, budget) => createRun(db, { budget: budget || { perRun: 0, perDay: 0 }, trigger: 'test' });
+const runFor = db => createRun(db, { trigger: 'test' });
 // Simulate an edit: new hash in the graph and fresh pseudocode for the edited symbol.
 function edit(ctx, file, symbol, text) {
   const hash = 'edited-' + Math.random().toString(36).slice(2);
@@ -136,17 +136,6 @@ test('pinned and renamed stages survive regeneration and never go stale', { skip
   assert.deepEqual(ctx.db.steps(workflowId, 'plan').map(step => step.symbol), ['plan', 'build_prompt', 'split_steps']);
 });
 
-test('budgets stop a call before it is made and leave the stage as needs update', { skip }, async () => {
-  const ctx = await setup(), model = fakeModel(() => STAGES);
-  const { workflowId } = await stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', request: model.request, run: runFor(ctx.db) });
-  stages.fileChanged(ctx.db, 'agent/planner.py', edit(ctx, 'agent/planner.py'));
-  const result = await stages.refreshStale({ ...ctx, workflowId, request: model.request, run: runFor(ctx.db, { perRun: 0, perDay: 1500 }) });
-  assert.equal(result.calls, 0); assert.equal(model.calls.length, 1);
-  assert.match(result.skipped[0].reason, /daily budget/);
-  assert.ok(ctx.db.stage(workflowId, 'plan').stale);
-  await assert.rejects(stages.generateWorkflow({ ...ctx, entryFile: 'main.py', entrySymbol: 'run_agent', id: 'other', request: model.request, run: runFor(ctx.db, { perRun: 10, perDay: 0 }) }), /per-run budget/);
-  assert.deepEqual(normalizeBudget(5000), { perRun: 60000, perDay: 5000 });
-});
 
 test('the estimate lists files without notes and the "only these files" option limits the input', { skip }, async () => {
   const ctx = await setup();
@@ -409,12 +398,14 @@ test('thin wrappers give way to the function that does the work, keeping their n
     'the tool wrapper (plumbing aside, one real call) becomes its tool function; a function that calls two is kept');
 });
 
-test('the budget counts cache reads at a tenth, so cached prompts do not use up the day', () => {
+test('stage runs are never capped: every estimate goes through and is logged', () => {
   const { StageDb } = require('../src/stages/db');
   const db = new StageDb(':memory:');
-  db.logCall({ trigger: 't', input: 1000, cached: 9000, output: 500 });
-  assert.doesNotThrow(() => createRun(db, { budget: { perRun: 0, perDay: 3000 } }).check(500), '1000 + 500 + 900 = 2400 spent; 500 more fits in 3000');
-  assert.throws(() => createRun(db, { budget: { perRun: 0, perDay: 3000 } }).check(700), /daily budget \(2,400 of 3,000 used\)/);
+  db.logCall({ trigger: 't', input: 10000000, cached: 0, output: 500 });
+  const run = createRun(db, { trigger: 'system.update' });
+  assert.equal(run.estimate(250000.2), 250001, 'a large estimate after a big day is not refused');
+  run.log({ model: 'm', estimate: 250001 });
+  assert.equal(db.usage({ runId: run.id }).input, 250001);
 });
 
 test('the How it works search is loose: word endings, one typo, same-meaning verbs; steps with the most words come first', () => {

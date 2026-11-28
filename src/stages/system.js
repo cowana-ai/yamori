@@ -187,7 +187,7 @@ async function buildSystem({ db, graph, notes, explanations, texts, request, run
   const found = candidates(graph, texts);
   if (!found.length) throw new Error('Yamori found no functions that could start a part of this project.');
   const prompt = systemPrompt({ graph, notes, found, project });
-  const estimate = run.check(estimatePrompt(prompt, provider, model));
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
   if (signal?.aborted) throw new Error('Cancelled.');
   const response = await request({ prompt, schema: SYSTEM_SCHEMA, tier: 'cheap', signal });
   run.log({ model: response.model || model, usage: response.usage, estimate, note: 'system map · ' + found.length + ' candidates', trigger: 'system.map' });
@@ -370,7 +370,7 @@ async function routeIntent({ db, graph, intent, notes, request, run, provider, m
   const view = systemView(db, graph);
   if (!view.parts.length) throw new Error('Map the system first.');
   const prompt = routePrompt({ view, intent: intent.trim(), notes, scope });
-  const estimate = run.check(estimatePrompt(prompt, provider, model));
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
   const response = await request({ prompt, schema: ROUTE_SCHEMA, tier: 'cheap', signal });
   run.log({ model: response.model || model, usage: response.usage, estimate, note: 'find where a change goes', trigger: 'system.route' });
   const value = parseJson(response.raw, 'The router');

@@ -3,13 +3,13 @@
 // parts (one per workflow, found automatically) made of a few steps each.
 // One SQLite store per project folder. Everything shown is served from SQLite,
 // the caches and the notes on disk; AI runs only on an explicit action or
-// after saves settle, and every call is budgeted and logged.
+// after saves settle, and every call is logged.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { PROJECT_DIR, PROJECT_FILES } = require('../config');
+const { PROJECT_DIR, PROJECT_FILES, EXCLUDED_DIRS } = require('../config');
 const { openStageDb, closeStageDb, dbPath, available, StageDbUnavailable } = require('./db');
-const { createRun, normalizeBudget, activity } = require('./budget');
+const { createRun, activity } = require('./budget');
 const stages = require('./generate');
 const system = require('./system');
 const { createStageScheduler } = require('./scheduler');
@@ -20,7 +20,6 @@ const { lineDiff } = require('../views/stages');
 
 function createStages({ api, context, map, setting, gitOperationInProgress, extensions = {}, obsidianConfig = defaultObsidianConfig() }) {
   const projects = new Map();
-  const budget = () => normalizeBudget(setting('tokenBudget', undefined));
   const autoUpdate = () => setting('stages.autoUpdate', true) !== false;
 
   function projectFor(entry) {
@@ -116,8 +115,8 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     // Stage work (mapping, step writing, updates) is simple and structured: low
     // reasoning effort cut output tokens in half and time by about 3x in testing.
     const connection = tier === 'cheap' ? { ...(await map.connection(tier)), effort: 'low' } : await map.connection(tier);
-    // Agents' propose_change (MCP, outside VS Code) uses the same provider and budget.
-    try { for (const item of projects.values()) if (item.db && tier === 'cheap') { item.db.setMeta('connection:cheap', JSON.stringify({ provider: connection.provider, model: connection.model || '', effort: connection.effort ?? null, cliPath: connection.cliPath || '' })); item.db.setMeta('budget', JSON.stringify(budget())); } } catch { /* Agents fall back to get_stage. */ }
+    // Agents' propose_change (MCP, outside VS Code) uses the same provider.
+    try { for (const item of projects.values()) if (item.db && tier === 'cheap') { item.db.setMeta('connection:cheap', JSON.stringify({ provider: connection.provider, model: connection.model || '', effort: connection.effort ?? null, cliPath: connection.cliPath || '' })); } } catch { /* Agents fall back to get_stage. */ }
     return {
       provider: connection.provider, model: connection.model,
       request: async ({ prompt, schema, signal }) => {
@@ -143,7 +142,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (!available()) return { unavailable: new StageDbUnavailable().message };
     const graph = item.entry.graph || { files: {} };
     const db = dbFor(item, false), vault = vaultFor(item);
-    const base = { terminalChat: map.chatInTerminal ? map.chatInTerminal() : false, agentSession: !!map.agentSessionAlive?.(item.entry), layouts: layoutsFor(item), repo: path.basename(item.root), busy: item.busy, error: item.error, notice: item.notice, budget: budget(),
+    const base = { terminalChat: map.chatInTerminal ? map.chatInTerminal() : false, agentSession: !!map.agentSessionAlive?.(item.entry), layouts: layoutsFor(item), repo: path.basename(item.root), busy: item.busy, error: item.error, notice: item.notice,
       changes: { pending: item.scheduler?.pending.length || 0, auto: autoUpdate() },
       vault: { obsidian: vault.obsidian, where: vault.obsidian ? path.basename(vault.vaultPath) + ' › Yamori › ' + vault.repo : '.yamori/notes in this project', dir: vault.dir, lastSync: item.lastSync } };
     if (!db || !db.workflows().length) return { ...base, estimate: estimateFor(item), system: undefined, activity: db ? activity(db) : undefined };
@@ -162,6 +161,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       partCalls: item.workflowId ? item.callLinks?.[item.workflowId]?.links : undefined,
       partBuiltFrom: item.workflowId ? item.callLinks?.[item.workflowId]?.builtFrom : undefined,
       partLayers: item.workflowId ? item.callLinks?.[item.workflowId]?.layers : undefined,
+      partData: item.workflowId ? item.callLinks?.[item.workflowId]?.data : undefined,
       shared: item.shared ? sharedDetail(item, view) : undefined,
       file: item.file ? system.fileDetail(db, graph, item.entry.notes, item.file, item.entry.explanations) : undefined,
       route: item.route, steer: item.steer && steerState(item.steer), activity: activity(db) };
@@ -295,7 +295,11 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     }
     // What each class is made of and how data moves through it (shared cache with the notes).
     const layers = (await classLayersFor(item, [...texts.keys()], texts)).layers;
-    item.callLinks[workflowId] = { signature, links, builtFrom, layers };
+    // The documents and data files its steps read and write (no AI).
+    const { partData, listProjectFiles } = require('./datafiles');
+    let data = [];
+    try { data = partData({ steps, tree, texts, listFiles: () => listProjectFiles(item.root, { skip: [...EXCLUDED_DIRS, PROJECT_DIR] }) }); } catch { /* The diagram shows without data. */ }
+    item.callLinks[workflowId] = { signature, links, builtFrom, layers, data };
   }
   // What classes are made of, read from code (no AI), cached by the files' content:
   // the Your System tab and the Obsidian notes ask for the same files often.
@@ -371,7 +375,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const { provider, model, request: send } = await request('cheap');
     item.route = { intent, phase: 'routing' }; item.steer = undefined; post(item);
     try {
-      const result = await system.routeIntent({ db, graph: item.entry.graph, intent, notes: vaultFor(item).systemNotes(), request: send, run: createRun(db, { budget: budget(), trigger: 'system.route' }), provider, model, scope: scope?.part && db.workflow(scope.part) ? { part: scope.part } : undefined });
+      const result = await system.routeIntent({ db, graph: item.entry.graph, intent, notes: vaultFor(item).systemNotes(), request: send, run: createRun(db, { trigger: 'system.route' }), provider, model, scope: scope?.part && db.workflow(scope.part) ? { part: scope.part } : undefined });
       item.route = { ...result, phase: 'routed' };
     } catch (error) { item.route = undefined; throw error; }
   }
@@ -390,7 +394,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const { provider, model, request: send } = await request('main');
     item.steer = { intent, targets: valid, phase: 'previewing' }; post(item);
     try {
-      const preview = await steer.previewSteer({ db, view, notes, intent, io: steerIO(item), request: send, run: createRun(db, { budget: budget(), trigger: 'system.steer' }), provider, model, workflowId: valid[0].part || stepsOfFile(db, valid[0].file)[0]?.part || null, signal: controller.signal });
+      const preview = await steer.previewSteer({ db, view, notes, intent, io: steerIO(item), request: send, run: createRun(db, { trigger: 'system.steer' }), provider, model, workflowId: valid[0].part || stepsOfFile(db, valid[0].file)[0]?.part || null, signal: controller.signal });
       if (controller.signal.aborted) return;
       item.steer = { intent, targets: valid, phase: preview.files.length ? 'preview' : 'empty', preview, message: preview.files.length ? '' : preview.summary || 'No change was proposed.' };
     } catch (error) {
@@ -533,7 +537,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const parts = ids.map(id => db.workflow(id)).filter(Boolean);
     if (!parts.length) return;
     const { provider, model, request: send } = await request('cheap');
-    const run = createRun(db, { budget: { perRun: 0, perDay: 0 }, trigger: 'system.remap' });
+    const run = createRun(db, { trigger: 'system.remap' });
     let done = 0; const failed = [];
     await busy(item, 'Mapping ' + (parts.length === 1 ? (parts[0].name || parts[0].id) : parts.length + ' parts') + ' again…', async () => {
       await Promise.all(parts.map(async part => {
@@ -553,7 +557,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const entry = item.entry = await map.ensureGraph(item.entry), db = dbFor(item);
     const parts = ids.map(id => db.workflow(id)).filter(Boolean);
     const { provider, model, request: send } = await request('cheap');
-    const run = createRun(db, { budget: { perRun: 0, perDay: 0 }, trigger: 'system.describe' });
+    const run = createRun(db, { trigger: 'system.describe' });
     let described = 0; const failed = [];
     await busy(item, 'Describing the missing steps…', async () => {
       await Promise.all(parts.map(async part => {
@@ -580,7 +584,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     await busy(item, 'Finding the parts of your system…', async () => {
       const texts = await readTexts(item, system.readFiles(entry.graph));
       // You asked for the map after seeing its estimate: it is logged, not capped.
-      const run = createRun(db, { budget: { perRun: 0, perDay: 0 }, trigger: 'system.map' });
+      const run = createRun(db, { trigger: 'system.map' });
       const result = await system.buildSystem({ db, graph: entry.graph, notes: entry.notes, explanations: entry.explanations, texts, request: send, run, provider, model, headSha: await head(item), project: path.basename(item.root), force,
         readText: file => map.readSource(entry, file),
         onProgress: text => { item.busy = text; post(item); } });
@@ -595,7 +599,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (!targets.length) { sync(item); item.notice = 'Everything is up to date: no code changed since the last update.' + syncLine(item); return { calls: 0 }; }
     const { provider, model, request: send } = await request('cheap');
     const readExcerpt = async (file, from, to) => { try { return (await map.readSource(entry, file)).split('\n').slice(from - 1, to).map((line, index) => (from + index) + ': ' + line).join('\n'); } catch { return undefined; } };
-    const run = createRun(db, { budget: budget(), trigger });
+    const run = createRun(db, { trigger });
     let calls = 0; const skipped = [];
     await busy(item, 'Updating the steps whose code changed…', async () => {
       for (const workflowId of targets) {
@@ -656,7 +660,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     // Command palette: map the whole system, with one confirmation.
     fromEntry: async entry => { const item = projectFor(entry); await show(entry); await buildSystem(item, { confirm: true }); post(item); },
     regenerate: async entry => { const item = projectFor(entry); await show(entry); await buildSystem(item, { force: true }); post(item); },
-    saved, updateChanged, post, state, projectFor, dbFor, vaultFor, sync, vaultChanged, request, budget, busy,
+    saved, updateChanged, post, state, projectFor, dbFor, vaultFor, sync, vaultChanged, request, busy,
     // An agent finished a run (MCP `done`): summarize once, now.
     agentDone(entry) { projectFor(entry).scheduler.done(); },
     dispose() { for (const item of projects.values()) { item.closed = true; item.scheduler.dispose(); item.steerController?.abort(); item.doneWatch?.close(); item.vaultWatch?.close(); clearTimeout(item.vaultTimer); if (item.db) closeStageDb(item.db.file); } projects.clear(); }

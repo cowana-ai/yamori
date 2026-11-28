@@ -1,50 +1,20 @@
 'use strict';
-// Every stage model call is a budgeted, logged event. Callers estimate first;
-// a call that would exceed the per-run or per-day budget is not made, and the
-// stage stays "Needs update" instead.
+// Every stage model call is a logged event: estimated before it is sent, then
+// recorded with its real usage for the AI use view. Nothing is capped.
 const { estimateTokens } = require('../project/token-estimates');
 const { dayOf } = require('./db');
 
-const DEFAULT_BUDGET = { perRun: 60000, perDay: 1500000 };
-// Cache reads cost about a tenth of fresh input, so they count a tenth here.
+// Cache reads cost about a tenth of fresh input, so totals count them at a tenth.
 const CACHE_WEIGHT = 0.1;
 const spentOf = used => used.input + used.output + used.cached * CACHE_WEIGHT;
 
-function normalizeBudget(value) {
-  const read = (key, fallback) => {
-    const number = Number(value?.[key]);
-    return Number.isFinite(number) && number >= 0 ? Math.floor(number) : fallback;
-  };
-  if (typeof value === 'number') return { perRun: DEFAULT_BUDGET.perRun, perDay: Math.max(0, Math.floor(value)) };
-  return { perRun: read('perRun', DEFAULT_BUDGET.perRun), perDay: read('perDay', DEFAULT_BUDGET.perDay) };
-}
-
-class BudgetExceeded extends Error {
-  constructor(scope, used, limit, estimate) {
-    super(`Needs update: this would use about ${estimate.toLocaleString()} tokens, over the ${scope} budget (${used.toLocaleString()} of ${limit.toLocaleString()} used). Raise yamori.tokenBudget or update later.`);
-    this.code = 'YAMORI_BUDGET'; this.scope = scope;
-  }
-}
-
 // A run groups the calls one user action or one settled batch makes.
-function createRun(db, { budget, trigger, runId = 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7), clock = () => new Date() } = {}) {
-  const limits = normalizeBudget(budget);
+function createRun(db, { trigger, runId = 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7), clock = () => new Date() } = {}) {
   return {
-    id: runId, trigger, limits,
+    id: runId, trigger,
     used() { return db.usage({ runId }); },
-    // Estimated input + a fixed output allowance; zero limits mean "no limit".
-    check(estimate) {
-      const tokens = Math.ceil(estimate);
-      if (limits.perRun) {
-        const used = this.used(), spent = Math.round(spentOf(used));
-        if (spent + tokens > limits.perRun) throw new BudgetExceeded('per-run', spent, limits.perRun, tokens);
-      }
-      if (limits.perDay) {
-        const used = db.usage({ day: dayOf(clock()) }), spent = Math.round(spentOf(used));
-        if (spent + tokens > limits.perDay) throw new BudgetExceeded('daily', spent, limits.perDay, tokens);
-      }
-      return tokens;
-    },
+    // The rounded estimate, logged when a call has no reported usage.
+    estimate(tokens) { return Math.ceil(tokens); },
     log({ model, usage, workflowId, stageId, estimate, note, trigger: callTrigger }) {
       const actual = usage && (Number.isFinite(usage.input) || Number.isFinite(usage.output));
       db.logCall({
@@ -67,4 +37,4 @@ function activity(db, { day = dayOf(new Date()), limit = 50 } = {}) {
   return { day, total: db.usage({ day }), calls: db.calls({ day, limit }) };
 }
 
-module.exports = { CACHE_WEIGHT, spentOf, DEFAULT_BUDGET, normalizeBudget, BudgetExceeded, createRun, estimatePrompt, activity, OUTPUT_ALLOWANCE };
+module.exports = { CACHE_WEIGHT, spentOf, createRun, estimatePrompt, activity, OUTPUT_ALLOWANCE };

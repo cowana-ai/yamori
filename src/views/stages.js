@@ -124,6 +124,13 @@ body.vscode-light:not([data-palette="slate"]) #stages-view, body[data-palette="p
 body.vscode-light:not([data-palette="slate"]) #stages-view .st-kind, body[data-palette="paper"] #stages-view .st-kind { filter: brightness(.7) saturate(1.3); }
 #stages-view .st-node-kinds { display: flex; flex-wrap: wrap; gap: 3px; }
 #stages-view .st-node.flowstep { gap: 4px; }
+#stages-view .st-node.st-data { gap: 4px; border-style: dashed; border-radius: 2px 14px 2px 2px; background: color-mix(in srgb, oklch(70% .12 200) 8%, var(--read-surface, var(--read-page))); cursor: pointer; }
+#stages-view .st-node.st-data.onpath { border-style: solid; border-color: var(--read-link, var(--read-ink)); box-shadow: 0 0 0 1px var(--read-link, var(--read-ink)); }
+#stages-view .st-node.st-data.selected { border-style: solid; border-color: var(--read-ink); box-shadow: 3px 3px 0 var(--read-ink); }
+#stages-view .st-node.st-data.dim { opacity: .38; }
+#stages-view .st-node.st-data .st-node-meta { white-space: normal; overflow: visible; text-overflow: clip; }
+#stages-view .st-data-kind { font: 600 10px/1.4 ui-monospace, monospace; letter-spacing: .05em; color: oklch(62% .12 200); }
+#stages-view .st-data-path { font: 11.5px/1.35 ui-monospace, monospace; overflow-wrap: anywhere; color: var(--read-ink); background: none; padding: 0; }
 #stages-view .st-node.flowstep.sub { background: var(--read-page); }
 #stages-view .st-decision { font-size: 11.5px; line-height: 15px; color: oklch(80% .12 75); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 #stages-view .st-decision.stops { color: oklch(72% .15 25); }
@@ -699,18 +706,24 @@ function mountStages(root, post) {
     // A clicked box takes over the trace; matches stay outlined.
     if (current && !clicked) { path.add(current.ref); walk(current.ref, callers, 6).forEach(ref => path.add(ref)); walk(current.ref, calls, 1).forEach(ref => path.add(ref)); }
     if (clicked) { path.add(clicked.ref); walk(clicked.ref, callers, 6).forEach(ref => path.add(ref)); walk(clicked.ref, calls, 3).forEach(ref => path.add(ref)); }
+    // A clicked data box lights the steps that read or write it.
+    const data = state.partData || [], dataPick = !clicked && data.find(item => item.id === ui.flowData);
+    if (dataPick && !current) for (const ref of [...dataPick.reads, ...dataPick.writes]) path.add(ref);
     if (clicked && insideRefOf(clicked.step) && flowModeOf(clicked.step) === 'inside') return insideView(part, clicked, entries, words);
     if (clicked) return pathView(part, clicked, entries.find(entry => entry.key === ui.flowStep) || clicked, entries, calls, callers, walk, height, words);
-    const active = !!(clicked || hits.length), hitRefs = new Set(hits.map(hit => hit.ref));
+    const active = !!(clicked || hits.length || dataPick), hitRefs = new Set(hits.map(hit => hit.ref));
     const lookOf = entry => current?.ref === entry.ref ? 'hit current' : hitRefs.has(entry.ref) ? 'hit' : path.has(entry.ref) ? 'onpath' : active ? 'dim' : '';
     // A method sits inside its class's box when that class is a step of the same stage.
     for (const entry of entries) if (entry.step.kind === 'method') entry.host = entries.find(other => other.stage === entry.stage && other.step.kind === 'class' && other.step.symbol === entry.step.owner && other.step.file === entry.step.file);
     const membersOf = host => entries.filter(entry => entry.host === host);
     const classHeight = (entry, members) => height(entry.step) + (state.partLayers?.[entry.ref] ? 20 : 0) + (state.partBuiltFrom?.[entry.ref] ? 6 + 15 * lines('Built from ' + state.partBuiltFrom[entry.ref].join(' · '), 34) : 0) + (members.length ? 14 + members.reduce((sum, member) => sum + 25 + 15 * Math.min(2, lines(member.step.what, 30)), 0) : 0);
     const nodes = [], edges = [], idOf = ref => { const entry = byRef.get(ref); return entry && (entry.host || entry).id; };
+    // Documents and data: what only gets read on the left, what gets written on the right.
+    const DW = 200, inputs = data.filter(item => !item.writes.length && item.reads.some(ref => byRef.has(ref))), outputs = data.filter(item => item.writes.some(ref => byRef.has(ref)));
+    const DX = inputs.length ? DW + GX : 0;
     let previousLast;
     flow.forEach((stage, c) => {
-      const x = c * (W + GX), stageLit = !active || stage.steps.some(step => path.has(step.file + '#' + step.symbol));
+      const x = DX + c * (W + GX), stageLit = !active || stage.steps.some(step => path.has(step.file + '#' + step.symbol));
       nodes.push({ id: 'head:' + stage.id, fixed: true, x, y: 0, w: W, h: HEAD - 8, content: h('div', { class: 'st-flowhead' + (state.card?.id === stage.id ? ' on' : '') + (stageLit ? '' : ' dim'), data: { act: 'openStage', part: part.id, id: state.card?.id === stage.id ? '' : stage.id }, style: 'border-bottom-color:' + stepColor(part.id, stage.id), title: stage.gist || '' }, (c + 1) + '. ' + stage.name) });
       let y = HEAD, lastTop;
       stage.steps.forEach((step, index) => {
@@ -736,25 +749,38 @@ function mountStages(root, post) {
     }
     // The path itself: call links between lit steps, drawn bold, even across stages.
     if (active) for (const from of path) for (const to of calls.get(from) || []) if (path.has(to) && idOf(from) !== idOf(to) && !edges.some(edge => edge.from_ref === from && edge.to_ref === to)) edges.push({ from: idOf(from), to: idOf(to), path: true, from_ref: from, to_ref: to, title: byRef.get(from).step.symbol + ' calls ' + byRef.get(to).step.symbol });
+    const placeData = (list, x) => {
+      let bottom = HEAD;
+      const top = item => Math.min(...[...item.reads, ...item.writes].map(ref => nodes.find(node => node.id === idOf(ref))?.y ?? Infinity));
+      for (const item of list.slice().sort((a, b) => top(a) - top(b))) {
+        const y = Math.max(bottom, Number.isFinite(top(item)) ? top(item) : bottom), hgt = 46 + 16 * Math.ceil(item.pattern.length / 22) + 16 * Math.ceil((usedBy(item) + (item.matches ? ' · ' + plural(item.matches, 'file') + ' now' : '')).length / 26);
+        const refs = [...item.reads, ...item.writes].filter(ref => byRef.has(ref));
+        nodes.push({ id: 'data:' + item.id, x, y, w: DW, h: hgt, refs, content: dataBox(item, dataPick?.id === item.id ? 'selected' : active ? (refs.some(ref => path.has(ref)) ? 'onpath' : 'dim') : '') });
+        bottom = y + hgt + GY;
+        for (const ref of item.reads) if (byRef.has(ref)) edges.push({ from: 'data:' + item.id, to: idOf(ref), soft: true, data: true, title: byRef.get(ref).step.symbol + ' reads ' + item.pattern });
+        for (const ref of item.writes) if (byRef.has(ref)) edges.push({ from: idOf(ref), to: 'data:' + item.id, soft: true, data: true, title: byRef.get(ref).step.symbol + ' writes ' + item.pattern });
+      }
+    };
+    placeData(inputs, 0); placeData(outputs, DX + flow.length * (W + GX));
     const lit = new Map(nodes.filter(node => node.refs).map(node => [node.id, node.refs.some(ref => path.has(ref))]));
     for (const edge of edges) {
       const both = lit.get(edge.from) && lit.get(edge.to);
       if (active) { edge.hot = both && (edge.path || edge.soft); edge.dim = !both; }
     }
     if (!entries.length) return h('p', { class: 'st-muted' }, 'No steps mapped yet.');
-    const width = flow.length * (W + GX) - GX, tall = Math.max(...nodes.map(node => node.y + node.h));
+    const width = DX + flow.length * (W + GX) - GX + (outputs.length ? GX + DW : 0), tall = Math.max(...nodes.map(node => node.y + node.h));
     keepFull(part, graphKey);
     const bar = () => h('div', { class: 'st-flowbar' },
         h('input', { id: 'st-flowsearch', type: 'search', placeholder: 'Find in this part, e.g. angle selection', value: ui.flowQuery || '', 'aria-label': 'Find steps in this part', autocomplete: 'off', spellcheck: 'false' }),
         words.length ? muted(hits.length ? hits.length + (hits.length === 1 ? ' match' : ' matches') + (hits.length > 1 ? ' · ' + (((ui.flowHit || 0) % hits.length + hits.length) % hits.length + 1) + ' of ' + hits.length : '') : 'No match') : muted(ui.full === graphKey ? 'Click a box to trace its path.' : 'Type words from a step, a behavior, a function or a file. Click a box to trace its path.'),
         hits.length > 1 ? [act('flowHit', { by: -1 }, '↑', { title: 'Previous match (Shift+Enter)' }), act('flowHit', { by: 1 }, '↓', { title: 'Next match (Enter)' })] : undefined,
         words.length || clicked ? link('flowClear', {}, 'Clear') : undefined);
-    const canvas = graphView(graphKey, { nodes, edges, width, height: tall, minHeight: 360, maxHeight: 760, minZoom: 0.7, label: 'How ' + part.name + ' works', aside: clicked ? flowStepDetail(clicked.step) : undefined, toolbar: bar });
+    const canvas = graphView(graphKey, { nodes, edges, width, height: tall, minHeight: 360, maxHeight: 760, minZoom: 0.7, label: 'How ' + part.name + ' works', aside: clicked ? flowStepDetail(clicked.step) : dataPick ? dataDetail(dataPick, byRef) : undefined, toolbar: bar });
     // Where each box ended up (after any dragging), to jump to a match.
     ui.flowPlaces = { key: graphKey, hits: hits.map(hit => nodes.find(node => node.refs?.includes(hit.ref))).filter(Boolean).map(node => ({ x: node.x, y: node.y, w: node.w, h: node.h })) };
     const picked = clicked?.step;
     return [ui.full === graphKey ? undefined : bar(),
-      canvas, picked ? flowStepDetail(picked) : undefined];
+      canvas, picked ? flowStepDetail(picked) : dataPick ? dataDetail(dataPick, byRef) : undefined];
   }
   // Moving between a part's whole diagram and a step's path stays in full view.
   function resetInside() { ui.flowMode = ui.flowLayer = ui.walk = undefined; ui.insideTrail = []; }
@@ -999,6 +1025,25 @@ function mountStages(root, post) {
     return undefined;
   }
   const codeName = step => step.kind === 'method' && step.owner ? step.owner + '.' + step.symbol : step.symbol;
+  // A document or data file on a part's diagram: its format, its path pattern, who uses it.
+  const FORMAT_NAMES = { md: 'Markdown', csv: 'CSV table', tsv: 'TSV table', pdf: 'PDF', json: 'JSON', jsonl: 'JSON lines', yaml: 'YAML', txt: 'Text', parquet: 'Parquet table', xlsx: 'Excel', docx: 'Word', pkl: 'Pickle', npy: 'NumPy array', pt: 'Model weights', image: 'Image', folder: 'Folder', dataset: 'Dataset', sqlite: 'SQLite', html: 'HTML', file: 'File' };
+  const usedBy = item => [item.reads.length ? 'read by ' + plural(item.reads.length, 'step') : '', item.writes.length ? 'written by ' + plural(item.writes.length, 'step') : ''].filter(Boolean).join(' · ');
+  function dataBox(item, look = '') {
+    return h('div', { class: 'st-node st-data' + (look ? ' ' + look : ''), data: { act: 'flowData', id: item.id }, role: 'button', tabindex: 0,
+      title: (FORMAT_NAMES[item.format] || item.format) + ' · ' + item.pattern + (item.examples?.length ? '\ne.g. ' + item.examples[0] : '') },
+      h('span', { class: 'st-data-kind fmt-' + item.format }, (item.format === 'file' ? 'FILE' : item.format.toUpperCase()) + (item.writes.length && item.reads.length ? ' · in & out' : item.writes.length ? ' · out' : ' · in')),
+      h('code', { class: 'st-data-path' }, item.pattern),
+      h('div', { class: 'st-node-meta' }, usedBy(item) + (item.matches ? ' · ' + plural(item.matches, 'file') + ' now' : '')));
+  }
+  function dataDetail(item, byRef) {
+    const steps = (refs, verb) => refs.filter(ref => byRef.has(ref)).length ? h('div', { class: 'st-row' }, h('b', {}, verb), ...refs.filter(ref => byRef.has(ref)).map(ref => link('flowStep', { key: byRef.get(ref).key }, byRef.get(ref).step.what || byRef.get(ref).step.symbol))) : undefined;
+    return h('div', { class: 'st-detail st-flow-detail' },
+      h('h2', {}, (FORMAT_NAMES[item.format] || 'File') + ': ' + item.pattern, spacer(), link('flowData', { id: '' }, 'Close')),
+      h('p', { class: 'st-muted' }, 'Found in the code, no AI. {name} parts are filled in when the code runs.'),
+      steps(item.reads, 'Read by'), steps(item.writes, 'Written by'),
+      h('div', { class: 'st-row' }, h('b', {}, 'In code'), ...item.at.map(at => act('jump', { file: at.file, line: at.line }, fileName(at.file) + ':' + at.line, { class: 'st-chip', title: at.file + ':' + at.line }))),
+      item.examples?.length ? h('div', { class: 'st-row' }, h('b', {}, item.matches === 1 ? 'The file now' : plural(item.matches, 'file') + ' now, e.g.'), ...item.examples.map(file => act('jump', { file, line: 1 }, file, { class: 'st-chip', title: 'Open ' + file }))) : h('p', { class: 'st-muted' }, 'No file like this in the project right now.'));
+  }
   function flowBox(step, key, color, look = '', words = []) {
     const decisionsOf = (step.details || []).filter(item => item.kind === 'decides' || item.kind === 'stops').slice(0, 3);
     return h('div', { class: 'st-node flowstep' + (step.depth ? ' sub' : '') + (step.kind === 'class' ? ' classbox' : step.kind === 'method' ? ' methodbox' : '') + (look ? ' ' + look : ''), data: { act: 'flowStep', key }, role: 'button', tabindex: 0, style: step.depth && step.kind !== 'class' ? undefined : 'border-left: 4px solid ' + color,
@@ -1048,6 +1093,13 @@ function mountStages(root, post) {
     const picked = ui.flowStep?.startsWith(stage.id + ':') ? stage.steps[Number(ui.flowStep.slice(stage.id.length + 1))] : undefined;
     return [graphView('flow:' + part + '/' + stage.id, { nodes: out, edges, width, height: tall, minHeight: 240, maxHeight: 640, minZoom: 0.75, label: 'How ' + stage.name + ' works', aside: picked ? flowStepDetail(picked) : undefined }), picked ? flowStepDetail(picked) : undefined];
   }
+  // The documents and data files a step reads and writes (from its code and its helpers).
+  function stepFiles(step) {
+    const ref = step.file + '#' + step.symbol, mine = (state.partData || []).filter(item => item.reads.includes(ref) || item.writes.includes(ref));
+    if (!mine.length) return undefined;
+    const row = (label, list) => list.length ? h('div', { class: 'st-row' }, h('b', {}, label), ...list.map(item => act('flowData', { id: item.id }, item.pattern, { class: 'st-chip', title: (FORMAT_NAMES[item.format] || item.format) + ' · ' + usedBy(item) }))) : undefined;
+    return [row('Reads', mine.filter(item => item.reads.includes(ref))), row('Writes', mine.filter(item => item.writes.includes(ref)))];
+  }
   // Everything about one step: what it does, every key behavior, and where it is.
   function flowStepDetail(step) {
     const caller = step.parent ? stagesStep(step.parent) : undefined;
@@ -1057,6 +1109,7 @@ function mountStages(root, post) {
         link('flow', { file: step.file, line: step.line_start || 1 }, 'Read it beside the code'), link('openFile', { file: step.file }, 'About this file'),
         state.terminalChat ? go('agentSession', { prefill: 'About ' + step.symbol + ' in ' + step.file + ': ' }, 'Ask in terminal…', { title: 'Opens your agent session with this step on the prompt' }) : undefined),
       caller ? h('p', { class: 'st-muted' }, 'Called by: ' + (caller.what || caller.symbol)) : undefined,
+      stepFiles(step),
       step.details?.length ? h('ul', { class: 'st-behaviors' }, step.details.map(item => h('li', {}, behaviorChip(item.kind), ' ', item.text))) : h('p', { class: 'st-muted' }, 'No key behaviors recorded for this step.'));
   }
   const stagesStep = key => [...(state.card?.steps || []), ...(state.partFlow || []).flatMap(stage => stage.steps)].find(step => step.file + '#' + step.symbol === key);
@@ -1260,9 +1313,11 @@ function mountStages(root, post) {
       case 'allSupport': ui.allSupport = !ui.allSupport; render(); return;
       case 'partTab': ui.partTab = data.tab; render(); return;
       case 'flowHit': ui.flowHit = (ui.flowHit || 0) + Number(data.by); (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); jumpToHit(); return;
-      case 'flowClear': ui.flowQuery = ''; (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); return;
+      case 'flowClear': ui.flowQuery = ''; ui.flowData = undefined; (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); return;
+      case 'flowData': ui.flowData = data.id && ui.flowData !== data.id ? data.id : undefined; (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); return;
       case 'flowBack': (ui.flowStep = ui.flowRoot = undefined, resetInside()); render(); jumpToHit(); return;
       case 'flowStep':
+        ui.flowData = undefined;
         // In a part's steps: the first click opens that step's path; clicks along it only select.
         if (!data.key) (ui.flowStep = ui.flowRoot = undefined, resetInside());
         else if (data.key.startsWith('p:') && ui.flowRoot) { ui.flowStep = data.key; render(); requestAnimationFrame(revealSelected); return; }

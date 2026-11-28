@@ -2,12 +2,12 @@
 // Stage tools for agents (Claude Code, Codex, Cursor) on Yamori's MCP server.
 // Read tools are served from SQLite, the pseudocode cache and the notes on
 // disk: no model calls. add_note and done are file IO. propose_change is the
-// one costly tool: rate-limited and counted against the token budget.
+// one costly tool: rate-limited and logged as AI use.
 const fs = require('node:fs');
 const path = require('node:path');
 const { PROJECT_DIR, PROJECT_FILES } = require('../config');
 const { openStageDb, closeStageDb, dbPath, available, dayOf } = require('./db');
-const { createRun, normalizeBudget, estimatePrompt } = require('./budget');
+const { createRun, estimatePrompt } = require('./budget');
 const { render } = require('../prompts');
 const describe = require('../prompts').descriptions('stages/tools');
 const stages = require('./generate');
@@ -143,8 +143,8 @@ function createStageTools({ root, requestStructured, now = () => Date.now() }) {
       const view = stages.stageView(base, graph || { files: {} }, explanations, workflowId, found.id);
       const notes = vault().constraints(workflowId, found.id);
       const prompt = render('stages/propose-change', { schema_json: JSON.stringify(PROPOSE_SCHEMA), stage_json: JSON.stringify({ name: view.name, gist: view.gist, in: view.input, out: view.output }), steps_json: JSON.stringify(view.steps.map(step => ({ file: step.file, symbol: step.symbol, lines: [step.line_start, step.line_end], pseudocode: (step.pseudocode || '').slice(0, 1500) }))), notes_json: JSON.stringify(notes.slice(0, 4000)), intent_json: JSON.stringify(intent.trim().slice(0, 2000)) });
-      const run = createRun(base, { budget: normalizeBudget(JSON.parse(base.meta('budget') || 'null') || undefined), trigger: 'mcp.propose_change', clock: () => new Date(now()) });
-      const estimate = run.check(estimatePrompt(prompt, config.provider, config.model));
+      const run = createRun(base, { trigger: 'mcp.propose_change', clock: () => new Date(now()) });
+      const estimate = run.estimate(estimatePrompt(prompt, config.provider, config.model));
       const response = await requestStructured({ ...config, prompt, schema: PROPOSE_SCHEMA, showPreview: false });
       run.log({ model: response.actualModel || config.model, usage: response.usage, workflowId, stageId: found.id, estimate, note: 'agent request' });
       let value;

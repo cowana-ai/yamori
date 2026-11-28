@@ -21,7 +21,7 @@ async function mapped() {
   const graph = await project.scanFolder(root, undefined, new project.Indexer());
   const db = openStageDb(dbPath(root));
   const request = async () => ({ raw: JSON.stringify(STAGES), usage: { input: 10, output: 10 } });
-  await stages.generateWorkflow({ db, graph, notes: { files: {} }, explanations: {}, entryFile: 'main.py', entrySymbol: 'run_agent', request, run: createRun(db, { budget: { perRun: 0, perDay: 0 } }), provider: 'claude', model: 'm' });
+  await stages.generateWorkflow({ db, graph, notes: { files: {} }, explanations: {}, entryFile: 'main.py', entrySymbol: 'run_agent', request, run: createRun(db), provider: 'claude', model: 'm' });
   new Vault({ root }).syncWorkflow(db, graph, {}, 'run-agent');
   new Vault({ root }).addNote(db, 'run-agent', 'act', 'Never call paid tools without a budget check.', { author: 'You' });
   db.addChange({ workflow_id: 'run-agent', stage_id: 'evaluate', summary: 'Evaluate now retries twice before failing.', detail: { files: ['agent/evaluator.py'], steps: [] } });
@@ -99,7 +99,7 @@ test('find answers where/how in one call with the code, and agents get a short, 
   } finally { ctx.cleanup(); }
 });
 
-test('propose_change is budgeted, logged and rate-limited', { skip }, async () => {
+test('propose_change is logged and rate-limited', { skip }, async () => {
   const ctx = await mapped();
   try {
     ctx.db.setMeta('connection:cheap', JSON.stringify({ provider: 'claude', model: 'cheap' }));
@@ -115,9 +115,8 @@ test('propose_change is budgeted, logged and rate-limited', { skip }, async () =
     assert.equal(call.trigger, 'mcp.propose_change'); assert.equal(call.input_tokens, 500);
     await assert.rejects(tools.handlers.propose_change({ graph: ctx.graph }, { stage: 'act', intent: 'again' }), /less than 30 seconds ago/);
     clock += RATE.minIntervalMs + 1;
-    ctx.db.setMeta('budget', JSON.stringify({ perRun: 0, perDay: 600 }));
-    await assert.rejects(tools.handlers.propose_change({ graph: ctx.graph }, { stage: 'act', intent: 'again' }), /daily budget/);
-    assert.equal(prompts.length, 1);
+    await tools.handlers.propose_change({ graph: ctx.graph }, { stage: 'act', intent: 'again' });
+    assert.equal(prompts.length, 2, 'past the wait, a second request goes through: no token cap');
     tools.close();
   } finally { ctx.cleanup(); }
 });

@@ -36,7 +36,6 @@
         "yamori.planBudget",
         "yamori.tokenBudgetPerFilePerDay",
         "yamori.planModel",
-        "yamori.tokenBudget",
         "yamori.stages.autoUpdate",
         "yamori.obsidian.vaultPath",
         "yamori.obsidian.auto",
@@ -423,27 +422,6 @@
           "type": "boolean",
           "default": true,
           "description": "Show a native inline question field after highlighting code. Sends the question and exact selected snapshot to read-only Yamori chat only when you press Ask Yamori. Disable to use the selection context-menu action or keyboard shortcut instead."
-        },
-        "yamori.tokenBudget": {
-          "type": "object",
-          "default": {
-            "perRun": 60000,
-            "perDay": 1500000
-          },
-          "properties": {
-            "perRun": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "Most tokens (input, cached and output) one stage run may use. 0 means no limit."
-            },
-            "perDay": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "Most tokens stage work may use per day. 0 means no limit."
-            }
-          },
-          "additionalProperties": false,
-          "markdownDescription": "Token limits for AI work Yamori starts by itself (updates after you save, agent requests). A run that would go over stops and the step stays marked as changed. Input and output count fully; cache reads count a tenth, since they cost about a tenth. Mapping you start yourself, after seeing its estimate, is not limited. **AI use** lists every call with its tokens and cost."
         },
         "yamori.stages.autoUpdate": {
           "type": "boolean",

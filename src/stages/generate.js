@@ -11,7 +11,7 @@
 // - Deterministic, cache-friendly prompts: fixed instructions and schema
 //   first, data sorted by file path and step position, changing parts last.
 // - Bounded structured output with hard caps.
-const { BudgetExceeded, estimatePrompt } = require('./budget');
+const { estimatePrompt } = require('./budget');
 const { render } = require('../prompts');
 
 const STAGE_PROMPT_VERSION = 5;
@@ -224,7 +224,7 @@ async function generateWorkflow({ db, graph, notes, explanations, entryFile, ent
   const pinnedSteps = new Set(previous.filter(stage => stage.pinned).flatMap(stage => db.steps(workflowId, stage.id).map(step => step.file + '#' + step.symbol)));
   const input = stageInput(graph, notes, explanations, chosen);
   const prompt = stagesPrompt({ items: input.items, entryFile, entrySymbol, previous });
-  const estimate = run.check(estimatePrompt(prompt, provider, model));
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
   if (signal?.aborted) throw new Error('Cancelled.');
   const response = await request({ prompt, schema: STAGES_SCHEMA, tier: 'cheap', signal });
   run.log({ model: response.model || model, usage: response.usage, workflowId, estimate, note: `generate · ${chosen.length} files · ${input.escalated} via pseudocode outline`, trigger: 'stages.generate' });
@@ -460,7 +460,7 @@ async function generateDeep({ db, graph, explanations, entryFile, entrySymbol, w
   const pinnedSteps = new Set(previous.filter(stage => stage.pinned).flatMap(stage => db.steps(workflowId, stage.id).map(step => step.file + '#' + step.symbol)));
   // 1. The planner: structure from the call tree and docs only.
   const prompt = planPrompt({ tree: treeText(tree), docs: await partDocs(graph, entryFile, readText), entryFile, entrySymbol, previous, part, functions: tree.nodes.length });
-  const estimate = run.check(estimatePrompt(prompt, provider, model));
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
   if (signal?.aborted) throw new Error('Cancelled.');
   const planned = await request({ prompt, schema: planSchema(tree.nodes.length), tier: 'cheap', signal });
   run.log({ model: planned.model || model, usage: planned.usage, workflowId, estimate, note: `plan · ${tree.nodes.length} functions`, trigger: 'stages.plan' });
@@ -508,7 +508,7 @@ async function describeSteps({ db, graph, explanations, texts, stagesList, part,
     if (signal?.aborted) return;
     const prompt = stepsPrompt({ part, stage: job.stage, items: job.items });
     try {
-      const estimate = run.check(estimatePrompt(prompt, provider, model));
+      const estimate = run.estimate(estimatePrompt(prompt, provider, model));
       const response = await request({ prompt, schema: STEPS_SCHEMA, tier: 'cheap', signal });
       calls++;
       run.log({ model: response.model || model, usage: response.usage, workflowId, stageId: job.stage.id, estimate, note: `steps · ${job.items.length} functions`, trigger: 'stages.steps' });
@@ -610,7 +610,7 @@ async function refreshStage({ db, graph, notes, explanations, workflowId, stageI
     data.push(entry);
   }
   const prompt = refreshPrompt({ stage, steps, changed: data });
-  const estimate = run.check(estimatePrompt(prompt, provider, model));
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
   if (signal?.aborted) throw new Error('Cancelled.');
   const response = await request({ prompt, schema: REFRESH_SCHEMA, tier: 'cheap', signal });
   run.log({ model: response.model || model, usage: response.usage, workflowId, stageId, estimate, note: 'refresh · ' + changed.length + ' changed file' + (changed.length === 1 ? '' : 's') + (sourceFallback ? ' · ' + sourceFallback + ' source excerpt' : ''), trigger: 'stages.refresh' });
@@ -656,7 +656,6 @@ async function refreshStale(options) {
       const result = await refreshStage({ ...options, stageId: item.stageId, changedFiles: [...new Set(item.changedFiles)] });
       calls += result.calls; refreshed.push({ stageId: item.stageId, ...result });
     } catch (error) {
-      if (error instanceof BudgetExceeded || error.code === 'YAMORI_BUDGET') { skipped.push({ stageId: item.stageId, reason: error.message }); break; }
       skipped.push({ stageId: item.stageId, reason: error.message });
     }
   }

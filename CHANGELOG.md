@@ -2,6 +2,8 @@
 
 ### Unreleased
 
+- **Documents and data on the diagram.** A part's diagram shows the files its steps read (left) and write (right), such as Markdown briefs, CSV tables, PDFs and JSON, found in the code with no AI. Click one to see who reads and writes it and real files that fit.
+- **No token budget.** Your System no longer stops an update at a token limit; the `yamori.tokenBudget` setting is gone. **AI use** still lists every call with its tokens and cost.
 - **How it works is now Your System.** The tab in Yamori's project panel and the button in Read are renamed.
 - **Plan tab works with your terminal agent.** Comments on plan steps gather on the agent's prompt until you send them; Approve tells the terminal agent to implement, and the plan moves to history when it finishes.
 - **Cheaper, more useful agent tools.** A new `find` tool answers where or how something happens in one call. It returns the matching functions with what they do, their part and step, and their code, ranked from the How it works map, names, pseudocode and source, so agents can skip the grep-then-read loop. Agents now see 13 tools instead of 27, with definitions about half the size. `list_stages` and `get_stage` answer in brief text unless asked for `detail: "full"`. Read tools carry `readOnlyHint` and `read_source` can read one function by name. `scripts/bench-mcp/` measures agents with and without Yamori.

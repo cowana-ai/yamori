@@ -50,6 +50,7 @@ Inside a part:
 
 - **Files** (the part's second tab): one column per step of the part, in the order the work happens, then the code it uses from other folders. The columns are the part's own mapped steps, not a fixed list; each file sits under the step that runs most of its functions, and its color strip shows every step it serves. The helper files the steps use are folded into one box; click it to show them. Colors are steps. Click a file and its links light up.
 - **A file** shows what it is for, which steps of which parts use it, its pseudocode block by block when Yamori already wrote it (no AI call; each block's line range opens Read there), what it uses and what uses it, and its functions.
+- **Documents and data** sit on a part's diagram: files its steps only read on the left, files they write on the right, each with its format (MD, CSV, PDF, JSON…) and a path pattern such as `{research_root}/{month}/brief.md`, where `{name}` is filled in when the code runs. Yamori finds them in each step's code and the helpers it calls, with no AI. Click one for the steps that read and write it, the code lines, and real files in the project that fit the pattern; a step's details list the files it reads and writes.
 - **A step** shows **How it works** as a diagram: its steps left to right, what each calls stacked under it, every box with its behavior badges and up to three decisions or stop conditions written on it. Click a box for all of that step's behaviors, with links to the line, Read and your terminal agent. The same steps are also listed in full under **All steps and behaviors as a list**.
 - Part boxes on the map count their key behaviors, for example "14 AI calls · 49 decisions · 19 writes".
 - **A step card** also shows what the stage does, takes and gives, and how; **Show functions** lists the code behind it, with **Move to…** another step. **Rename**, **Merge with…** and **Keep as is** fix the grouping; updates keep your changes.
@@ -108,7 +109,6 @@ Looking at the map, a step, its code or notes never calls AI: it reads `.yamori/
 After you save a file, Yamori compares its content hash. Only steps with code in that file are marked as changed. About two seconds after saves stop (longer while an agent edits several files, or at once when it says it is done), each affected step gets one cheap AI call with the step and the before/after of its changed functions, never the whole system. A source excerpt of one function is sent only when that file has neither current pseudocode nor a current AI note. Nothing runs during a git rebase or merge.
 
 - `yamori.stages.autoUpdate` (default on): turn off to wait for **Update**.
-- `yamori.tokenBudget` (`{ "perRun": 60000, "perDay": 1500000 }`): limits AI work Yamori starts by itself; a call that would go over is not made and the step stays marked as changed. Cache reads count a tenth, since they cost about a tenth. Mapping you start yourself, after its estimate, is logged but not limited. If a run ever leaves steps undescribed, the part says so and **Describe the missing steps** fills them in without re-planning.
 - **AI use** (top right) lists every call today: what it was for, model, input, cached and output tokens, and cost.
 
 Changing the AI model or Yamori's prompts does not redo the map by itself.
@@ -129,7 +129,7 @@ Changing the AI model or Yamori's prompts does not redo the map by itself.
 
 `list_stages` and `get_stage` answer in brief text by default. `detail: "full"` returns every field as JSON, including behaviors and cached pseudocode. Long answers are cut at a line with a hint on how to ask for less. Read tools are marked read-only (`readOnlyHint`), so clients can run them without asking.
 
-Older tools stay callable by name but are not listed: `what_changed`, `propose_change` (one cheap AI call, rate-limited and counted against `yamori.tokenBudget`), `search_name`, `find_symbol`, `search_pseudocode`, `project_map`, `start_here` and the git and conversation tools.
+Older tools stay callable by name but are not listed: `what_changed`, `propose_change` (one cheap AI call, rate-limited), `search_name`, `find_symbol`, `search_pseudocode`, `project_map`, `start_here` and the git and conversation tools.
 
 **Measuring it.** `scripts/bench-mcp/` runs the same read-only questions with Claude Code and Codex in three setups: without Yamori, with it, and told to start with `find`. Each answer is graded against expected file and function names, and the report gives tokens, time, tool calls and accuracy for each. It spends real tokens on your own sign-ins and is not part of `npm test`:
 ```bash
