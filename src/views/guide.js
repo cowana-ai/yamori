@@ -5,6 +5,7 @@
 // details, double-click to explain it. Text is always inserted with textContent.
 const { randomBytes } = require('node:crypto');
 const { BASE_STYLES, LOGO, READING_STYLES, pseudocodeLines, emphasisParts, mathParts, tokenize } = require('./reader');
+const { STAGES_STYLE, stagesClient } = require('./stages');
 
 // Pure helpers run in Node tests and are inserted into the webview script.
 function edgePath(a, b) {
@@ -392,6 +393,12 @@ button.go:disabled { opacity: .4; }
 
 body[data-planning="true"] .tools { display:none; }
 /* A goal on an empty canvas; the plan itself is the navigation. */
+.plan-onboarding { text-align: center; max-width: 380px; margin: 0 auto 14px; color: var(--read-ink); }
+.plan-onboarding h3 { margin: 0 0 6px; font: 700 17px/1.3 var(--vscode-font-family, system-ui); }
+.plan-onboarding p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; }
+.plan-onboarding-example { font-style: italic; color: var(--read-muted); }
+.plan-onboarding-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 10px; }
+.plan-onboarding-note { color: var(--read-muted); font-size: 12px !important; }
 #plan-panel { position: absolute; z-index: 4; right: 20px; top: 20px; height: auto; max-height: calc(100% - 40px); width: min(420px,calc(100% - 40px)); border: 1px solid var(--read-border); border-radius: 8px; padding: 18px; box-shadow: none; }
 #plan-panel[data-ready="false"] { right: auto; left: 50%; top: 40%; transform: translate(-50%,-50%); border: 0; background: transparent; }
 #plan-panel[data-ready="false"] .plan-head button, #plan-panel[data-ready="false"] .plan-context { display:none; }
@@ -711,10 +718,17 @@ body[data-chat-focused="true"] #canvas, body[data-chat-focused="true"] #drawer, 
 .plan-terminal[data-focused="true"] .terminal-resizer { display:none; }
 .conversation-project { display:flex; align-items:center; flex-shrink:0; gap:12px; padding:3px 0 12px; color:var(--read-ink); font:13px/1.4 ui-monospace,monospace; }
 .conversation-project .conversation-branch { color:var(--read-muted); font:11px ui-monospace,monospace; background:transparent; border:1px solid var(--read-border); padding:4px 7px; max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+ ${STAGES_STYLE}
+#plan-panel .plan-chatbar { display:flex !important; position:fixed; left:20px; right:20px; bottom:12px; align-items:center; gap:14px; padding:10px 14px; background:var(--read-surface); border:1px solid var(--read-border); z-index:8; font-size:12px; color:var(--read-muted); }
+#plan-panel .plan-chatbar .plan-chatbar-text { flex:1; }
+#plan-panel:not([data-inspecting="true"]) > .plan-chatbar { display:flex !important; }
+/* The empty-canvas guide stays visible above the chat bar, and clickable. */
+#plan-panel:not([data-inspecting="true"]) > .plan-onboarding { display:block !important; position:fixed; left:50%; top:38%; transform:translate(-50%,-50%); width:min(420px,calc(100% - 40px)); margin:0; padding:18px 20px; background:var(--read-page); border:1px solid var(--read-border); border-radius:8px; pointer-events:auto; z-index:7; }
+body[data-view="stages"] .search, body[data-view="stages"] #rescan { display:none; }
 </style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${LOGO}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
 <button id="project-branch" class="project-branch" title="Current Git branch. Local metadata, no AI." hidden></button>
-<span class="tabs" role="tablist" aria-label="Yamori navigation"><button id="read-current" title="Read the current script as pseudocode">Read</button><button id="tab-start" role="tab" aria-selected="true" aria-controls="start-view" title="Which files to read first, folder by folder">Files</button><button id="tab-map" role="tab" aria-selected="false" aria-controls="map-view" title="How files connect, grouped by folder">Map</button><button id="tab-plan" role="tab" aria-selected="false" aria-controls="map-view" title="Chat about your project, plan changes and work with your agent">Chat &amp; plan</button></span>
+<span class="tabs" role="tablist" aria-label="Yamori navigation"><button id="read-current" title="Read the current script as pseudocode">Read</button><button id="tab-start" role="tab" aria-selected="true" aria-controls="start-view" title="Which files to read first, folder by folder">Files</button><button id="tab-map" role="tab" aria-selected="false" aria-controls="map-view" title="Which files use which, grouped by folder">File links</button><button id="tab-stages" role="tab" aria-selected="false" aria-controls="stages-view" title="How the whole project works: its parts, their steps and how they connect. Ask for changes and review them here">Your System</button><button id="tab-plan" role="tab" aria-selected="false" aria-controls="map-view" title="Chat about your project, plan changes and work with your agent">Chat &amp; plan</button></span>
 <form class="search" id="search-form" role="search"><input id="search" type="search" placeholder="Search a name: variable, function, term…" aria-label="Search the project for a variable, function or term" autocomplete="off" spellcheck="false"><button id="search-go" type="submit" title="Highlight every file that mentions it (local, no AI)">Search</button></form>
 <span class="spacer"></span>
 <button id="rescan" title="Re-read changed files. Local and free; no AI.">Rescan</button><button id="notes" title="Ask your selected AI for a one-line purpose per file, project terms and a reading order">Write AI notes</button></div>
@@ -722,6 +736,7 @@ body[data-chat-focused="true"] #canvas, body[data-chat-focused="true"] #drawer, 
 <p id="status" class="status" role="status">Scanning project…</p><p id="agents" class="status agents"></p></header>
 <section id="start-view" class="view" role="tabpanel" aria-labelledby="tab-start"><div class="start-head" id="start-head"></div>
 <div class="start-body"><nav id="folders" aria-label="Choose a folder"></nav><div><h1 class="steps-title" id="steps-title">Start here</h1><p class="steps-hint" id="steps-hint"></p><ol id="steps"></ol></div></div></section>
+<section id="stages-view" class="view" role="tabpanel" aria-labelledby="tab-stages" hidden></section>
 <section id="map-view" class="view" role="tabpanel" aria-labelledby="tab-map" hidden><div class="tools">
 <button id="expand-all" title="Show the files inside every folder">Expand all</button><button id="collapse-all" title="Show folders only">Collapse all</button>
 <button id="zoom-out" title="Zoom out" aria-label="Zoom out">−</button><button id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button><button id="fit" title="Fit the map to the window">Fit</button><button id="reset" title="Put folders back where Yamori placed them">Reset layout</button><button id="drawer-toggle" aria-expanded="false" aria-controls="drawer" title="Show details: the selected file's purpose, terms, what it uses and what uses it, and all project terms">Details</button>
@@ -757,6 +772,8 @@ const mathParts = ${mathParts.toString()};
 const tokenize = ${tokenize.toString()};
 const vscode = acquireVsCodeApi();
 const send = (type, extra = {}) => vscode.postMessage({ type, ...extra });
+${stagesClient()}
+const stagesView = mountStages(document.getElementById('stages-view'), message => send('stages', { message }));
 const SVG = 'http://www.w3.org/2000/svg';
 const svgNode = (tag, attrs = {}, text) => { const el = document.createElementNS(SVG, tag); for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value)); if (text !== undefined) el.textContent = text; return el; };
 const node = (tag, text, className) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el; };
@@ -766,7 +783,20 @@ let state = {}, view = { x: 40, y: 40, k: 1 }, current = 'map', viewToken, focus
 let positions = new Map(), byId = new Map(), boxes = new Map(), nodeElements = new Map(), boxElements = new Map(), edgeElements = [];
 const size = () => ({ width: canvas.clientWidth || 800, height: canvas.clientHeight || 600 });
 const fileName = id => id.split('/').at(-1);
+let viewReported = false;
 function show(name) {
+  if (viewReported) send('viewChanged', { view: name });
+  const stagesNow = name === 'stages';
+  $('tab-stages').setAttribute('aria-selected', String(stagesNow)); $('stages-view').hidden = !stagesNow; document.body.setAttribute('data-view', stagesNow ? 'stages' : '');
+  if (stagesNow) {
+    if (planMode) { planMode = false; document.body.setAttribute('data-planning', 'false'); needsFit = true; }
+    current = 'stages';
+    $('tab-start').setAttribute('aria-selected', 'false'); $('tab-map').setAttribute('aria-selected', 'false'); $('tab-plan').setAttribute('aria-selected', 'false');
+    if ($('plan-actions')) $('plan-actions').hidden = true;
+    $('start-view').hidden = true; $('map-view').hidden = true;
+    stagesView.shown();
+    return;
+  }
   // Plan is the same map with the plan panel beside it.
   const changedMode = planMode !== (name === 'plan');
   planMode = name === 'plan'; if (changedMode) needsFit = true; document.body.setAttribute('data-planning', String(planMode)); current = planMode ? 'map' : name;
@@ -1400,7 +1430,7 @@ function drawStep(step, index) {
   const change = node('textarea', undefined, 'step-field'); change.value = step.change; change.rows = Math.max(5, Math.ceil(step.change.length / 55)); change.placeholder = 'What to change, in plain words'; change.setAttribute('aria-label', 'What to change in step ' + (index + 1));
   change.addEventListener('input', () => { step.change = change.value; }); change.addEventListener('change', touchPlan);
   const why = node('textarea', undefined, 'step-field'); why.rows = 3; why.value = step.why || ''; why.placeholder = 'Why'; why.addEventListener('input', () => { step.why = why.value; }); why.addEventListener('change', touchPlan);
-  const note = node('textarea', undefined, 'step-field'); note.value = step.note || ''; note.rows = 1; note.placeholder = 'Your note (kept with the plan)'; note.addEventListener('input', () => { step.note = note.value; }); note.addEventListener('change', touchPlan);
+  const note = node('textarea', undefined, 'step-field'); note.value = step.note || ''; note.rows = 1; note.placeholder = state.terminalChat ? 'Your comment (gathers on your agent’s prompt in the terminal; send it there)' : 'Your note (kept with the plan)'; note.addEventListener('input', () => { step.note = note.value; }); note.addEventListener('change', touchPlan);
   const chips = node('div', undefined, 'impact');
   if (impact) {
     if (impact.usedBy?.length) { const chip = node('span', 'used by ' + impact.usedBy.length); chip.title = impact.usedBy.map(link => link.file).join(', '); chips.append(chip); }
@@ -1452,6 +1482,18 @@ function drawPlan() {
   head.append(undo, redo, close);
   if (selected && planSets.steps.has(selected)) head.append(node('p', selected + (plan.steps.some(step => step.file === selected && step.newFile) ? ' · proposed new file' : ''), 'plan-inspector-path'));
   panel.append(head);
+  // An empty canvas explains where plans come from: the agent in the terminal.
+  if (!hasSteps && !busy && state.terminalChat) {
+    const intro = node('section', undefined, 'plan-onboarding'); intro.setAttribute('aria-label', 'How to get a plan');
+    intro.append(node('h3', 'No plan yet'), node('p', 'Ask your agent in the terminal to make a plan and send it to Yamori. It appears here as steps on your files, so you can read it, comment and approve before any code changes.'));
+    const example = 'Plan how to … and send the plan to Yamori.', sample = node('p', '“' + example + '”', 'plan-onboarding-example');
+    const actions = node('div', undefined, 'plan-onboarding-actions');
+    const open = node('button', state.agentSession ? 'Show agent terminal' : 'Open agent in terminal', 'go'); open.title = 'Starts your agent in the VS Code terminal, connected to Yamori'; open.addEventListener('click', () => send('agentSession'));
+    const copy = node('button', 'Copy example'); copy.title = 'Copy the example request, then finish it in the terminal'; copy.addEventListener('click', () => { navigator.clipboard?.writeText(example).then(() => { copy.textContent = 'Copied'; }, () => {}); });
+    actions.append(open, copy);
+    intro.append(sample, actions, node('p', 'Plans from Claude Code /plan and Codex Plan mode show up here too.', 'plan-onboarding-note'));
+    panel.append(intro);
+  }
   if (hasSteps && selected) {
     const steps = plan.steps.filter(step => step.file === selected), index = Math.max(0, steps.findIndex(step => step.id === expandedStep));
     const nav = node('div', undefined, 'step-navigation');
@@ -1486,7 +1528,7 @@ function drawPlan() {
     const choice = node('button', label); choice.setAttribute('aria-pressed', String(mode === value)); choice.setAttribute('data-mode', value); choice.title = tip; choice.disabled = !!busy; choice.addEventListener('click', () => send('projectMode', { mode: value })); modes.append(choice);
   }
   const transfer = node('button', 'Continue from…', 'conversation-handoff'); transfer.title = 'Move an existing Codex or Claude conversation into Yamori, or open this conversation in your agent'; transfer.disabled = !!busy; transfer.addEventListener('click', () => send('handoff')); modes.append(transfer);
-  if (info.nativeSession?.linked) { const linked = node('span', '↔ ' + (info.nativeSession.provider === 'claude' ? 'Claude' : 'Codex'), 'conversation-linked'); linked.title = 'Native session ' + info.nativeSession.id + '. External updates sync when you return.'; modes.append(linked); }
+  if (info.nativeSession?.linked) { const linked = node('span', '↔ ' + ({ claude: 'Claude', codex: 'Codex', cursor: 'Cursor' }[info.nativeSession.provider] || 'Agent'), 'conversation-linked'); linked.title = 'Native session ' + info.nativeSession.id + '. External updates sync when you return.'; modes.append(linked); }
   if (info.conversationHasMore) { const earlier = node('button', 'Earlier messages', 'conversation-earlier'); earlier.title = 'Load older messages from this project’s local history'; earlier.addEventListener('click', () => send('conversationEarlier')); modes.append(earlier); }
   const focusChat = node('button', undefined, 'conversation-focus'); focusChat.setAttribute('aria-pressed', String(chatFocused)); focusChat.setAttribute('aria-label', chatFocused ? 'Back to canvas' : 'Focus chat'); const focusIcon = node('span', chatFocused ? '> <' : '< >', 'focus-icon'); focusIcon.setAttribute('aria-hidden', 'true'); focusChat.append(focusIcon, document.createTextNode(chatFocused ? ' Back to canvas' : ' Focus chat')); focusChat.title = chatFocused ? 'Show the project canvas beside this conversation' : 'Give the conversation the whole view'; focusChat.addEventListener('click', () => { chatFocused = !chatFocused; drawPlan(); }); modes.append(focusChat);
   if (chatFocused) { const newPlan = node('button', 'New plan'); newPlan.disabled = !!busy; newPlan.addEventListener('click', () => { clearTimeout(planSendTimer); pendingGoal = ''; planComposer = undefined; send('planClear'); }); modes.append(newPlan); }
@@ -1501,9 +1543,9 @@ function drawPlan() {
   if (actions) {
     actions.hidden = !planMode;
     fresh.disabled = ['implement', 'handoff'].includes(busy?.stage);
-    const approve = node('button', busy?.stage === 'implement' ? 'Implementing…' : 'Approve & implement', 'go');
+    const approve = node('button', busy?.stage === 'implement' ? 'Implementing…' : state.terminalChat && plan?.approvedAt ? 'Approved · agent working' : 'Approve & implement', 'go');
     approve.disabled = !!busy || !!info.question || !plan?.steps.some(step => !['done', 'skipped'].includes(step.status) && !plan.dismissed?.includes(step.file));
-    approve.title = 'Allow the selected agent to edit project files and run checks. Clear the plan after successful completion.';
+    approve.title = state.terminalChat ? (plan?.approvedAt ? 'Your agent in the terminal was told to implement this plan; the plan clears when it calls done. Press to tell it again.' : 'Tell your agent in the terminal to implement this plan. The plan clears when it finishes (calls done).') : 'Allow the selected agent to edit project files and run checks. Clear the plan after successful completion.';
     approve.addEventListener('click', () => { if (!approve.disabled) { flushPlan(); send('planExecute', { id: plan.id }); } });
     const fitButton = node('button', 'Fit canvas'); fitButton.addEventListener('click', fit);
     const copyPlan = node('button', 'Copy plan'); copyPlan.disabled = !hasSteps; copyPlan.addEventListener('click', () => { flushPlan(); send('planCopy', {}); });
@@ -1514,9 +1556,17 @@ function drawPlan() {
   }
   toolbar.append(ai); terminal.append(toolbar, transcript);
   const live = node('div', busy?.reply || '', 'terminal-stream'); live.hidden = !busy?.reply; live.setAttribute('role', 'status'); live.setAttribute('aria-label', 'Agent reply, streaming'); terminal.append(live);
-  terminal.append(composer); panel.append(terminal);
+  terminal.append(composer);
+  // Chat lives in the VS Code terminal: one agent session that sees what you have
+  // open and writes plans onto this canvas. Only a slim bar stays here.
+  if (state.terminalChat) {
+    const bar = node('section', undefined, 'plan-chatbar'); bar.setAttribute('aria-label', 'Your agent session');
+    bar.append(node('span', 'Ask, plan or change things with your agent in the VS Code terminal. It sees what you have open, and plans it saves show up on this canvas.', 'plan-chatbar-text'));
+    const open = node('button', state.agentSession ? 'Show chat' : 'Open chat in terminal', 'go'); open.addEventListener('click', () => send('agentSession'));
+    bar.append(open); panel.append(bar); document.documentElement.style.setProperty?.('--plan-terminal-height', '56px');
+  } else panel.append(terminal);
   const submit = () => { const text = goal.value.trim(); if (!text || busy && !info.question) return; pendingGoal = ''; goal.value = ''; if (info.question) send('planAnswer', { answer: text }); else if (mode === 'plan') send(plan?.goal ? 'planChat' : 'planGoal', plan?.goal ? { text } : { goal: text }); else send('projectMessage', { text, mode }); };
-  attachTerminal(terminal, messages, info);
+  if (!state.terminalChat) attachTerminal(terminal, messages, info);
   planComposer = goal; sizePlanComposer(goal);
   if (focusedGoal) { goal.focus?.(); if (caret?.[0] !== undefined) goal.setSelectionRange?.(...caret); }
   goal.addEventListener('keydown', event => {
@@ -1887,12 +1937,12 @@ function render(s) {
   const agents = $('agents'); agents.replaceChildren();
   if (s.agents && s.files) {
     if (s.agents.connected) agents.append(node('span', 'Agents: connected'));
-    else { agents.append(node('span', 'Your Claude Code and Codex sessions can use this map and its pseudocode.')); const go = node('button', 'Connect agents'); go.title = 'Register the Yamori knowledge server with your own Claude Code and Codex (asks first)'; go.addEventListener('click', () => send('connectAgents')); agents.append(go); }
+    else { agents.append(node('span', 'Your Claude Code, Codex and Cursor agents can use this map and its pseudocode.')); const go = node('button', 'Connect agents'); go.title = 'Register the Yamori knowledge server with your own Claude Code, Codex and Cursor (asks first)'; go.addEventListener('click', () => send('connectAgents')); agents.append(go); }
   }
   const notes = $('notes');
   notes.textContent = s.notesBusy ? 'Stop' : s.waitingForAI ? 'Set up AI' : n.done && (n.done < n.total || n.outdated) ? 'Update AI notes' : n.done ? 'AI notes ✓' : 'Write AI notes';
   notes.disabled = !s.notesBusy && !!s.busy;
-  notes.title = s.notesBusy ? 'Stop writing AI notes; finished files are kept' : s.waitingForAI ? 'Install or sign in to Claude or ChatGPT; AI notes then start by themselves' : s.autoNotes ? 'AI notes are written automatically after each scan. Press to write them now (also retries after an error).' : 'Ask your selected AI for a one-line purpose per file, project terms and a reading order';
+  notes.title = s.notesBusy ? 'Stop writing AI notes; finished files are kept' : s.waitingForAI ? 'Install or sign in to Claude, ChatGPT or Cursor; AI notes then start by themselves' : s.autoNotes ? 'AI notes are written automatically after each scan. Press to write them now (also retries after an error).' : 'Ask your selected AI for a one-line purpose per file, project terms and a reading order';
   $('rescan').disabled = !!s.busy;
   hits = planMode ? undefined : searchHits();
   syncPlan(s);
@@ -1917,7 +1967,7 @@ function render(s) {
     const found = [...hits.keys()].filter(id => byId.has(id) && positions.has(id)).map(box);
     if (found.length) { const { width, height } = size(); view = fitTransform(found, width, height, 140); needsFit = false; applyView(); }
   }
-  if (s.viewToken && s.viewToken !== viewToken) { viewToken = s.viewToken; show(['map', 'plan'].includes(s.view) ? s.view : 'start'); }
+  if (s.viewToken && s.viewToken !== viewToken) { viewToken = s.viewToken; show(['map', 'plan', 'stages'].includes(s.view) ? s.view : 'start'); }
   if (s.focusToken && s.focusToken !== focusToken && byId.has(s.focus)) { focusToken = s.focusToken; if (current === 'map' && !planMode) select(s.focus, true); }
 }
 // Typing searches after a short pause; Enter searches at once. Results show on the map.
@@ -1930,6 +1980,7 @@ document.addEventListener('keydown', event => { if ((event.metaKey || event.ctrl
 $('tab-start').addEventListener('click', () => { closePlanFiles(); show('start'); });
 $('tab-map').addEventListener('click', () => { closePlanFiles(); show('map'); });
 $('tab-plan').addEventListener('click', () => show('plan'));
+$('tab-stages').addEventListener('click', () => { closePlanFiles(); show('stages'); });
 $('read-current')?.addEventListener('click', () => send('readCurrent'));
 document.addEventListener('keydown', event => {
   if (!planMode || !(event.metaKey || event.ctrlKey) || event.key !== 'z') return;
@@ -1950,6 +2001,7 @@ $('drawer-close').addEventListener('click', () => showDetails(false));
 window.addEventListener('focus', () => send('conversationSync'));
 window.addEventListener('message', event => {
   if (event.data?.type === 'map') render(event.data.state);
+  else if (event.data?.type === 'stages') stagesView.update(event.data.state);
   else if (event.data?.type === 'agentStream' && state.plan?.busy && typeof event.data.reply === 'string') {
     state.plan.busy.reply = event.data.reply;
     const live = $('plan-panel').querySelector?.('.terminal-stream');
@@ -1959,6 +2011,7 @@ window.addEventListener('message', event => {
 showDetails(false);
 show('map');
 send('ready');
+viewReported = true;
 </script></body></html>`;
 }
 module.exports = { mapHTML, edgePath, fitTransform, neighbourSet, relativeTime, byFolder, proposalKind, planPseudocodeDiff, planIdeaGraph, planFilePathLines, planFileHeight, planCanvasLayout };

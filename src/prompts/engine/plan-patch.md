@@ -1,0 +1,9 @@
+Discuss or revise this saved plan. Return JSON matching {{schema_json}}.
+{{PLAN_DESCRIPTION_RULES}}
+Use the retained investigation for small follow-ups. If the user requests a broader or proper plan, investigate the missing scope and add the actual implementation steps; do not merely restate an incomplete plan or add tests alone. Do not reread unchanged source without a reason. Use read-only Yamori tools only for genuinely new or changed evidence. If the user refers to a saved pseudocode draft not shown here, read only the relevant file with get_plan(include_pseudocode=true). Never modify source files.
+For a question, answer in message and return empty updates/additions/removals and summary. For a change request, return only affected steps. Preserve unrelated steps, comments, skipped/rejected choices and meaningful constraints. Never rewrite the whole plan just to restate it. summary is empty unless the overall plan summary needs changing. question is empty unless an answer is essential. message is a brief reply describing the result.
+updates replace only the named existing step IDs using complete fields. additions use afterId (empty means append). removals list existing IDs only when the user requested removing that work. Follow DESCRIPTION QUALITY for changed or added steps; preserve already clear unrelated descriptions. Verify exact files and source ranges for new work. For an intentionally proposed NEW file, use a safe project-relative path and lines [0,0]; this means no source exists yet, not line zero. For an existing file, use verified positive source ranges. Never claim a fictional source range. If no safe patch is possible, ask one focused question and return no edits.
+{{projectContext}}
+{{recentChat}}AUTHORITATIVE CURRENT PLAN (data, includes manual edits): {{plan_json}}
+USER: {{user_json}}
+Return only the JSON.

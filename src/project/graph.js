@@ -6,6 +6,7 @@
 // AI notes (purposes and a project glossary) are layered on top by the extension.
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { PROJECT_DIR } = require('../config');
 const crypto = require('node:crypto');
 
 const GRAMMAR_DIR = path.join(__dirname, '..', '..', 'vendor', 'tree-sitter');
@@ -14,9 +15,12 @@ const GRAMMARS = ['python', 'javascript', 'tsx', 'go', 'java', 'rust'];
 const GRAMMAR_FOR = { '.py': 'python', '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.ts': 'tsx', '.tsx': 'tsx', '.mts': 'tsx', '.cts': 'tsx', '.go': 'go', '.java': 'java', '.rs': 'rust' };
 const CONTEXT_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg']);
 const isContextFile = rel => CONTEXT_EXTENSIONS.has(posix.extname(rel).toLowerCase());
+// Over the file cap, code comes before docs and data, so a folder full of
+// Markdown or JSON (assets, content) never pushes code out of the map.
+const prioritizeFiles = rels => [...rels].sort((a, b) => (isContextFile(a) ? 1 : 0) - (isContextFile(b) ? 1 : 0) || (a < b ? -1 : a > b ? 1 : 0));
 const MAX_FILE_BYTES = 500000, MAX_FILES = 500, MAX_REFS = 600, MAX_PATH_STEPS = 15;
 // Version 2 adds definition end lines and test cases; older scans rebuild once.
-const GRAPH_VERSION = 2;
+const GRAPH_VERSION = 4;
 const IMPORT_WEIGHT = 3, MAX_LINKS_PER_FILE = 12;
 const TEST_PATH = /(^|\/)(tests?|__tests__|specs?)\/|(^|\/)(test_[^/]*|tests?\.[^/.]+|conftest\.py)$|_test\.[^/.]+$|\.(test|spec)\.[^/.]+$/i;
 // In these languages a file must import what it uses, so shared names only
@@ -182,6 +186,24 @@ function definitionEnd(node) {
   }
   return node.endPosition.row + 1;
 }
+// The type a Go method (func (m *Model) Forward) or a Rust impl function
+// (impl Model { fn forward }) belongs to; other languages nest methods in the class.
+function ownerOf(grammar, node) {
+  const decl = node.parent;
+  if (grammar === 'go' && decl?.type === 'method_declaration') {
+    return /\(\s*(?:[A-Za-z_]\w*\s+)?\*?\s*([A-Za-z_]\w*)/.exec(decl.childForFieldName?.('receiver')?.text || '')?.[1];
+  }
+  if (grammar === 'rust' && decl?.type === 'function_item') {
+    for (let current = decl.parent; current; current = current.parent) {
+      if (current.type === 'function_item') return undefined;
+      if (current.type === 'impl_item') {
+        const type = String(current.childForFieldName?.('type')?.text || '').replace(/<[\s\S]*>/g, '');
+        return /([A-Za-z_]\w*)\s*$/.exec(type)?.[1];
+      }
+    }
+  }
+  return undefined;
+}
 function fromCaptures(grammar, captures, rel, text) {
   const defs = [], refs = new Map(), statements = new Map(), seen = new Set();
   // Test files also keep where each name is used, to find what each test calls.
@@ -200,7 +222,15 @@ function fromCaptures(grammar, captures, rel, text) {
     if (name === 'test.name') { const open = cases.findLast(item => item.line <= line && item.end >= line && !item.name); if (open) open.name = value.slice(0, 120); continue; }
     if (name.startsWith('def.')) {
       const key = value + ':' + line;
-      if (!seen.has(key)) { seen.add(key); defs.push({ name: value, kind: name.slice(4), line, start: definitionStart(node), end: definitionEnd(node) }); }
+      if (!seen.has(key)) {
+        seen.add(key);
+        let kind = name.slice(4);
+        // A Go struct is the language's class; Go and Rust methods sit outside it.
+        if (grammar === 'go' && kind === 'type' && node.parent?.childForFieldName?.('type')?.type === 'struct_type') kind = 'class';
+        const owner = ownerOf(grammar, node);
+        if (owner && kind === 'function') kind = 'method';
+        defs.push({ name: value, kind, line, start: definitionStart(node), end: definitionEnd(node), ...(owner ? { owner } : {}) });
+      }
       continue;
     }
     const statement = statementOf(node), id = statement.id ?? statement.startIndex;
@@ -240,7 +270,65 @@ function testCases(grammar, defs, cases, uses) {
 function finishRecord(defs, refs, imports, rel, text) {
   // Stored references stay bounded; the most used names carry the edges.
   const ranked = [...refs].sort((a, b) => b[1].count - a[1].count || a[1].line - b[1].line).slice(0, MAX_REFS);
-  return { defs: defs.slice(0, 400), refs: ranked.map(([name, ref]) => [name, ref.count, ref.line]), imports: imports.slice(0, 200), main: entrySignal(rel, text) };
+  const blocks = /\.py$/i.test(rel) && defs.every(def => def.end) ? scriptBlocks(defs, text) : [];
+  return { defs: defs.slice(0, 400), refs: ranked.map(([name, ref]) => [name, ref.count, ref.line]), imports: imports.slice(0, 200), main: entrySignal(rel, text), ...(blocks.length ? { blocks } : {}) };
+}
+// A Python script (or a notebook's code view) that does its work outside
+// functions: its top-level code in blocks, split where a section comment
+// follows a blank line (or a notebook cell starts), each named by that comment.
+// Kept apart from defs; only the System map uses them as steps.
+const BLOCK_LIMITS = { minCode: 8, minBlock: 2, maxBlocks: 16, name: 48 };
+function scriptBlocks(defs, text) {
+  const lines = String(text || '').split('\n'), covered = new Uint8Array(lines.length + 2);
+  // Only functions and classes are taken out; top-level assignments are the script's own code.
+  for (const def of defs) if (['function', 'method', 'class'].includes(def.kind)) for (let line = def.start || def.line; line <= (def.end || def.line); line++) covered[line] = 1;
+  const segments = [];
+  let current, title, gap = true, cell, quote;
+  const close = () => { if (current) segments.push(current); current = undefined; };
+  for (let i = 1; i <= lines.length; i++) {
+    const line = lines[i - 1], trimmed = line.trim(), top = !/^\s/.test(line);
+    if (covered[i]) { close(); title = undefined; gap = true; continue; }
+    // A docstring before any code (the module's own) is not a step.
+    if (quote) { if (trimmed.includes(quote)) quote = undefined; continue; }
+    const opens = !current && top && /^[rRbBuU]?("""|''')/.exec(trimmed);
+    if (opens) { if (!trimmed.slice(opens[0].length).includes(opens[1])) quote = opens[1]; continue; }
+    if (!trimmed) { gap = true; continue; }
+    if (/^# Yamori notebook code view/.test(trimmed)) continue;
+    const cellMark = /^# Cell (\d+)$/.exec(trimmed);
+    if (cellMark) { close(); title = undefined; cell = 'cell ' + cellMark[1]; gap = true; continue; }
+    if (top && trimmed.startsWith('#')) {
+      const words = trimmed.replace(/^#+\s*/, '');
+      // A ruler (# -----) ends a section without naming the next one.
+      if (!/[A-Za-z]/.test(words)) { close(); title = undefined; gap = true; continue; }
+      if (gap || !current) { close(); title = title || words; }
+      gap = false; continue;
+    }
+    gap = false;
+    if (top && (/^(import\s|from\s+\S+\s+import\s)/.test(trimmed) || trimmed.startsWith('@')) && !current) continue;
+    if (!current) { current = { start: i, end: i, code: 0, title: title || cell, first: trimmed }; title = undefined; cell = undefined; }
+    if (!trimmed.startsWith('#')) { current.code++; current.end = i; }
+  }
+  close();
+  let kept = segments.filter(segment => segment.code >= BLOCK_LIMITS.minBlock);
+  if (kept.reduce((sum, segment) => sum + segment.code, 0) < BLOCK_LIMITS.minCode) return [];
+  // Too many small sections: fold each small one into the one before it.
+  while (kept.length > BLOCK_LIMITS.maxBlocks) {
+    const index = kept.slice(1).reduce((best, segment, i) => segment.code < kept[best].code ? i + 1 : best, 1);
+    kept[index - 1] = { ...kept[index - 1], end: kept[index].end, code: kept[index - 1].code + kept[index].code };
+    kept.splice(index, 1);
+  }
+  const names = new Set();
+  return kept.map(segment => {
+    let name = (segment.title || '').replace(/[`*]/g, '').replace(/\s+/g, ' ').trim();
+    name = name.split(/(?<=[.!?])\s|\s[-–—]\s/)[0];
+    // Long comments end at a word, not mid-word.
+    if (name.length > BLOCK_LIMITS.name) name = name.slice(0, BLOCK_LIMITS.name + 1).replace(/\s+\S*$/, '') + '…';
+    name = name.replace(/[\s(,.:;]+(…?)$/, '$1').trim();
+    if (!name) name = /^if\s+__name__\s*==/.test(segment.first) ? 'main script' : /^(for|while)\b/.test(segment.first) ? 'loop' : 'top-level code';
+    if (names.has(name.toLowerCase())) name += ' (line ' + segment.start + ')';
+    names.add(name.toLowerCase());
+    return { name, kind: 'block', line: segment.start, start: segment.start, end: segment.end };
+  });
 }
 function entrySignal(rel, text) {
   return /^\s*if\s+__name__\s*==\s*['"]__main__['"]/m.test(text) || /^#!/.test(text) || /require\.main\s*===\s*module/.test(text)
@@ -287,6 +375,9 @@ function resolveImport(from, imp, ctx) {
       }
     };
     const bases = dots ? [join(dir, ...Array(dots - 1).fill('..'))] : pythonRoots(from, ctx);
+    // A package installed from elsewhere in the repo (monorepo src layouts such as
+    // packages/x/src/pkg): the one folder that holds a package of that name.
+    if (!dots && rest.length) { const home = pythonPackageHome(ctx, rest[0]); if (home !== undefined) bases.push(home); }
     for (const base of bases) {
       if (base === undefined) continue;
       const target = rest.length ? module(base, rest) : undefined;
@@ -343,6 +434,22 @@ function resolveImport(from, imp, ctx) {
     for (const rel of ctx.files) if (rel.endsWith('/' + tail) || rel === tail) { hit(rel); break; }
   }
   return [...found];
+}
+function pythonPackageHome(ctx, name) {
+  if (!ctx.pythonHomes) {
+    ctx.pythonHomes = new Map();
+    for (const rel of ctx.files) {
+      const match = /^(?:(.*)\/)?([A-Za-z_][\w]*)\/__init__\.py$/.exec(rel);
+      if (!match) continue;
+      // Only a top-level package: its parent folder is not a package itself.
+      const parent = match[1] || '';
+      if (parent && ctx.files.has(parent + '/__init__.py')) continue;
+      if (!ctx.pythonHomes.has(match[2])) ctx.pythonHomes.set(match[2], new Set());
+      ctx.pythonHomes.get(match[2]).add(parent);
+    }
+  }
+  const homes = ctx.pythonHomes.get(name);
+  return homes && homes.size === 1 ? [...homes][0] : undefined;
 }
 function pythonRoots(from, ctx) {
   // Nearest enclosing folders first: monorepos import `src.app.x` relative to
@@ -997,7 +1104,7 @@ class ProjectStore {
 // Code or Codex) read and write the same project store. An index maps each
 // project folder to its store, so a process outside VS Code can find it.
 const SCAN_EXTENSIONS = new Set('ipynb py js jsx ts tsx mjs cjs go rs java kt scala cs c cpp cc h hpp rb php swift dart r sh bash lua pl sql vue svelte md mdx txt rst json yaml yml toml ini cfg'.split(' '));
-const SCAN_SKIP = new Set(['node_modules', '.git', '.venv', 'venv', 'env', 'dist', 'build', 'out', 'vendor', '.next', 'coverage', '__pycache__', '.yamori']);
+const SCAN_SKIP = new Set(['node_modules', '.git', '.venv', 'venv', 'env', 'dist', 'build', 'out', 'vendor', '.next', 'coverage', '__pycache__', PROJECT_DIR]);
 const indexFile = cacheRoot => path.join(cacheRoot, 'projects', 'index.json');
 const realOr = async value => { try { return await fs.realpath(value); } catch { return path.resolve(value); } };
 async function readJsonFile(file) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return undefined; } }
@@ -1062,7 +1169,7 @@ async function locateProject(cwd, cacheRoot) {
 async function listSourceFiles(root) {
   const files = [];
   const walk = async rel => {
-    if (files.length > MAX_FILES) return;
+    if (files.length > MAX_FILES * 40) return;
     let entries;
     try { entries = await fs.readdir(path.join(root, rel), { withFileTypes: true }); } catch { return; }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -1072,7 +1179,7 @@ async function listSourceFiles(root) {
     }
   };
   await walk('');
-  return files.sort((a, b) => a.localeCompare(b));
+  return prioritizeFiles(files);
 }
 async function readInside(root, rel) {
   const real = await fs.realpath(path.join(root, ...rel.split('/'))), rootReal = await realOr(root), relative = path.relative(rootReal, real);
@@ -1097,7 +1204,7 @@ async function includeSourceFiles(root, graph, paths, indexer, read) {
 async function scanFolder(root, previous, indexer, key) {
   const rels = await listSourceFiles(root), limited = rels.length > MAX_FILES, manifests = {};
   for (const name of ['package.json', 'go.mod', 'Cargo.toml']) { try { manifests[name] = await fs.readFile(path.join(root, name), 'utf8'); } catch { /* none */ } }
-  const scanned = await scanFiles(rels.slice(0, MAX_FILES).map(rel => ({ rel, read: () => readInside(root, rel) })), previous, indexer);
+  const scanned = await scanFiles(prioritizeFiles(rels).slice(0, MAX_FILES).map(rel => ({ rel, read: () => readInside(root, rel) })), previous, indexer);
   return { ...buildGraph(scanned.records, manifests), scannedAt: Date.now(), limited, root: key || 'file://' + root };
 }
 // The guide's search: whole-word names (exact capitals) or any text (ignoring
@@ -1183,7 +1290,7 @@ function pseudocodeText(rel, saved, { hash: currentHash, sourceLines, sourceToke
 }
 // The .yamori/ mirror in the project: one text file per explained source file,
 // an index of every mapped file, and a README. Kept out of git locally.
-const MIRROR = '.yamori';
+const MIRROR = PROJECT_DIR;
 async function syncMirror(root, graph, notes, explanations) {
   const base = path.join(root, MIRROR), pseudo = path.join(base, 'pseudocode'), written = new Set();
   await fs.mkdir(pseudo, { recursive: true });
@@ -1267,7 +1374,7 @@ function planParts(defs, text, startLine = 1, { maxParts = 6, minLines = 25 } = 
   return parts.map(part => ({ ...part, names: named.filter(item => item.line >= part.startLine && item.line <= part.endLine).map(item => item.name).slice(0, 16) }));
 }
 
-module.exports = { includeSourceFiles, gitInfo, sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
+module.exports = { scriptBlocks, prioritizeFiles, includeSourceFiles, gitInfo, sourceView, sourceLimit, projectNames, tokensOf, formatTokens, blockText, outlineText, definitionOutline, blocksAt, withLock, updateStoreFile, storeDirFor, recordStore, locateProject, listSourceFiles, readInside, scanFolder, searchProject, pseudocodeText, syncMirror, MIRROR, planParts, GRAPH_VERSION, testsFor, VALUE_KINDS, valueKind, blockAt, symbolLinks, tourStep, folderTree, readingPathFor, layoutGrouped, defaultCollapsed, folderOf, GRAMMARS, GRAMMAR_FOR, QUERIES, MAX_FILES, MAX_FILE_BYTES, Indexer, regexExtract, resolveImport, resolutionContext, buildGraph, pageRank, readingPath, graphView, layoutView, folderDepth, skeleton, noteBatches, linksFor, glossaryOf, termPattern, projectContextFor, scanFiles, ProjectStore, isTest };
 
 // Build step: copy the tree-sitter runtime and the bundled grammars from the
 // pinned development dependency. Run `npm run build:parser` after updating it.

@@ -190,13 +190,16 @@ test('Overview opens Setup without a provider, one click continues, and readers 
     // Cards: most ready first, exactly one primary action each, plain text.
     const missing = { claude: { installed: false, signedIn: false, ready: false, problem: 'Not installed' }, codex: { installed: true, signedIn: false, ready: false, problem: 'Not signed in', source: 'ChatGPT app' } };
     let view = setupView(missing, {});
-    assert.deepEqual(view.cards.map(card => card.id), ['codex', 'claude']);
-    assert.deepEqual(view.cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code']);
+    assert.deepEqual(view.cards.map(card => card.id), ['codex', 'claude', 'cursor']);
+    assert.deepEqual(view.cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code', 'Install Cursor CLI']);
+    assert.equal(view.cards[2].product, 'Cursor CLI · uses your Cursor plan');
+    assert.equal(setupView({ ...missing, cursor: { installed: true, signedIn: false, ready: false, problem: 'Not signed in' } }, {}).cards.find(card => card.id === 'cursor').action.label, 'Sign in to Cursor');
     assert.deepEqual(view.cards[0].lines.map(line => line.text), ['Codex installed · from ChatGPT app', 'Not signed in']);
     view = setupView({ claude: { installed: true, signedIn: true, ready: true, account: 'reader@example.com · max plan', source: 'Claude Desktop' }, codex: missing.codex }, { chosen: 'codex', pending: { label: 'explain plan.py' } });
     assert.equal(view.cards[0].action.label, 'Use Claude'); assert.equal(view.cards[0].badge, 'Ready'); assert.equal(view.cards[0].lines[0].text, 'Claude Code installed · from Claude Desktop');
     assert.match(view.notice, /ChatGPT isn’t ready \(Not signed in\)\. Claude is ready to use instead\./); assert.equal(view.next, 'explain plan.py');
-    assert.match(setupView({ claude: missing.claude, codex: { installed: false, ready: false } }).notice, /Neither is on this computer yet/);
+    assert.match(setupView({ claude: missing.claude, codex: { installed: false, ready: false }, cursor: { installed: false, ready: false } }).notice, /None of them is on this computer yet/);
+    assert.match(setupView({ claude: missing.claude, codex: missing.codex, cursor: { installed: true, signedIn: true, ready: true } }, { chosen: 'codex' }).notice, /ChatGPT isn’t ready \(Not signed in\)\. Cursor is ready to use instead\./);
     // A first-time user (no AI chosen) gets Setup instead of an empty reader.
     const state = new Map([['detail', 'overview']]); h.context.globalState.get = (k, f) => state.get(k) ?? f; h.context.globalState.update = async (k, v) => state.set(k, v);
     const readersBefore = h.readers().length;
@@ -1353,7 +1356,7 @@ test('first use chooses an installed provider without overwriting an explicit pr
   const {chooseInstalledProvider}=module.exports;const values=new Map(),context={globalState:{get:key=>values.get(key),update:async(key,value)=>values.set(key,value)}};
   const api={workspace:{isTrusted:false,getConfiguration:()=>({get:()=>'/project/evil',inspect:()=>undefined})}};
   const calls=[];await chooseInstalledProvider(context,api,async(owner,configured)=>{calls.push(owner);assert.equal(configured,'');if(owner==='codex')throw new Error('not installed');return '/user/claude';});
-  assert.equal(values.get('provider'),'claude');assert.deepEqual(calls,['codex','claude']);
+  assert.equal(values.get('provider'),'claude');assert.deepEqual(calls,['codex','claude','cursor']);
   await chooseInstalledProvider(context,api,async()=>{throw new Error('An explicit choice must skip detection');});assert.equal(values.get('provider'),'claude');
 });
 
@@ -1417,6 +1420,8 @@ test('packaged validators work with no Ajv installation, schema compilation or d
     await Promise.all(['ai','project'].map(dir=>fs.mkdir(path.join(root,dir))));
     const files=['ai/engine.js','ai/cards.js','ai/schemas.js','ai/validation.min.js','project/token-estimates.js'];
     await Promise.all(files.map(file=>fs.copyFile(path.join(__dirname,'..','src',file),path.join(root,file))));
+    await fs.cp(path.join(__dirname,'..','src','prompts'),path.join(root,'prompts'),{recursive:true});
+    await fs.copyFile(path.join(__dirname,'..','src','config.js'),path.join(root,'config.js'));
     const script=`const Module=require('node:module'),load=Module._load;Module._load=function(id,...args){if(id==='ajv'||id.startsWith('ajv/')||id==='esbuild')throw new Error('Build-only dependency loaded at runtime');return load.call(this,id,...args);};global.Function=function(){throw new Error('Runtime schema compilation is forbidden');};const {parseResult}=require('./engine');const source=${JSON.stringify(source)},value=${JSON.stringify(valid)};if(parseResult(JSON.stringify(value),source).title!==value.title)process.exit(2);process.stdout.write('Standalone validation works');`;
     const output=await runProcess(process.execPath,['-e',script],'',{cwd:path.join(root,'ai')});assert.equal(output,'Standalone validation works');
   }finally{await fs.rm(root,{recursive:true,force:true});}
@@ -1622,7 +1627,7 @@ test('project guide lists folder reading steps and a folder-box map; drag, fold,
   assert.equal(edgePath({ x: 0, y: 0, w: 100, h: 36 }, { x: 0, y: 104, w: 100, h: 36 }), 'M50 36 C50 70 50 70 50 104');
   assert.ok(fitTransform([{ x: 0, y: 0, w: 100, h: 40 }, { x: 300, y: 200, w: 100, h: 40 }], 800, 600).k <= 1.4);
   assert.deepEqual(byFolder(['b/x.py', 'main.py', 'a/y.py', 'a/z.py']), [['a', ['a/y.py', 'a/z.py']], ['b', ['b/x.py']], ['', ['main.py']]]);
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch', 'tab-stages', 'stages-view'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = [], sent = { at: i => messages.at(i), get length() { return messages.length; } }; let receive;
   vm.runInNewContext(pageScript(html), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON });
@@ -1954,7 +1959,7 @@ test('the reader header names its actions plainly and the empty state offers the
   const html = panelHTML();
   elements.plan.events.click(); assert.equal(sent.at(-1).type, 'plan');
   elements.map.events.click(); assert.equal(sent.at(-1).type, 'map');
-  for (const label of ['Switch file…', 'Read', 'Map', 'Plan', 'Overview', 'Logic']) assert.ok(html.includes('>' + label + '<'), label);
+  for (const label of ['Switch file…', 'Read', 'File links', 'Your System', 'Plan', 'Overview', 'Logic']) assert.ok(html.includes('>' + label + '<'), label);
   assert.ok(!/▤|▦|>Detailed</.test(html), 'no cryptic icons or removed levels');
   receive({ data: { type: 'state', state: { providerLabel: 'Claude Code', requestedModel: 'opus', level: 'logic' } } });
   assert.equal(elements['ai-summary'].textContent, 'AI: Claude Code · opus ▾');
@@ -3048,7 +3053,7 @@ test('a sign-in started in Setup continues by itself once it works, and coming b
   await setup.show({ pending: { label: 'explain a.py', run: async () => { opened++; } } });
   const panel = panels[0], last = () => panel.messages.at(-1).state;
   assert.match(panel.webview.html, /<title>Set up Yamori<\/title>/); assert.doesNotMatch(panel.webview.html, /innerHTML/);
-  assert.deepEqual(last().cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code']);
+  assert.deepEqual(last().cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code', 'Install Cursor CLI']);
   await panel.receive({ type: 'primary', provider: 'codex' });
   assert.deepEqual([...terminals[0].options.shellArgs], ['login']);
   const before = checks; await focusWindow({ focused: true }); await new Promise(resolve => setTimeout(resolve, 10));
@@ -3301,7 +3306,7 @@ test('guide search: a visible header box highlights every file that mentions a n
     assert.ok(h.panels.some(panel => panel.type === 'yamoriSetup')); assert.equal(flows.length, 1);
   } finally { delete testStatus.codex; await h.close(); }
   // The page: hits glow and carry counts; the side panel lists them and the flow.
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch', 'tab-stages', 'stages-view'];
   const { document, elements, all } = fakeDocument(ids);
   const messages = []; let receive;
   vm.runInNewContext(pageScript(require('../src/views/guide').mapHTML()), { document, acquireVsCodeApi: () => ({ postMessage: m => messages.push(JSON.parse(JSON.stringify(m))) }), window: { addEventListener: (type, fn) => { if (type === 'message') receive = fn; } }, Date, Math, Number, String, Map, Set, Object, Array, JSON, setTimeout, clearTimeout });
@@ -3460,6 +3465,26 @@ test('the reader shows pseudocode an agent saved, with no AI request, and the gu
   } finally { await h.close(); }
 });
 
+test('Connect also registers Yamori in Cursor\'s mcp.json when Cursor is installed, keeping the user\'s other servers', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-home-')), storage = path.join(home, 'storage');
+  try {
+    await fs.mkdir(path.join(home, '.cursor'), { recursive: true });
+    await fs.writeFile(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { mine: { command: 'mine' } } }));
+    const api = { workspace: { isTrusted: true, getConfiguration: () => ({ get: (_, fallback) => fallback }) }, window: { showWarningMessage: async (_message, _options, action) => action, showInformationMessage: async () => undefined } };
+    const stub = { exports: {} };
+    vm.runInNewContext(await fs.readFile(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: path.join(__dirname, '..', 'src'), console, URL, URLSearchParams });
+    const values = new Map(), context = { globalStorageUri: { fsPath: storage }, extensionUri: { fsPath: path.join(__dirname, '..') }, globalState: { get: k => values.get(k), update: async (k, v) => values.set(k, v) } };
+    const options = { run: async () => '', discover: async owner => '/usr/local/bin/' + owner, home, platform: 'darwin' };
+    assert.deepEqual(JSON.parse(JSON.stringify(await stub.exports.connectAgents(context, api, options))), ['Claude Code: connected', 'Codex: connected', 'Cursor: connected']);
+    let config = JSON.parse(await fs.readFile(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+    assert.deepEqual(config.mcpServers.mine, { command: 'mine' });
+    assert.deepEqual(config.mcpServers.yamori.args, [path.join(storage, 'bin', 'yamori-mcp.js')]); assert.deepEqual(config.mcpServers.yamori.env, { ELECTRON_RUN_AS_NODE: '1' });
+    await stub.exports.connectAgents(context, api, { ...options, disconnect: true });
+    config = JSON.parse(await fs.readFile(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+    assert.deepEqual(config, { mcpServers: { mine: { command: 'mine' } } });
+  } finally { await fs.rm(home, { recursive: true, force: true }); }
+});
 test('Connect only registers the server with both CLIs, removes what earlier versions added, and leaves the user\'s own settings alone', async () => {
   const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-home-')), storage = path.join(home, 'storage'), runs = [];
@@ -3573,6 +3598,30 @@ const GOOD_PLAN = { summary: 'Skip the hook when numbering loops.', steps: [
   { file: 'pipeline/plan.py', lines: [3, 8], title: 'Number loops after the hook', change: 'Start numbering at L2 after the hook', why: 'The hook is not a loop' },
   { file: 'pipeline/write.py', lines: [4, 5], title: 'Match the hints', change: 'Do not hint the hook loop', why: 'Keeps hints in step' }] };
 const BAD_PLAN = { summary: 'x', steps: [{ file: 'pipeline/missing.py', lines: [1, 5], title: 't', change: 'Edit it', why: '' }] };
+
+test('a plan from Claude Code plan mode (/plan) appears on the Plan canvas by itself, once', async () => {
+  const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-home-')), before = process.env.HOME;
+  process.env.HOME = home;
+  let h;
+  try {
+    h = await readerHarness({ prefetchNext: false, autoNotes: false });
+    await h.until(() => h.guideState().files > 0, 'mapped');
+    const real = await fs.realpath(h.root), folder = path.join(home, '.claude', 'projects', real.replace(/[^A-Za-z0-9]/g, '-'));
+    await fs.mkdir(folder, { recursive: true });
+    const plan = '# Skip the hook when numbering\n\n## Changes\n- **plan_loops** in `pipeline/plan.py`: start at L2 after the hook.\n- Update `pipeline/write.py` hints to match.\n';
+    await fs.writeFile(path.join(folder, 's.jsonl'), JSON.stringify({ type: 'assistant', cwd: real, sessionId: 's', timestamp: new Date().toISOString(), message: { content: [{ type: 'tool_use', name: 'ExitPlanMode', input: { plan } }] } }) + '\n');
+    for (let i = 0; i < 160 && h.guideState().plan?.plan?.steps?.length !== 2; i++) await new Promise(resolve => setTimeout(resolve, 50));
+    const shown = h.guideState().plan;
+    assert.equal(shown.plan.goal, 'Skip the hook when numbering');
+    assert.deepEqual(shown.plan.steps.map(step => [step.file, step.startLine]), [['pipeline/plan.py', 3], ['pipeline/write.py', 1]], 'plan_loops resolves to its lines');
+    assert.equal(shown.plan.origin, 'native');
+    assert.ok(shown.conversation.some(message => /Claude Code plan mode/.test(message.text)));
+    const id = shown.plan.id;
+    await new Promise(resolve => setTimeout(resolve, 3500));
+    assert.equal(h.guideState().plan.plan.id, id, 'the same plan is not added again');
+  } finally { await h?.close(); process.env.HOME = before; await fs.rm(home, { recursive: true, force: true }); }
+});
 
 test('planning: local starting points, explicit retries, no hidden draft or preview fallback, and durable usage', async () => {
   const fs = require('node:fs/promises'), path = require('node:path');
@@ -3699,7 +3748,7 @@ test('planning: narrow and broad goals use one selected-model draft; explicit fa
 });
 
 test('the Plan tab: the same map with numbered steps, ripples and suggestions, and every part of the plan editable, draggable and undoable', async () => {
-  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch'];
+  const ids = ['canvas', 'viewport', 'boxes', 'edges', 'nodes', 'card', 'glossary', 'drawer', 'drawer-close', 'status', 'notes', 'rescan', 'zoom-in', 'zoom-out', 'fit', 'reset', 'drawer-toggle', 'tab-start', 'tab-map', 'start-view', 'map-view', 'start-head', 'folders', 'steps-title', 'steps-hint', 'steps', 'expand-all', 'collapse-all', 'search', 'search-form', 'search-go', 'search-panel', 'agents', 'tab-plan', 'plan-panel', 'plan-actions', 'read-current', 'project-branch', 'tab-stages', 'stages-view'];
   const { document, elements, all } = fakeDocument(ids);
   const documentEvents = {}; document.addEventListener = (type, fn) => { documentEvents[type] = fn; };
   const messages = [], savedView = {}; let receive;
@@ -3726,6 +3775,12 @@ test('the Plan tab: the same map with numbered steps, ripples and suggestions, a
   assert.ok(vm.runInNewContext('view.k', sandbox) >= 0.75, 'planning refits at a readable zoom instead of inheriting the full-project zoom');
   assert.deepEqual([panel.hidden, elements['map-view'].hidden, elements['start-view'].hidden, elements['tab-plan'].attributes['aria-selected'], elements['tab-map'].attributes['aria-selected']], [false, false, true, 'true', 'false']);
   assert.ok(button('Approve & implement'), 'approval is directly above the canvas');
+  // Stages is a tab of the same panel: it hides the map and asks for stage state.
+  elements['tab-stages'].events.click();
+  assert.deepEqual([elements['stages-view'].hidden, elements['map-view'].hidden, elements['start-view'].hidden, elements['tab-stages'].attributes['aria-selected'], elements['tab-plan'].attributes['aria-selected']], [false, true, true, 'true', 'false']);
+  assert.deepEqual(messages.at(-1), { type: 'stages', message: { type: 'ready' } });
+  elements['tab-plan'].events.click();
+  assert.equal(elements['stages-view'].hidden, true);
   button('Approve & implement').events.click(); assert.deepEqual(messages.at(-1), { type: 'planExecute', id: 'p1' });
   // The map: numbered steps, ripple, suggestions, everything else fades.
   const badge = id => all(node(id)).find(el => el.attributes?.class === 'plan-badge');
@@ -4497,7 +4552,7 @@ test('approved implementation uses writing tools, honors selected settings and r
 
 test('approving a plan executes once, excludes rejected and finished steps, archives only success and keeps failures', async () => {
   let release, calls = [], stopped = false;
-  const h = await readerHarness({ autoNotes: false }, { engine: () => ({ implementPlan: options => {
+  const h = await readerHarness({ autoNotes: false, chatInTerminal: false }, { engine: () => ({ implementPlan: options => {
     calls.push(options); options.onProgress({ phase: 'Editing pipeline/plan.py', usage: { input: 100, output: 10 } });
     return new Promise((resolve, reject) => { release = resolve; options.signal.addEventListener('abort', () => { stopped = true; reject(new Error('Cancelled.')); }, { once: true }); });
   } }) });
@@ -4537,7 +4592,7 @@ test('approving a plan executes once, excludes rejected and finished steps, arch
 test('planning can inspect Markdown profiles and prompts in Restricted Mode without asking for attachments', async () => {
   const fs = require('node:fs/promises'), path = require('node:path'), real = require('../src/ai/engine');
   let inspected = false, captured, implemented = false;
-  const h = await readerHarness({ autoNotes: false }, { trusted: false, engine: () => ({ implementPlan: async () => { implemented = true; return { summary: 'Implemented and checked.' }; }, requestStructured: async options => {
+  const h = await readerHarness({ autoNotes: false, chatInTerminal: false }, { trusted: false, engine: () => ({ implementPlan: async () => { implemented = true; return { summary: 'Implemented and checked.' }; }, requestStructured: async options => {
     if (options.schema !== real.PLAN_SCHEMA) throw new Error('Unexpected model request.');
     captured = options; assert.ok(options.tools, 'static project tools remain available without workspace trust');
     assert.equal(options.tools.projectRoot, h.root); assert.equal(options.tools.env.ELECTRON_RUN_AS_NODE, '1');
@@ -4597,7 +4652,7 @@ test('native Codex planning uses the project cwd and reports MCP startup failure
 
 test('project chat continues through planning, implementation, testing and a new plan with native session references', async () => {
   const calls = [], planningCalls = [], queue = [GOOD_PLAN];
-  const h = await readerHarness({ autoNotes: false }, { engine: () => ({ ...planEngine(planningCalls, queue)(), implementPlan: async options => {
+  const h = await readerHarness({ autoNotes: false, chatInTerminal: false }, { engine: () => ({ ...planEngine(planningCalls, queue)(), implementPlan: async options => {
     calls.push(options); const session = { provider: 'codex', cwd: options.cwd, id: 'native-project-session' }; options.onSession?.(session);
     options.onProgress?.({ kind: 'tool', phase: options.mode === 'chat' ? 'Reading writer.py' : 'Running requested checks' });
     options.onProgress?.({ stage: 'write', reply: 'The writer' }); options.onProgress?.({ stage: 'write', reply: 'The writer' }); options.onProgress?.({ stage: 'write', reply: 'The writer numbers its loops.' });

@@ -348,11 +348,23 @@ test('canvas paths wrap without losing directories and grow file boxes to fit', 
 });
 
 
+test('over the file cap, code files come before docs and data, so content folders never push code out of the map', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-cap-order-'));
+  try {
+    await fs.mkdir(path.join(root, 'assets')); await fs.mkdir(path.join(root, 'zeta'));
+    await Promise.all(Array.from({ length: 505 }, (_, i) => fs.writeFile(path.join(root, 'assets', i + '.md'), '# Note ' + i + '\n')));
+    await fs.writeFile(path.join(root, 'zeta', 'run.py'), 'def run():\n    return 1\n');
+    const graph = await project.scanFolder(root, undefined, new project.Indexer());
+    assert.ok(graph.files['zeta/run.py'], 'the code file is mapped'); assert.equal(graph.limited, true);
+    assert.deepEqual(project.prioritizeFiles(['b.md', 'a.md', 'z.py', 'c.json', 'm.ts']), ['m.ts', 'z.py', 'a.md', 'b.md', 'c.json']);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test('targeted MCP reads reach source beyond a capped overview and keep outside symlinks inaccessible', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yamori-capped-plan-'));
   try {
     const repo = path.join(root, 'repo'), store = path.join(root, 'store'); await fs.mkdir(path.join(repo, 'assets'), { recursive: true }); await fs.mkdir(path.join(repo, 'src')); await fs.mkdir(store);
-    await Promise.all(Array.from({ length: 505 }, (_, i) => fs.writeFile(path.join(repo, 'assets', i + '.md'), '# Preview\n')));
+    await Promise.all(Array.from({ length: 505 }, (_, i) => fs.writeFile(path.join(repo, 'assets', 'a' + i + '.py'), 'VALUE = ' + i + '\n')));
     await fs.writeFile(path.join(repo, 'src', 'calculate.py'), 'def calculate():\n    return 42\n');
     const indexer = new project.Indexer(), capped = await project.scanFolder(repo, undefined, indexer); assert.equal(capped.files['src/calculate.py'], undefined);
     const server = require('../src/project/mcp').createServer({ root: repo, store });

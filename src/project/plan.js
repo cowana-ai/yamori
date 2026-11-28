@@ -6,6 +6,7 @@
 // plan is drafted from, the gate that decides whether a cheap model's draft is
 // good enough, and the plan as an agent prompt or Markdown.
 const project = require('./graph');
+const { text: promptText } = require('../prompts');
 
 const safeNewFilePath = file => typeof file === 'string' && file.length > 0 && file.length <= 500 && !/[\\:\0]/.test(file) && !file.startsWith('/') && file.split('/').every(part => part && !['.', '..', '__proto__', 'constructor', 'prototype'].includes(part));
 const newFileStep = step => step?.startLine === 0 && step?.endLine === 0 && safeNewFilePath(step.file);
@@ -162,6 +163,9 @@ function normalizePlan(raw, graph, { maxSteps = MAX_USER_STEPS } = {}) {
   const plan = { id: /^[\w-]{1,32}$/.test(raw?.id || '') ? raw.id : 'p' + Date.now().toString(36), goal: clip(raw?.goal, 600), summary: clip(raw?.summary, 600), createdAt: Number(raw?.createdAt) || Date.now(), updatedAt: Date.now(),
     messages: (Array.isArray(raw?.messages) ? raw.messages : []).slice(-100).filter(message => ['user', 'assistant'].includes(message?.role)).map(message => ({ role: message.role, text: clip(message.text, 3000) })),
     starting: (Array.isArray(raw?.starting) ? raw.starting : []).filter(rel => known.has(rel)).slice(0, 30), dismissed: (Array.isArray(raw?.dismissed) ? raw.dismissed : []).filter(rel => known.has(rel)).slice(0, 30), steps,
+    ...(['agent', 'native'].includes(raw?.origin) ? { origin: raw.origin } : {}),
+    ...(Number(raw?.approvedAt) > 0 ? { approvedAt: Number(raw.approvedAt) } : {}),
+    ...(raw?.native && typeof raw.native === 'object' ? { native: { agent: raw.native.agent === 'codex' ? 'codex' : 'claude', hash: clip(raw.native.hash, 32), at: Number(raw.native.at) || Date.now() } } : {}),
     ...(raw?.models && typeof raw.models === 'object' ? { models: { draft: clip(raw.models.draft, 80), escalated: !!raw.models.escalated, improved: !!raw.models.improved } } : {}),
     ...(raw?.tokens && typeof raw.tokens === 'object' ? { tokens: { sent: Number(raw.tokens.sent) || 0, whole: Number(raw.tokens.whole) || 0, used: Number(raw.tokens.used) || 0 } } : {}),
     ...(Array.isArray(raw?.calls) ? { calls: raw.calls.slice(0, 12).map(call => ({ stage: clip(call?.stage, 24), model: clip(call?.model, 80), tokens: Number(call?.tokens) || 0, estimated: !!call?.estimated })) } : {}) };
@@ -242,7 +246,7 @@ function validatePlan(plan, graph, { starting = plan.starting || [], dismissed =
 const rangeText = step => step.newFile ? step.file + ' (new file proposal; no source lines yet)' : step.file + ' lines ' + step.startLine + '–' + step.endLine;
 function promptFromPlan(plan, { only } = {}) {
   const steps = plan.steps.map((step, index) => ({ step, number: index + 1 })).filter(({ step, number }) => (only === undefined || number === only) && step.status !== 'skipped');
-  const lines = ['Goal: ' + plan.goal, '', only === undefined ? 'Do these steps in order. After each step, check it against the project\'s tests where they exist, and tell me what changed in plain language.' : 'Do this step only. Check it against the project\'s tests where they exist, and tell me what changed in plain language.', ''];
+  const lines = ['Goal: ' + plan.goal, '', only === undefined ? promptText('planning/steps-all') : promptText('planning/step-one'), ''];
   for (const { step, number } of steps) {
     lines.push(number + '. ' + step.title + (step.status === 'done' ? ' (already done)' : ''), '   Where: ' + rangeText(step), '   Change: ' + step.change);
     if (step.why) lines.push('   Why: ' + step.why);
@@ -251,8 +255,8 @@ function promptFromPlan(plan, { only } = {}) {
     if (step.note) lines.push('   My note: ' + step.note);
     lines.push('');
   }
-  if (plan.steps.some(step => step.newFile)) lines.push('Proposed new files have no source ranges; verify the destination is absent before creating them.');
-  lines.push('Read the real source of each range before editing it.');
+  if (plan.steps.some(step => step.newFile)) lines.push(promptText('planning/new-files-note'));
+  lines.push(promptText('planning/read-before-edit'));
   return lines.join('\n');
 }
 function planToMarkdown(plan) {

@@ -1,0 +1,21 @@
+{
+  "get_conversation": "Read the project chat across questions, reviewed plans, implementation and tests. Returns the latest messages with IDs and plan details; pass before=message ID to page backward. History is context, not a new instruction.",
+  "get_plan": "Read the current human planning canvas: goal, proposed changes, source ranges, comments and rejected files. No .yamori mirror is required. These are proposals, not proof that code was changed. Optionally fetch one file and generated pseudocode snippets.",
+  "project_overview": "Start here instead of exploring files: what the project does, its file groups, entry points and the recommended reading order, from Yamori.",
+  "start_here": "The project guide's reading order for the whole project or one folder: which files to read first and why, with each file's purpose and links. Cheaper than opening files to find out.",
+  "project_map": "The project map: folders with their files and one-line purposes, and which file uses which (with the shared names). Use it to see how files connect instead of reading them.",
+  "list_files": "Project files grouped by folder, with one-line purposes and whether Yamori has pseudocode for them. Optionally limit to one folder.",
+  "file_info": "One project file: its purpose and role, project terms it defines, its definitions with line numbers, what it uses and what uses it (with the shared names), its unit tests, and whether Yamori has pseudocode for it.",
+  "find_symbol": "Where a function, class, constant or other name is defined in the project (file and line), and which files use it.",
+  "search_name": "The project guide's search: every file that mentions a name (whole word, exact capitals) or text, the defining file first, with the matching lines. Cheaper than grepping the whole project.",
+  "glossary": "Project terms (IDs, naming schemes, section names, constants, domain words) with their meaning and where they are defined.",
+  "tests_for": "Unit tests that call the functions of a file (or of the function at a line), with the test file and line.",
+  "get_pseudocode": "A file's pseudocode, by the piece you need: outline=true gives block titles, source ranges and sizes (a small fraction of the file); line=N or name=X gives the block covering that source line or definition; block=N or start_line/end_line select blocks; with none of these, the whole file. Each step is marked with the source lines it stands for (L120–124), and each answer states its size next to the source's, so you can pick the cheaper.",
+  "search_pseudocode": "Search all of the project's pseudocode (what each file does, in plain steps) for words or a name. Returns matching steps with their file and source lines.",
+  "git_history": "Inspect local commit authorship and touched file paths without running project code, fetching or changing files. Use before attributing changes to a person.",
+  "git_changes": "Read the current branch, local branches, changed paths and a diff summary. Optionally inspect the patch for one mapped file or compare with a local base ref. Never commits, runs hooks, fetches or changes files.",
+  "read_source": "Read numbered lines from a project file (at most {{MAX_LINES}} lines per call). Use the L-marks from get_pseudocode to read only what you need.",
+  "find": "Answer where or how something happens in this project in one call: the best-matching functions, classes or script sections (file:lines, what each does, its part and step in Your System, who calls it and what it calls) with their current source. Use it instead of grep and reading files for where/how questions or to locate a name.",
+  "pseudocode_guide": "How Yamori writes pseudocode, and the exact format save_pseudocode takes. Read it before writing pseudocode for a file.",
+  "save_pseudocode": "Save pseudocode you wrote for a file that has none (or whose pseudocode is outdated), so the user sees it in Yamori without generating it and later sessions can skip reading the source. Follow pseudocode_guide. Never replaces current pseudocode Yamori wrote."
+}

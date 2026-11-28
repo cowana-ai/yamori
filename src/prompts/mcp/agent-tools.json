@@ -1,0 +1,13 @@
+{
+  "get_pseudocode": "A file's pseudocode (plain steps, each marked with its source lines L120–124), usually far smaller than the source. outline=true for block titles; line or name for one block; nothing for the whole file.",
+  "file_info": "One file: purpose, definitions with lines, what it uses and what uses it, its tests.",
+  "read_source": "Numbered lines of a project file (up to {{MAX_LINES}}): a line range, or symbol for one function or class.",
+  "get_view": "What the founder is looking at now: editor file, cursor and selection, the Yamori tab and selection. Use when they say this, here or that.",
+  "save_pseudocode": "Save pseudocode you wrote for a file with none (or outdated), in the format pseudocode_guide gives. Never replaces current pseudocode Yamori wrote.",
+  "get_plan": "The plan on Yamori's Plan canvas as the founder left it: steps, their comments, rejected files, and whether they approved it.",
+  "save_plan": "Put a plan on Yamori's Plan canvas for the founder to review: one step per change, each on a project file, saying what changes and why in plain words.",
+  "show_in_yamori": "Bring a part, step, file (at a line) or the Plan canvas into view in Yamori.",
+  "add_note": "Add a note to a step (the founder sees it): decisions and constraints you found, not progress.",
+  "done": "Call once when a run that edited code is finished, so Yamori updates the map once.",
+  "pseudocode_guide": "How to write pseudocode for save_pseudocode."
+}

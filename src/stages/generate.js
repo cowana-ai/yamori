@@ -1,0 +1,733 @@
+'use strict';
+// Stage generation: group a workflow's code into 3–7 named stages.
+//
+// Token rules this module enforces (see docs/stages.md):
+// - Cheapest input first: AI notes and definition names. Cached pseudocode
+//   outlines only for files whose note is too coarse. Never raw source by
+//   default; a refresh falls back to one bounded symbol excerpt only when a
+//   changed file has neither current pseudocode nor a current note.
+// - Zero-call reads and zero-call reruns: nothing here calls a model unless
+//   code behind a stage changed or the user explicitly asked.
+// - Deterministic, cache-friendly prompts: fixed instructions and schema
+//   first, data sorted by file path and step position, changing parts last.
+// - Bounded structured output with hard caps.
+const { estimatePrompt } = require('./budget');
+const { render } = require('../prompts');
+
+const STAGE_PROMPT_VERSION = 5;
+const LIMITS = { what: 110, detail: 170, details: 4, deepCode: 42000, deepFunctionLines: 70, deepStages: 8, minStages: 3, maxStages: 7, name: 40, gist: 240, io: 90, summary: 160, stepsPerStage: 14, files: 30, symbolsPerFile: 40, excerptLines: 60 };
+
+const STAGES_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['stages'],
+  properties: {
+    stages: { type: 'array', minItems: LIMITS.minStages, maxItems: LIMITS.maxStages, items: {
+      type: 'object', additionalProperties: false, required: ['id', 'name', 'gist', 'input', 'output', 'steps'],
+      properties: {
+        id: { type: 'string', maxLength: 40, description: 'Short lowercase slug, e.g. plan. Reuse a previous id when the stage is the same.' },
+        name: { type: 'string', maxLength: LIMITS.name },
+        gist: { type: 'string', maxLength: LIMITS.gist },
+        input: { type: 'string', maxLength: LIMITS.io },
+        output: { type: 'string', maxLength: LIMITS.io },
+        steps: { type: 'array', minItems: 1, maxItems: LIMITS.stepsPerStage, items: { type: 'object', additionalProperties: false, required: ['file', 'symbol', 'what'], properties: { file: { type: 'string' }, symbol: { type: 'string' }, what: { type: 'string', maxLength: LIMITS.what, description: 'What this code does, in 3–10 everyday words, no code names.' } } } }
+      } } },
+    lowConfidence: { type: 'array', maxItems: 10, items: { type: 'string' } }
+  }
+};
+const REFRESH_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['name', 'gist', 'input', 'output', 'steps', 'behaviorChanged', 'summary'],
+  properties: {
+    name: { type: 'string', maxLength: LIMITS.name },
+    gist: { type: 'string', maxLength: LIMITS.gist },
+    input: { type: 'string', maxLength: LIMITS.io },
+    output: { type: 'string', maxLength: LIMITS.io },
+    steps: { type: 'array', minItems: 1, maxItems: LIMITS.stepsPerStage, items: { type: 'object', additionalProperties: false, required: ['file', 'symbol', 'what', 'details'], properties: { file: { type: 'string' }, symbol: { type: 'string' }, what: { type: 'string', maxLength: LIMITS.what, description: 'What this code does, in 3–10 everyday words, no code names.' }, details: { type: 'array', maxItems: LIMITS.details, items: { type: 'object', additionalProperties: false, required: ['kind', 'text'], properties: { kind: { type: 'string', enum: ['decides', 'ai', 'asks', 'writes', 'reads', 'loops', 'fallback', 'stops', 'limit', 'other'] }, text: { type: 'string', maxLength: LIMITS.detail } } }, description: 'Key behaviors visible in the code (decides, ai, asks, writes, reads, loops, fallback, stops, limit). Keep the previous ones that still hold.' } } } },
+    behaviorChanged: { type: 'boolean' },
+    summary: { type: 'string', maxLength: LIMITS.summary, description: 'One plain sentence on how the stage behaves differently, e.g. "Evaluate now retries twice before failing". Empty when behaviorChanged is false.' }
+  }
+};
+
+const STAGE_RULES = render('stages/stage-rules', { LIMITS_minStages: LIMITS.minStages, LIMITS_maxStages: LIMITS.maxStages, LIMITS_name: LIMITS.name, LIMITS_gist: LIMITS.gist });
+
+const REFRESH_RULES = render('stages/refresh-rules', { LIMITS_summary: LIMITS.summary });
+
+const slug = text => String(text || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-').slice(0, 40) || 'stage';
+const byPath = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const clip = (text, max) => { const value = String(text || '').replace(/\s+/g, ' ').trim(); return value.length > max ? value.slice(0, max - 1).trimEnd() + '…' : value; };
+const parseJson = (raw, label) => {
+  const value = readJson(raw);
+  if (value === undefined) throw new Error(label + ' returned incomplete JSON.');
+  return value;
+};
+// The JSON in a reply: the whole reply, a fenced block in it, or the outermost braces.
+function readJson(raw) {
+  const text = String(raw ?? '').trim(), tries = [text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')];
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  if (fenced) tries.push(fenced[1]);
+  const open = text.indexOf('{'), close = text.lastIndexOf('}');
+  if (open >= 0 && close > open) tries.push(text.slice(open, close + 1));
+  for (const item of tries) { try { return JSON.parse(item); } catch { /* Next. */ } }
+  return undefined;
+}
+const STEP_KINDS = new Set(['function', 'method', 'class', 'constant', 'type', 'interface', 'enum', 'block']);
+
+// The symbols a file offers as steps, in source order.
+function symbolsOf(file) {
+  const seen = new Set(), out = [];
+  for (const def of [...(file?.defs || []), ...(file?.blocks || [])]) {
+    if (!STEP_KINDS.has(def.kind) || seen.has(def.name)) continue;
+    seen.add(def.name); out.push(def);
+  }
+  return out;
+}
+function defFor(graph, file, symbol) { return symbolsOf(graph.files[file]).find(def => def.name === symbol); }
+
+// Pseudocode for one symbol from the per-file cache, without any model call.
+function pseudocodeFor(graph, explanations, file, symbol) {
+  const def = defFor(graph, file, symbol), saved = explanations?.[file];
+  const view = saved?.logic || saved?.overview;
+  if (!def || !view?.sections) return undefined;
+  const sections = view.sections.filter(section => section.startLine <= (def.end || def.line) && section.endLine >= def.line);
+  if (!sections.length) return undefined;
+  return { text: sections.map(section => '## ' + section.title + '\n' + section.pseudocode).join('\n\n'), current: view.hash === graph.files[file]?.hash, startLine: sections[0].startLine, endLine: sections.at(-1).endLine };
+}
+
+// Which files a workflow covers: the entry file and what it reaches, nearest first.
+function workflowFiles(graph, entryFile, limit = LIMITS.files) {
+  if (!graph.files[entryFile]) throw new Error(`"${entryFile}" is not in the project map.`);
+  const out = new Map();
+  for (const edge of graph.edges || []) { if (!out.has(edge.from)) out.set(edge.from, []); out.get(edge.from).push(edge.to); }
+  const depth = new Map([[entryFile, 0]]), queue = [entryFile];
+  while (queue.length) {
+    const current = queue.shift();
+    for (const next of (out.get(current) || []).slice().sort(byPath)) {
+      if (depth.has(next) || !graph.files[next] || graph.files[next].test) continue;
+      depth.set(next, depth.get(current) + 1); queue.push(next);
+    }
+  }
+  return [...depth.keys()].sort((a, b) => depth.get(a) - depth.get(b) || (graph.files[b].rank || 0) - (graph.files[a].rank || 0) || byPath(a, b)).slice(0, limit).sort(byPath);
+}
+
+// A note is too coarse when it is missing or outdated, or when one note has
+// to stand for many definitions (the file likely spans several stages).
+function coarse(graph, notes, file) {
+  const note = notes?.files?.[file], info = graph.files[file];
+  if (!note?.purpose || note.hash !== info.hash) return true;
+  return symbolsOf(info).length > 8;
+}
+
+// Everything the clustering prompt sees, sorted for stable prompt caching.
+function stageInput(graph, notes, explanations, files, lowConfidence = []) {
+  const escalate = new Set(lowConfidence);
+  let escalated = 0;
+  const items = files.slice().sort(byPath).map(file => {
+    const info = graph.files[file], note = notes?.files?.[file];
+    const symbols = symbolsOf(info).slice(0, LIMITS.symbolsPerFile);
+    const item = { file, purpose: note?.purpose || '', role: note?.role || '', symbols: symbols.map(def => def.name) };
+    if (escalate.has(file) || coarse(graph, notes, file)) {
+      const view = explanations?.[file]?.logic || explanations?.[file]?.overview;
+      if (view?.sections?.length) {
+        escalated++;
+        item.outline = view.sections.slice(0, 30).map(section => ({ block: clip(section.title, 80), symbols: symbols.filter(def => def.line >= section.startLine && def.line <= section.endLine).map(def => def.name), steps: clip(section.pseudocode.split('\n').filter(line => line.trim() && !/^\s*#/.test(line)).slice(0, 4).join(' / '), 240) }));
+      }
+    }
+    return item;
+  });
+  return { items, escalated, coarseFiles: files.filter(file => coarse(graph, notes, file)).length };
+}
+
+function stagesPrompt({ items, entryFile, entrySymbol, previous }) {
+  // Stable prefix first: rules, schema and the file data sorted by path.
+  return render('stages/stages', { STAGE_RULES, schema_json: JSON.stringify(STAGES_SCHEMA), files_json: JSON.stringify(items), entry_json: JSON.stringify({ file: entryFile, symbol: entrySymbol }), previousStages: previous?.length ? 'PREVIOUS STAGES: ' + JSON.stringify(previous.map(stage => ({ id: stage.id, name: stage.name, pinned: !!stage.pinned }))) + '\n' : '' });
+}
+
+// Keep only steps that name a real symbol of a workflow file; give each a line range.
+// Behaviors as { kind, text }; older maps and models gave plain text.
+function typedDetails(list) {
+  return (Array.isArray(list) ? list : []).map(item => typeof item === 'string' ? { kind: 'other', text: clip(item, LIMITS.detail) } : item && { kind: BEHAVIOR_KINDS.includes(item.kind) ? item.kind : 'other', text: clip(item.text, LIMITS.detail) })
+    .filter(item => item?.text).slice(0, LIMITS.details);
+}
+function resolveSteps(graph, files, steps, taken = new Set()) {
+  const allowed = new Set(files), out = [];
+  for (const step of steps || []) {
+    if (!allowed.has(step?.file)) continue;
+    const def = defFor(graph, step.file, step.symbol), key = step.file + '#' + step.symbol;
+    if (!def || taken.has(key)) continue;
+    taken.add(key);
+    const details = typedDetails(step.details);
+    out.push({ file: step.file, symbol: step.symbol, line_start: def.start || def.line, line_end: def.end || def.line, what: clip(step.what, LIMITS.what) || null, details });
+    if (out.length >= LIMITS.stepsPerStage) break;
+  }
+  return out;
+}
+
+function parseStages(raw, graph, files, { previous = [], pinnedSteps = new Set() } = {}) {
+  const value = parseJson(raw, 'The stage mapper');
+  if (!Array.isArray(value?.stages)) throw new Error('The stage mapper returned no stages.');
+  const pinned = new Set(previous.filter(stage => stage.pinned).map(stage => stage.id));
+  const ids = new Set(pinned), taken = new Set(pinnedSteps), stages = [];
+  for (const stage of value.stages.slice(0, Math.max(LIMITS.maxStages, LIMITS.deepStages))) {
+    // A pinned stage keeps its content; the model only gives its place.
+    if (pinned.has(stage?.id) && !stages.some(item => item.id === stage.id)) { stages.push({ id: stage.id, pinnedPlace: true }); continue; }
+    const steps = resolveSteps(graph, files, stage.steps, taken);
+    if (!steps.length || !String(stage.name || '').trim()) continue;
+    let id = slug(stage.id || stage.name), n = 2;
+    while (ids.has(id)) id = slug(stage.id || stage.name).slice(0, 36) + '-' + n++;
+    ids.add(id);
+    stages.push({ id, name: clip(stage.name, LIMITS.name), gist: clip(stage.gist, LIMITS.gist), input: clip(stage.input, LIMITS.io), output: clip(stage.output, LIMITS.io), steps });
+  }
+  if (!stages.some(stage => !stage.pinnedPlace)) throw new Error('The stage mapper returned no stage that matches the code.');
+  const lowConfidence = (Array.isArray(value.lowConfidence) ? value.lowConfidence : []).filter(file => files.includes(file));
+  return { stages, lowConfidence };
+}
+
+// What generation is about to cost, before anything is sent.
+function estimateWorkflow({ graph, notes, explanations, entryFile, entrySymbol, files, provider, model }) {
+  const chosen = files || workflowFiles(graph, entryFile);
+  const input = stageInput(graph, notes, explanations, chosen);
+  const prompt = stagesPrompt({ items: input.items, entryFile, entrySymbol });
+  const missingNotes = chosen.filter(file => !notes?.files?.[file]?.purpose || notes.files[file].hash !== graph.files[file].hash);
+  return { files: chosen, missingNotes, escalated: input.escalated, tokens: estimatePrompt(prompt, provider, model) };
+}
+
+const versionKey = id => 'workflow:' + id + ':version';
+const currentVersion = model => STAGE_PROMPT_VERSION + '|' + (model || '');
+
+// Has the code under a workflow changed since generation? Pure lookups.
+function workflowStatus(db, graph, id, model) {
+  const workflow = db.workflow(id);
+  if (!workflow) return { exists: false };
+  const changedFiles = db.files(id).filter(file => graph.files[file.path]?.hash !== file.hash).map(file => file.path);
+  const version = db.meta(versionKey(id));
+  return { exists: true, changedFiles, stale: db.staleStages(id).length, outdated: !!version && model !== undefined && version !== currentVersion(model) };
+}
+
+/**
+ * Generate (or reuse) the stages of a workflow.
+ * request({ prompt, schema, tier }) → { raw, usage, model }
+ * Returns { workflow, stages, calls }.
+ */
+async function generateWorkflow({ db, graph, notes, explanations, entryFile, entrySymbol, id, files, request, run, provider, model, headSha, force = false, signal, readText, scope, part }) {
+  const workflowId = id || slug(entrySymbol || entryFile.split('/').at(-1).replace(/\.[^.]+$/, ''));
+  const status = workflowStatus(db, graph, workflowId, model);
+  // Rerunning with no code change costs nothing.
+  if (status.exists && !force && !status.changedFiles.length && !status.stale) return { workflowId, stages: db.stages(workflowId), calls: 0, reused: true, outdated: status.outdated };
+  // Some files changed: regenerate the delta, not the workflow.
+  if (status.exists && !force) {
+    for (const file of status.changedFiles) db.markStaleForFile(file);
+    const result = await refreshStale({ db, graph, notes, explanations, workflowId, request, run, provider, model, headSha, signal });
+    return { workflowId, stages: db.stages(workflowId), calls: result.calls, refreshed: result.refreshed, skipped: result.skipped };
+  }
+  if (readText) return generateDeep({ db, graph, explanations, entryFile, entrySymbol, workflowId, request, run, provider, model, headSha, signal, readText, scope, part });
+  const chosen = files?.length ? files.filter(file => graph.files[file]) : workflowFiles(graph, entryFile);
+  if (!chosen.includes(entryFile)) chosen.push(entryFile);
+  const previous = db.stages(workflowId);
+  const pinnedSteps = new Set(previous.filter(stage => stage.pinned).flatMap(stage => db.steps(workflowId, stage.id).map(step => step.file + '#' + step.symbol)));
+  const input = stageInput(graph, notes, explanations, chosen);
+  const prompt = stagesPrompt({ items: input.items, entryFile, entrySymbol, previous });
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
+  if (signal?.aborted) throw new Error('Cancelled.');
+  const response = await request({ prompt, schema: STAGES_SCHEMA, tier: 'cheap', signal });
+  run.log({ model: response.model || model, usage: response.usage, workflowId, estimate, note: `generate · ${chosen.length} files · ${input.escalated} via pseudocode outline`, trigger: 'stages.generate' });
+  const parsed = parseStages(response.raw, graph, chosen, { previous, pinnedSteps });
+  db.transaction(() => {
+    db.upsertWorkflow({ id: workflowId, entry_file: entryFile, entry_symbol: entrySymbol || '', base_sha: headSha || null });
+    db.replaceStages(workflowId, parsed.stages);
+    db.setFiles(workflowId, chosen.map(file => [file, graph.files[file].hash]));
+    // The review baseline starts at what the founder sees now.
+    for (const stage of parsed.stages) for (const step of stage.steps || []) db.setSnapshot(workflowId, step.file, step.symbol, pseudocodeFor(graph, explanations, step.file, step.symbol)?.text ?? null);
+    db.setMeta(versionKey(workflowId), currentVersion(model));
+    db.setMeta('fallback:' + workflowId, JSON.stringify({ files: chosen.length, escalated: input.escalated, lowConfidence: parsed.lowConfidence.length, at: new Date().toISOString() }));
+  });
+  return { workflowId, stages: db.stages(workflowId), calls: 1, escalated: input.escalated, lowConfidence: parsed.lowConfidence };
+}
+
+// --- deep mapping: the part's call tree, docs and code ---
+const DEEP_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['stages'],
+  properties: { stages: { type: 'array', minItems: LIMITS.minStages, maxItems: LIMITS.deepStages, items: {
+    type: 'object', additionalProperties: false, required: ['id', 'name', 'gist', 'input', 'output', 'steps'],
+    properties: {
+      id: { type: 'string', maxLength: 40 }, name: { type: 'string', maxLength: LIMITS.name }, gist: { type: 'string', maxLength: LIMITS.gist },
+      input: { type: 'string', maxLength: LIMITS.io }, output: { type: 'string', maxLength: LIMITS.io },
+      steps: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object', additionalProperties: false, required: ['file', 'symbol', 'what', 'details'], properties: {
+        file: { type: 'string' }, symbol: { type: 'string' }, what: { type: 'string', maxLength: LIMITS.what },
+        details: { type: 'array', maxItems: LIMITS.details, items: { type: 'string', maxLength: LIMITS.detail } } } } } } } } }
+};
+const DEEP_RULES = render('stages/deep-rules', { LIMITS_minStages: LIMITS.minStages, LIMITS_deepStages: LIMITS.deepStages, LIMITS_details: LIMITS.details });
+
+// The material the deep mapper reads, bounded: docs, the call tree, then code in call order.
+function deepInput({ graph, explanations, tree, texts, docs = '' }) {
+  const { treeText } = require('./callgraph');
+  let budget = LIMITS.deepCode;
+  const code = [];
+  for (const node of tree.nodes) {
+    if (budget <= 0) break;
+    if (node.kind === 'class' || node.end - node.line < 2) continue;
+    const pseudo = pseudocodeFor(graph, explanations, node.file, node.symbol);
+    let text;
+    if (pseudo?.current) text = 'PSEUDOCODE:\n' + pseudo.text;
+    else {
+      const lines = (texts.get(node.file) || '').split('\n').slice(node.line - 1, Math.min(node.end, node.line - 1 + LIMITS.deepFunctionLines));
+      text = lines.join('\n') + (node.end - node.line + 1 > LIMITS.deepFunctionLines ? '\n… (' + (node.end - node.line + 1 - LIMITS.deepFunctionLines) + ' more lines)' : '');
+    }
+    text = text.slice(0, Math.min(budget, 6000));
+    budget -= text.length;
+    code.push('### ' + node.symbol + ' (' + node.file + ':' + node.line + ')\n' + text);
+  }
+  return { tree: treeText(tree), code: code.join('\n\n'), docs: String(docs || '').slice(0, 6000), functions: tree.nodes.length, coded: code.length };
+}
+function deepPrompt({ input, entryFile, entrySymbol, previous, part }) {
+  return render('stages/deep', { DEEP_RULES, schema_json: JSON.stringify(DEEP_SCHEMA), partLine: part ? 'PART: ' + JSON.stringify(part) + '\n' : '', docs: input.docs || '(none)', entrySymbol_json: JSON.stringify(entrySymbol), entryFile_json: JSON.stringify(entryFile), tree: input.tree, code: input.code, previousStages: previous?.length ? 'PREVIOUS STAGES: ' + JSON.stringify(previous.map(stage => ({ id: stage.id, name: stage.name, pinned: !!stage.pinned }))) + '\n' : '' });
+}
+// The docs of a part: README-like files in its folder or the nearest folder above.
+function partDocs(graph, entryFile, readText) {
+  const dirs = [];
+  for (let dir = entryFile.split('/').slice(0, -1).join('/'); ; dir = dir.split('/').slice(0, -1).join('/')) { dirs.push(dir); if (!dir) break; }
+  const candidates = dirs.slice(0, 4).flatMap(dir => Object.keys(graph.files).filter(file => (dir ? file.startsWith(dir + '/') : !file.includes('/')) && file.split('/').length === (dir ? dir.split('/').length + 1 : 1) && /^readme(\.|$)/i.test(file.split('/').at(-1))));
+  return candidates[0] ? Promise.resolve(readText(candidates[0])).then(text => 'README ' + candidates[0] + ':\n' + String(text || '').slice(0, 6000)).catch(() => '') : Promise.resolve('');
+}
+
+// --- finding where workflows start (no model call) ---
+const ORCHESTRATOR = /^(main|run|start|serve|app|cli|handler|handle|execute|loop|pipeline|workflow|agent|orchestrate|activate|lambda_handler|create_app)$|(^run_|_loop$|agent|pipeline|workflow|orchestrat)/i;
+// Rank functions that start a workflow: in entry files (and the most central
+// files), the function that calls the most names from other project files,
+// is called from module-level code, or is named like an orchestrator.
+function suggestEntries(graph, { texts = new Map(), limit = 5 } = {}) {
+  const outgoing = new Map();
+  for (const edge of graph.edges || []) { if (!outgoing.has(edge.from)) outgoing.set(edge.from, new Set()); for (const name of edge.names || []) outgoing.get(edge.from).add(name); }
+  const ranked = Object.entries(graph.files).filter(([, file]) => !file.test && !file.contextFile).sort(([a, fa], [b, fb]) => (fb.rank || 0) - (fa.rank || 0) || byPath(a, b));
+  const candidates = [...new Set([...(graph.entries || []), ...Object.entries(graph.files).filter(([, file]) => file.entry && !file.test).map(([rel]) => rel), ...(graph.readingPath || []).slice(0, 4).map(step => step.id), ...ranked.slice(0, 4).map(([rel]) => rel)])]
+    .filter(rel => graph.files[rel] && !graph.files[rel].test);
+  const out = [];
+  for (const file of candidates) {
+    const defs = symbolsOf(graph.files[file]).filter(def => ['function', 'method'].includes(def.kind));
+    if (!defs.length) continue;
+    const lines = texts.get(file)?.split('\n'), imported = outgoing.get(file) || new Set();
+    const reach = workflowFiles(graph, file).length;
+    const inside = line => defs.some(def => line >= (def.start || def.line) && line <= (def.end || def.line));
+    const moduleText = lines ? lines.filter((_, index) => !inside(index + 1)).join('\n') : '';
+    const bodies = new Map(defs.map(def => [def, lines ? lines.slice((def.start || def.line) - 1, def.end || def.line).join('\n') : '']));
+    const uses = name => new RegExp('\\b' + name.replace(/[$]/g, '\\$') + '\\b');
+    const direct = new Map(defs.map(def => [def, [...imported].filter(name => uses(name).test(bodies.get(def)))]));
+    const callees = new Map(defs.map(def => [def, defs.filter(other => other !== def && new RegExp('\\b' + other.name + '\\s*\\(').test(bodies.get(def)))]));
+    const called = new Set([...callees.values()].flat());
+    let best;
+    for (const def of defs) {
+      // Everything this function reaches through the file's own functions.
+      const seen = new Set([def]), queue = [def], calls = new Set();
+      while (queue.length) { const current = queue.shift(); direct.get(current).forEach(name => calls.add(name)); for (const next of callees.get(current)) if (!seen.has(next)) { seen.add(next); queue.push(next); } }
+      const fromModule = !!moduleText && new RegExp('\\b' + def.name + '\\s*\\(').test(moduleText);
+      const root = !called.has(def);
+      const score = Math.min(calls.size, 12) * 3 + Math.min(seen.size - 1, 6) + (root ? 5 : 0) + (fromModule ? 4 : 0) + (ORCHESTRATOR.test(def.name) ? 4 : 0) + (graph.files[file].entry || (graph.entries || []).includes(file) ? 2 : 0);
+      if (!best || score > best.score) best = { file, symbol: def.name, line: def.start || def.line, score, calls: direct.get(def).length ? direct.get(def) : [...calls], fromModule };
+    }
+    if (!best) continue;
+    const why = [graph.files[file].entry || (graph.entries || []).includes(file) ? 'entry point' : 'central file', best.calls.length ? 'calls ' + best.calls.slice(0, 4).join(', ') + (best.calls.length > 4 ? '…' : '') : '', 'reaches ' + reach + ' file' + (reach === 1 ? '' : 's')].filter(Boolean).join(' · ');
+    out.push({ file, symbol: best.symbol, line: best.line, files: reach, score: best.score + Math.min(reach, 40) * 0.75, why });
+  }
+  out.sort((a, b) => b.score - a.score || b.files - a.files || byPath(a.file, b.file));
+  // Weak candidates (a leaf helper file) are noise next to a real entry point.
+  const kept = [];
+  for (const item of out) {
+    if (kept.length && (item.files < 2 || item.score < out[0].score * 0.35)) continue;
+    // A helper file inside a better workflow is a part of it, not a separate start.
+    const isEntry = graph.files[item.file].entry || (graph.entries || []).includes(item.file);
+    if (!isEntry && kept.some(better => workflowFiles(graph, better.file).includes(item.file))) continue;
+    kept.push(item);
+  }
+  return kept.slice(0, limit);
+}
+
+// The deep map of one part, as a small team of cheap calls:
+// 1. a planner reads the call tree and docs (no code) and decides the stages
+//    and which functions belong to each;
+// 2. step writers, one per stage and in parallel, read only that stage's code
+//    and say what each function does and the details that matter;
+// 3. what a function does is cached against its code, so a remap or update
+//    reuses every unchanged function without a call.
+// A small part (a short script) may have fewer functions than the usual minimum of stages.
+const planSchema = functions => ({ ...PLAN_SCHEMA, properties: { stages: { ...PLAN_SCHEMA.properties.stages, minItems: Math.max(1, Math.min(LIMITS.minStages, functions)) } } });
+const PLAN_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['stages'],
+  properties: { stages: { type: 'array', minItems: LIMITS.minStages, maxItems: LIMITS.deepStages, items: {
+    type: 'object', additionalProperties: false, required: ['id', 'name', 'gist', 'input', 'output', 'steps'],
+    properties: {
+      id: { type: 'string', maxLength: 40 }, name: { type: 'string', maxLength: LIMITS.name }, gist: { type: 'string', maxLength: LIMITS.gist },
+      input: { type: 'string', maxLength: LIMITS.io }, output: { type: 'string', maxLength: LIMITS.io },
+      steps: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object', additionalProperties: false, required: ['file', 'symbol'], properties: { file: { type: 'string' }, symbol: { type: 'string' } } } } } } } }
+};
+const PLAN_RULES = render('stages/plan-rules', { LIMITS_minStages: LIMITS.minStages, LIMITS_deepStages: LIMITS.deepStages });
+const BEHAVIOR_KINDS = ['decides', 'ai', 'asks', 'writes', 'reads', 'loops', 'fallback', 'stops', 'limit', 'other'];
+const STEPS_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['steps'],
+  properties: { steps: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['file', 'symbol', 'what', 'details'], properties: {
+    file: { type: 'string' }, symbol: { type: 'string' }, what: { type: 'string', maxLength: LIMITS.what },
+    details: { type: 'array', maxItems: LIMITS.details, items: { type: 'object', additionalProperties: false, required: ['kind', 'text'], properties: {
+      kind: { type: 'string', enum: BEHAVIOR_KINDS }, text: { type: 'string', maxLength: LIMITS.detail } } } } } } } }
+};
+const STEPS_RULES = render('stages/steps-rules', { LIMITS_details: LIMITS.details });
+const MAX_PER_WRITER = 10, WRITERS = 4;
+const crypto = require('node:crypto');
+const bodyOf = (texts, file, def) => (texts.get(file) || '').split('\n').slice((def.start || def.line) - 1, def.end || def.line).join('\n');
+const codeHash = text => crypto.createHash('sha256').update(text).digest('hex').slice(0, 24);
+
+function planPrompt({ tree, docs, entryFile, entrySymbol, previous, part, functions = LIMITS.minStages }) {
+  return render('stages/plan', { PLAN_RULES, schema_json: JSON.stringify(planSchema(functions)), partLine: part ? 'PART: ' + JSON.stringify(part) + '\n' : '', docs: docs || '(none)', entrySymbol_json: JSON.stringify(entrySymbol), entryFile_json: JSON.stringify(entryFile), tree, previousStages: previous?.length ? 'PREVIOUS STAGES: ' + JSON.stringify(previous.map(stage => ({ id: stage.id, name: stage.name, pinned: !!stage.pinned }))) + '\n' : '' });
+}
+function stepsPrompt({ part, stage, items }) {
+  return render('stages/steps', { STEPS_RULES, schema_json: JSON.stringify(STEPS_SCHEMA), partLine: part ? 'PART: ' + JSON.stringify(part) + '\n' : '', stage_json: JSON.stringify({ name: stage.name, does: stage.gist }), functions: items.map(item => '### ' + item.symbol + ' (' + item.file + ':' + item.line + ')\n' + item.code).join('\n\n') });
+}
+// The code a step writer reads for one function: saved pseudocode when current, else bounded source.
+function stepCode(graph, explanations, texts, file, def) {
+  const pseudo = pseudocodeFor(graph, explanations, file, def.name);
+  if (pseudo?.current) return 'PSEUDOCODE:\n' + pseudo.text.slice(0, 5000);
+  const lines = bodyOf(texts, file, def).split('\n');
+  return lines.slice(0, LIMITS.deepFunctionLines).join('\n') + (lines.length > LIMITS.deepFunctionLines ? '\n… (' + (lines.length - LIMITS.deepFunctionLines) + ' more lines)' : '');
+}
+const SUB_DEPTH = 2, MAX_STAGE_STEPS = 40;
+const PLUMBING = /(^|_)(log|logger|logging|trace|tracer|track|telemetry|metrics?|opik)(_|$)|^(is_\w+_enabled|update_thread_id|initialize_thread_id|configure_\w+|get_settings|settings|__\w+__|to_dict|from_dict|model_dump|validate_\w+|read_file_safe)$/i;
+// Helper folders (utils, config, settings…) are plumbing when they show up inside a step.
+const HELPER_DIRS = /(^|\/)(utils?|config|configs|settings|logging|helpers?|common|tracing)\//i;
+const trivial = node => node.kind === 'class' || node.end - node.line < 2 || PLUMBING.test(node.symbol) || /(_kwargs|_client|_configs?)$|^ainvoke$/.test(node.symbol) || HELPER_DIRS.test(node.file);
+// A step that only passes through to one function (an MCP tool registered as a
+// thin wrapper, a command handler) is replaced by the function that does the work.
+function unwrap(stagesList, tree, graph) {
+  const byKey = new Map(tree.nodes.map(node => [node.file + '#' + node.symbol, node]));
+  const byId = new Map(tree.nodes.map(node => [node.id, node]));
+  const taken = new Set(stagesList.flatMap(stage => (stage.steps || []).map(step => step.file + '#' + step.symbol)));
+  for (const stage of stagesList) {
+    if (!stage.steps) continue;
+    const out = [];
+    for (const step of stage.steps) {
+      let node = byKey.get(step.file + '#' + step.symbol), via;
+      for (let hop = 0; node && hop < 3; hop++) {
+        const real = node.calls.map(key => byId.get(key)).filter(child => child && !trivial(child));
+        if (node.kind === 'block' || node.end - node.line > 40 || real.length !== 1) break;
+        const next = real[0], key = next.file + '#' + next.symbol;
+        // Already a step elsewhere: keep this one as it is rather than empty a stage.
+        if (taken.has(key) && key !== step.file + '#' + step.symbol) break;
+        via ||= node.symbol; node = next;
+      }
+      const key = node.file + '#' + node.symbol;
+      if (via) { taken.add(key); out.push({ ...step, file: node.file, symbol: node.symbol, line_start: node.line, line_end: node.end, via }); }
+      else out.push(step);
+    }
+    stage.steps = out.filter((step, index) => out.findIndex(other => other.file === step.file && other.symbol === step.symbol) === index);
+  }
+  void graph;
+}
+function addSubSteps(stagesList, tree) {
+  const byKey = new Map(tree.nodes.map(node => [node.file + '#' + node.symbol, node]));
+  const byId = new Map(tree.nodes.map(node => [node.id, node]));
+  const owned = new Set(stagesList.flatMap(stage => (stage.steps || []).map(step => step.file + '#' + step.symbol)));
+  for (const stage of stagesList) {
+    if (!stage.steps) continue;
+    const out = [];
+    for (const step of stage.steps) {
+      out.push({ ...step, depth: 0 });
+      const walk = (node, depth, parent) => {
+        if (depth > SUB_DEPTH) return;
+        for (const key of node.calls) {
+          const child = byId.get(key);
+          if (!child || trivial(child)) continue;
+          const id = child.file + '#' + child.symbol;
+          if (owned.has(id) || out.length >= MAX_STAGE_STEPS) continue;
+          owned.add(id);
+          out.push({ file: child.file, symbol: child.symbol, line_start: child.line, line_end: child.end, what: null, details: [], depth, parent });
+          walk(child, depth + 1, id);
+        }
+      };
+      const node = byKey.get(step.file + '#' + step.symbol);
+      if (node) walk(node, 1, step.file + '#' + step.symbol);
+    }
+    stage.steps = out;
+  }
+}
+async function pool(items, size, work) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => { while (next < items.length) await work(items[next++]); }));
+}
+
+async function generateDeep({ db, graph, explanations, entryFile, entrySymbol, workflowId, request, run, provider, model, headSha, signal, readText, scope, part }) {
+  const { callTree, treeText } = require('./callgraph');
+  const files = [...new Set([...(scope || []), ...workflowFiles(graph, entryFile, 80), entryFile])].filter(file => graph.files[file] && !graph.files[file].test && !graph.files[file].contextFile);
+  const texts = new Map();
+  for (const file of files) { try { texts.set(file, await readText(file)); } catch { /* Unreadable: left out. */ } }
+  const tree = callTree(graph, texts, files, entryFile, entrySymbol);
+  if (!tree.nodes.length) throw new Error(`Could not find ${entrySymbol} in ${entryFile}.`);
+  const treeFiles = [...new Set(tree.nodes.map(node => node.file))];
+  const previous = db.stages(workflowId);
+  const pinnedSteps = new Set(previous.filter(stage => stage.pinned).flatMap(stage => db.steps(workflowId, stage.id).map(step => step.file + '#' + step.symbol)));
+  // 1. The planner: structure from the call tree and docs only.
+  const prompt = planPrompt({ tree: treeText(tree), docs: await partDocs(graph, entryFile, readText), entryFile, entrySymbol, previous, part, functions: tree.nodes.length });
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
+  if (signal?.aborted) throw new Error('Cancelled.');
+  const planned = await request({ prompt, schema: planSchema(tree.nodes.length), tier: 'cheap', signal });
+  run.log({ model: planned.model || model, usage: planned.usage, workflowId, estimate, note: `plan · ${tree.nodes.length} functions`, trigger: 'stages.plan' });
+  const parsed = parseStages(planned.raw, graph, treeFiles, { previous, pinnedSteps });
+  // 1b. Sub-steps, without AI: what each step calls, from the call tree, so the
+  // functions inside a step (a ranking helper, a judge, a retry) are on the map too.
+  // The planner decides structure only; step writers (or the cache) describe every step.
+  for (const stage of parsed.stages) for (const step of stage.steps || []) { step.what = null; step.details = []; }
+  unwrap(parsed.stages, tree, graph);
+  addSubSteps(parsed.stages, tree);
+  // 2. Step writers, in parallel, for functions whose code has no saved description.
+  const written = await describeSteps({ db, graph, explanations, texts, stagesList: parsed.stages, part, request, run, provider, model, workflowId, signal });
+  const calls = 1 + written.calls, failed = written.failed, reused = written.reused, jobs = { length: written.writers };
+  if (signal?.aborted) throw new Error('Cancelled.');
+  db.transaction(() => {
+    db.upsertWorkflow({ id: workflowId, entry_file: entryFile, entry_symbol: entrySymbol || '', base_sha: headSha || null });
+    db.replaceStages(workflowId, parsed.stages);
+    db.setFiles(workflowId, treeFiles.map(file => [file, graph.files[file].hash]));
+    for (const stage of parsed.stages) for (const step of stage.steps || []) db.setSnapshot(workflowId, step.file, step.symbol, pseudocodeFor(graph, explanations, step.file, step.symbol)?.text ?? null);
+    db.setMeta(versionKey(workflowId), currentVersion(model));
+    db.setMeta('fallback:' + workflowId, JSON.stringify({ files: treeFiles.length, functions: tree.nodes.length, writers: jobs.length, reused, failed, deep: true, at: new Date().toISOString() }));
+  });
+  return { workflowId, stages: db.stages(workflowId), calls, deep: true, functions: tree.nodes.length, reused, failed };
+}
+// Step writers for every step without a description: cached descriptions first,
+// then one cheap call per stage (10 functions at a time), in parallel.
+async function describeSteps({ db, graph, explanations, texts, stagesList, part, request, run, provider, model, workflowId, signal }) {
+  const jobs = [];
+  let reused = 0;
+  for (const stage of stagesList) {
+    const missing = [];
+    for (const step of stage.steps || []) {
+      const def = defFor(graph, step.file, step.symbol);
+      if (!def) continue;
+      step.hash = codeHash(bodyOf(texts, step.file, def));
+      const saved = db.functionNote(step.file, step.symbol, step.hash);
+      if (saved) { step.what = saved.what; step.details = saved.details; reused++; continue; }
+      missing.push({ step, file: step.file, symbol: step.symbol, line: def.start || def.line, code: stepCode(graph, explanations, texts, step.file, def) });
+    }
+    for (let i = 0; i < missing.length; i += MAX_PER_WRITER) jobs.push({ stage, items: missing.slice(i, i + MAX_PER_WRITER) });
+  }
+  let calls = 0;
+  const failed = [];
+  await pool(jobs, WRITERS, async job => {
+    if (signal?.aborted) return;
+    const prompt = stepsPrompt({ part, stage: job.stage, items: job.items });
+    try {
+      const estimate = run.estimate(estimatePrompt(prompt, provider, model));
+      const response = await request({ prompt, schema: STEPS_SCHEMA, tier: 'cheap', signal });
+      calls++;
+      run.log({ model: response.model || model, usage: response.usage, workflowId, stageId: job.stage.id, estimate, note: `steps · ${job.items.length} functions`, trigger: 'stages.steps' });
+      const value = parseJson(response.raw, 'The step writer');
+      const replies = (value.steps || []).filter(entry => entry && typeof entry === 'object'), used = new Set();
+      const loose = text => String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const pick = (item, test) => { const found = replies.find(entry => !used.has(entry) && test(entry, loose(item.symbol))); if (found) used.add(found); return found; };
+      const matches = new Map();
+      // Exact names first, then loosely (script blocks have long names the writer may shorten).
+      for (const item of job.items) { const found = pick(item, entry => entry.file === item.file && entry.symbol === item.symbol) || pick(item, entry => entry.symbol === item.symbol); if (found) matches.set(item, found); }
+      for (const item of job.items) if (!matches.has(item)) { const found = pick(item, (entry, want) => (!entry.file || entry.file === item.file) && want.length >= 6 && (loose(entry.symbol) === want || (loose(entry.symbol).length >= 10 && (want.startsWith(loose(entry.symbol)) || loose(entry.symbol).startsWith(want))))); if (found) matches.set(item, found); }
+      // Still unmatched: the writer renamed it; take its remaining answers for the same file, in order.
+      for (const item of job.items) if (!matches.has(item)) { const found = pick(item, entry => entry.file === item.file); if (found) matches.set(item, found); }
+      for (const item of job.items) {
+        const found = matches.get(item);
+        if (!found) continue;
+        item.step.what = clip(found.what, LIMITS.what) || null;
+        item.step.details = typedDetails(found.details);
+        db.setFunctionNote(item.file, item.symbol, item.step.hash, { what: item.step.what, details: item.step.details });
+      }
+    } catch (error) { failed.push(job.stage.name + ': ' + error.message); }
+  });
+  // A wrapper's name stays as a note, so the tool or command name is still findable.
+  for (const stage of stagesList) for (const step of stage.steps || []) if (step.via && step.what && !(step.details || []).some(item => item.text.startsWith('Started as '))) step.details = [...(step.details || []).slice(0, LIMITS.details - 1), { kind: 'other', text: 'Started as ' + step.via }];
+  return { calls, failed, reused, writers: jobs.length };
+}
+// Describe the steps a part still has no description for (a writer was refused or failed). No re-planning.
+async function describeMissing({ db, graph, explanations, workflowId, request, run, provider, model, readText, signal, part }) {
+  const stagesList = db.stages(workflowId).map(stage => ({ ...stage, steps: db.steps(workflowId, stage.id) }));
+  const files = [...new Set(stagesList.flatMap(stage => stage.steps.filter(step => !step.what).map(step => step.file)))];
+  if (!files.length) return { calls: 0, failed: [], described: 0 };
+  const texts = new Map();
+  for (const file of files) { try { texts.set(file, await readText(file)); } catch { /* Left undescribed. */ } }
+  const missing = stagesList.map(stage => ({ ...stage, steps: stage.steps.filter(step => !step.what && texts.has(step.file)) })).filter(stage => stage.steps.length);
+  const result = await describeSteps({ db, graph, explanations, texts, stagesList: missing, part, request, run, provider, model, workflowId, signal });
+  db.transaction(() => {
+    for (const stage of stagesList) {
+      const done = missing.find(item => item.id === stage.id);
+      if (!done) continue;
+      db.setSteps(workflowId, stage.id, stage.steps.map(step => done.steps.find(item => item.position === step.position) || step));
+    }
+  });
+  return { calls: result.calls, failed: result.failed, described: missing.reduce((sum, stage) => sum + stage.steps.filter(step => step.what).length, 0) };
+}
+// What a deep map of one part sends, estimated locally: the plan plus the step writers.
+function estimateDeep({ graph, explanations, entryFile, entrySymbol, texts, scope, provider, model }) {
+  const { callTree, treeText } = require('./callgraph');
+  const files = [...new Set([...(scope || []), ...workflowFiles(graph, entryFile, 80), entryFile])].filter(file => texts.has(file));
+  const tree = callTree(graph, texts, files, entryFile, entrySymbol);
+  const plan = estimatePrompt(planPrompt({ tree: treeText(tree), entryFile, entrySymbol }), provider, model);
+  const code = deepInput({ graph, explanations, tree, texts }).code;
+  return plan + estimatePrompt(STEPS_RULES + code, provider, model) + 6 * 1500;
+}
+
+// --- incremental updates ---
+
+// A saved file: compare hashes and mark only the stages that use it. Pure IO.
+function fileChanged(db, file, hash) {
+  const workflows = db.all('SELECT workflow_id, hash FROM files WHERE path = ?', file);
+  if (!workflows.some(row => row.hash !== hash)) return [];
+  db.markStaleForFile(file);
+  return db.stagesUsingFile(file).filter(stage => stage.stale && !stage.pinned);
+}
+
+function refreshPrompt({ stage, steps, changed }) {
+  return render('stages/refresh', { REFRESH_RULES, schema_json: JSON.stringify(REFRESH_SCHEMA), stage_json: JSON.stringify({ name: stage.name, gist: stage.gist, input: stage.input, output: stage.output }), steps_json: JSON.stringify(steps.map(step => ({ file: step.file, symbol: step.symbol, depth: step.depth || 0, what: step.what || '', details: step.details || [] }))), changed_json: JSON.stringify(changed) });
+}
+
+// Re-cluster one stale stage from its own steps and the changed files' notes.
+async function refreshStage({ db, graph, notes, explanations, workflowId, stageId, request, run, provider, model, headSha, readExcerpt, readBefore, signal, changedFiles }) {
+  const stage = db.stage(workflowId, stageId);
+  if (!stage) throw new Error('No such stage.');
+  if (stage.pinned) { db.updateStage(workflowId, stageId, { stale: false }); return { calls: 0, pinned: true }; }
+  const steps = db.steps(workflowId, stageId), known = new Map(db.files(workflowId).map(file => [file.path, file.hash]));
+  const changedSet = new Set(changedFiles || steps.map(step => step.file).filter(file => known.get(file) !== graph.files[file]?.hash));
+  const changed = [...changedSet].sort(byPath);
+  if (!changed.length) { db.updateStage(workflowId, stageId, { stale: false }); return { calls: 0 }; }
+  let sourceFallback = 0;
+  const data = [];
+  for (const file of changed) {
+    const info = graph.files[file];
+    if (!info) { data.push({ file, removed: true, steps: steps.filter(step => step.file === file).map(step => ({ symbol: step.symbol, before: db.snapshot(workflowId, file, step.symbol) || '', after: '(file removed)' })) }); continue; }
+    const note = notes?.files?.[file];
+    const entry = { file, ...(note?.purpose && note.hash === info.hash ? { purpose: note.purpose } : {}), symbols: symbolsOf(info).slice(0, LIMITS.symbolsPerFile).map(def => def.name), steps: [] };
+    for (const step of steps.filter(item => item.file === file).sort((a, b) => a.position - b.position)) {
+      const after = pseudocodeFor(graph, explanations, file, step.symbol);
+      let afterText = after?.current ? after.text : undefined;
+      if (afterText === undefined && !defFor(graph, file, step.symbol)) afterText = '(symbol removed)';
+      if (afterText === undefined && entry.purpose === undefined && readExcerpt) {
+        const def = defFor(graph, file, step.symbol);
+        const excerpt = await readExcerpt(file, def.start || def.line, Math.min(def.end || def.line, (def.start || def.line) + LIMITS.excerptLines));
+        if (excerpt) { afterText = 'SOURCE EXCERPT:\n' + excerpt; sourceFallback++; }
+      }
+      // No recorded pseudocode baseline: compare like with like, the function at the map's base commit.
+      let before = db.snapshot(workflowId, file, step.symbol);
+      if (!before && afterText?.startsWith('SOURCE EXCERPT:') && readBefore) { const old = await readBefore(file, step.symbol).catch(() => undefined); if (old) before = 'SOURCE EXCERPT:\n' + old; }
+      entry.steps.push({ symbol: step.symbol, before: before || '(not recorded)', after: afterText ?? '(pseudocode not current; judge from the note)' });
+    }
+    data.push(entry);
+  }
+  const prompt = refreshPrompt({ stage, steps, changed: data });
+  const estimate = run.estimate(estimatePrompt(prompt, provider, model));
+  if (signal?.aborted) throw new Error('Cancelled.');
+  const response = await request({ prompt, schema: REFRESH_SCHEMA, tier: 'cheap', signal });
+  run.log({ model: response.model || model, usage: response.usage, workflowId, stageId, estimate, note: 'refresh · ' + changed.length + ' changed file' + (changed.length === 1 ? '' : 's') + (sourceFallback ? ' · ' + sourceFallback + ' source excerpt' : ''), trigger: 'stages.refresh' });
+  const value = parseJson(response.raw, 'The stage mapper');
+  // Steps outside the changed files keep their place; steps in other stages stay there.
+  const workflowFileList = db.files(workflowId).map(file => file.path);
+  const otherSteps = new Set(db.steps(workflowId).filter(step => step.stage_id !== stageId).map(step => step.file + '#' + step.symbol));
+  let nextSteps = resolveSteps(graph, workflowFileList, (value.steps || []).filter(step => changedSet.has(step.file) || steps.some(old => old.file === step.file && old.symbol === step.symbol)), otherSteps);
+  if (!nextSteps.length) nextSteps = resolveSteps(graph, workflowFileList, steps);
+  // Keep each step's place in the nesting; a new function goes after the step that calls it, or at the top level.
+  const old = new Map(steps.map(step => [step.file + '#' + step.symbol, step]));
+  nextSteps = nextSteps.map(step => ({ ...step, depth: old.get(step.file + '#' + step.symbol)?.depth || 0, parent: old.get(step.file + '#' + step.symbol)?.parent || null }));
+  const pseudoOnly = text => text.startsWith('SOURCE EXCERPT:') || text === '(not recorded)' ? '' : text;
+  const detail = { files: changed, steps: data.flatMap(entry => entry.steps.map(step => ({ file: entry.file, symbol: step.symbol, before: pseudoOnly(step.before), after: step.after.startsWith('SOURCE EXCERPT:') || step.after.startsWith('(pseudocode not current') ? pseudocodeFor(graph, explanations, entry.file, step.symbol)?.text || '' : step.after }))) };
+  let changeId;
+  db.transaction(() => {
+    db.updateStage(workflowId, stageId, { name: clip(value.name || stage.name, LIMITS.name), gist: clip(value.gist || stage.gist, LIMITS.gist), input: clip(value.input || stage.input, LIMITS.io), output: clip(value.output || stage.output, LIMITS.io), stale: false });
+    db.setSteps(workflowId, stageId, nextSteps);
+    if (value.behaviorChanged && String(value.summary || '').trim()) {
+      changeId = db.addChange({ workflow_id: workflowId, stage_id: stageId, summary: clip(value.summary, LIMITS.summary), base_sha: db.workflow(workflowId)?.base_sha || null, head_sha: headSha || null, detail });
+    } else {
+      // No behavior change: move the baseline forward silently.
+      for (const step of detail.steps) db.setSnapshot(workflowId, step.file, step.symbol, step.after || null);
+    }
+    // A file's hash moves forward once no other stale stage still needs it.
+    const stillStale = new Set(db.steps(workflowId).filter(step => db.stage(workflowId, step.stage_id)?.stale).map(step => step.file));
+    for (const file of changed) if (!stillStale.has(file) && graph.files[file]) db.setFileHash(workflowId, file, graph.files[file].hash);
+  });
+  return { calls: 1, changeId, behaviorChanged: !!value.behaviorChanged, sourceFallback };
+}
+
+// Refresh every stale stage of a workflow: at most one cheap call per stage.
+async function refreshStale(options) {
+  const { db, workflowId, graph } = options;
+  const stale = db.staleStages(workflowId).map(row => row.id);
+  // Decide changed files for every stage before any hash moves forward.
+  const known = new Map(db.files(workflowId).map(file => [file.path, file.hash]));
+  const plan = stale.map(stageId => ({ stageId, changedFiles: db.steps(workflowId, stageId).map(step => step.file).filter(file => known.get(file) !== graph.files[file]?.hash) }));
+  let calls = 0; const refreshed = [], skipped = [];
+  for (const item of plan) {
+    if (options.signal?.aborted) break;
+    try {
+      const result = await refreshStage({ ...options, stageId: item.stageId, changedFiles: [...new Set(item.changedFiles)] });
+      calls += result.calls; refreshed.push({ stageId: item.stageId, ...result });
+    } catch (error) {
+      skipped.push({ stageId: item.stageId, reason: error.message });
+    }
+  }
+  // Files no stage uses any more simply move forward.
+  const used = new Set(db.steps(workflowId).map(step => step.file));
+  if (!db.staleStages(workflowId).length) for (const [file] of known) if (!used.has(file) && graph.files[file]) db.setFileHash(workflowId, file, graph.files[file].hash);
+  return { calls, refreshed, skipped };
+}
+
+// --- founder overrides (persist and survive regeneration) ---
+function renameStage(db, workflowId, stageId, name) {
+  const clean = clip(name, LIMITS.name);
+  if (!clean) throw new Error('Give the stage a name.');
+  db.updateStage(workflowId, stageId, { name: clean, pinned: true, stale: false });
+}
+function pinStage(db, workflowId, stageId, pinned = true) { db.updateStage(workflowId, stageId, { pinned, ...(pinned ? { stale: false } : {}) }); }
+function moveStep(db, workflowId, { from, position, to, newName }) {
+  return db.transaction(() => {
+    const source = db.steps(workflowId, from), step = source.find(item => item.position === position);
+    if (!step) throw new Error('No such step.');
+    let target = to;
+    if (!target) {
+      const stages = db.stages(workflowId), base = slug(newName || step.symbol);
+      target = base; let n = 2;
+      while (stages.some(stage => stage.id === target)) target = base.slice(0, 36) + '-' + n++;
+      const after = stages.find(stage => stage.id === from).position;
+      db.insertStage(workflowId, { id: target, name: clip(newName || step.symbol, LIMITS.name), gist: '', input: '', output: '', position: after + 0.5, pinned: true, steps: [] });
+      db.reorder(workflowId, db.stages(workflowId).map(stage => stage.id));
+    }
+    db.setSteps(workflowId, from, source.filter(item => item !== step));
+    db.setSteps(workflowId, target, [...db.steps(workflowId, target), step]);
+    db.updateStage(workflowId, from, { pinned: true, stale: false });
+    db.updateStage(workflowId, target, { pinned: true, stale: false });
+    if (!db.steps(workflowId, from).length) db.deleteStage(workflowId, from);
+    return target;
+  });
+}
+function mergeStages(db, workflowId, keep, absorb) {
+  db.transaction(() => {
+    const a = db.stage(workflowId, keep), b = db.stage(workflowId, absorb);
+    if (!a || !b || keep === absorb) throw new Error('Pick two different stages to merge.');
+    const [first, second] = a.position <= b.position ? [keep, absorb] : [absorb, keep];
+    db.setSteps(workflowId, keep, [...db.steps(workflowId, first), ...db.steps(workflowId, second)]);
+    db.updateStage(workflowId, keep, { pinned: true, stale: false, gist: [a.gist, b.gist].filter(Boolean).join(' ').slice(0, LIMITS.gist), input: db.stage(workflowId, first).input, output: db.stage(workflowId, second).output });
+    db.deleteStage(workflowId, absorb);
+  });
+}
+
+// --- zero-call reads ---
+function stageView(db, graph, explanations, workflowId, stageId) {
+  const stage = db.stage(workflowId, stageId);
+  if (!stage) return undefined;
+  const steps = db.steps(workflowId, stageId).map(step => {
+    const def = defFor(graph, step.file, step.symbol), pseudo = pseudocodeFor(graph, explanations, step.file, step.symbol);
+    return { ...step, line_start: def ? def.start || def.line : step.line_start, line_end: def ? def.end || def.line : step.line_end, missing: !def, pseudocode: pseudo?.text, pseudocodeCurrent: !!pseudo?.current };
+  });
+  const pending = db.changes(workflowId, { status: 'pending', stageId });
+  return { ...stage, steps, files: [...new Set(steps.map(step => step.file))], pending: pending.length };
+}
+function workflowView(db, graph, workflowId) {
+  const workflow = db.workflow(workflowId);
+  if (!workflow) return undefined;
+  const since = workflow.reviewed_at;
+  const stages = db.stages(workflowId).map(stage => {
+    const steps = db.steps(workflowId, stage.id), changes = db.changes(workflowId, { stageId: stage.id, ...(since ? { since } : {}) });
+    return { ...stage, steps: steps.length, files: [...new Set(steps.map(step => step.file))], plus: changes.filter(change => change.status !== 'rejected').length, pending: changes.filter(change => change.status === 'pending').length };
+  });
+  return { ...workflow, stages, pending: db.pendingCount(workflowId) };
+}
+
+module.exports = {
+  readJson, planSchema, unwrap, describeMissing, describeSteps, addSubSteps, typedDetails, BEHAVIOR_KINDS, suggestEntries, generateDeep, estimateDeep, deepInput, deepPrompt, DEEP_SCHEMA, PLAN_SCHEMA, STEPS_SCHEMA, planPrompt, stepsPrompt, codeHash, STAGE_PROMPT_VERSION, LIMITS, STAGES_SCHEMA, REFRESH_SCHEMA, slug, symbolsOf, pseudocodeFor, workflowFiles, coarse, stageInput, stagesPrompt, refreshPrompt,
+  parseStages, estimateWorkflow, workflowStatus, generateWorkflow, fileChanged, refreshStage, refreshStale,
+  renameStage, pinStage, moveStep, mergeStages, stageView, workflowView, versionKey, currentVersion
+};

@@ -1,0 +1,5 @@
+{
+  "get_view": "What the founder is looking at right now: the open file and cursor (and selected text) in the editor, the file open in Yamori Read, the Yamori tab (Files, File links, Your System, Plan), and in Your System the part, step or file they selected. Call it whenever they say this, here, that or what I'm looking at. No model call.",
+  "save_plan": "Save a plan on Yamori's Plan canvas, where the founder reviews it beside the code: one step per change, each naming a mapped file (and lines), what changes and why, in plain words. Replaces the current plan (the old one stays in history). Use this when the founder asks you to plan, instead of only writing the plan in the chat.",
+  "show_in_yamori": "Bring something into view in Yamori for the founder: Your System, the system map (optionally a part, step or file in it), the Plan canvas, or a file in Read at a line. Use it after answering, so they see what you mean."
+}

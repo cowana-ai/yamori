@@ -1,0 +1,6 @@
+FUNCTION AND METHOD CARDS (override legacy grouping and lineMap rules):
+- One section per function or method, titled with its symbol. For module-level code or incomplete selections use the legacy pseudocode + lineMap section.
+- In card, p is one-line purpose, i inputs and preconditions, r result or error, x meaningful side effects (write a short ✓ None statement when this is grounded, or leave empty when unknown), s steps, c checks.
+- Steps s contain objects such as {"a":18,"b":19,"d":0,"t":"Return null","n":[]}. a and b are the smallest inclusive original source range, both inside this section. Use a=b for one line. d is the nesting depth, starting at 0. t is the one-line action. n is an array of annotations with k (note, why, shapes, formula) and t (annotation text). Preserve source rationale and existing annotations. Only refinement adds new annotations.
+- Checks c contain objects with a and b (the inclusive source range), k (handled or risk), q (scenario), and o (behavior or question). Include up to {{EDGE_CASE_LIMIT}} grounded checks for functions spanning {{EDGE_CASE_MIN_LINES}}+ lines. For shorter functions omit c when the schema omits it, or use [] when c is required.
+- Only steps and checks carry source links. Return objects for s and c, with plain text in text fields. Do not emit pseudocode or lineMap for cards.

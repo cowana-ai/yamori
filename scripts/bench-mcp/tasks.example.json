@@ -1,0 +1,60 @@
+{
+  "projects": {
+    "nanogpt": "/path/to/nanoGPT"
+  },
+  "tasks": [
+    {
+      "id": "N1-loss",
+      "project": "nanogpt",
+      "q": "Where is the training loss computed?",
+      "must": [
+        "model\\.py",
+        "forward",
+        "cross_entropy"
+      ]
+    },
+    {
+      "id": "N2-lr",
+      "project": "nanogpt",
+      "q": "How does training pick the learning rate at each iteration?",
+      "must": [
+        "train\\.py",
+        "get_lr",
+        "cosine"
+      ]
+    },
+    {
+      "id": "N3-ckpt",
+      "project": "nanogpt",
+      "q": "When does training save a checkpoint, and to which file?",
+      "must": [
+        "train\\.py",
+        "best_val_loss|val(idation)? loss",
+        "always_save_checkpoint",
+        "ckpt\\.pt"
+      ]
+    },
+    {
+      "id": "N4-sample",
+      "project": "nanogpt",
+      "q": "How does sample.py get the model weights it samples from?",
+      "must": [
+        "init_from",
+        "ckpt\\.pt",
+        "from_pretrained"
+      ]
+    },
+    {
+      "id": "N5-plan-moe",
+      "project": "nanogpt",
+      "q": "Plan (do not implement) adding mixture-of-experts layers. Which files, classes and functions would change?",
+      "must": [
+        "model\\.py",
+        "\\bMLP\\b",
+        "\\bBlock\\b",
+        "GPTConfig",
+        "train\\.py"
+      ]
+    }
+  ]
+}

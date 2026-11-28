@@ -300,7 +300,8 @@ ${BASE_STYLES}header { position: sticky; top: 0; z-index: 5; padding: 14px 20px 
 body.vscode-light:not([data-palette="slate"]) .brand img, body[data-palette="paper"] .brand img { filter: brightness(0); }
 .wordmark { font: 800 18px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: -.05em; }
 .ai-settings { position: relative; margin: 0; border: 0; overflow: visible; background: transparent; font-size: 11px; }
-.ai-settings > summary { cursor: pointer; list-style: none; max-width: 25ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 2px; color: var(--read-muted); }
+.ai-settings > summary { cursor: pointer; list-style: none; max-width: 25ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 8px; color: var(--read-ink); font-size: 12px; font-weight: 600; border: 1px solid var(--read-ink); background: var(--read-surface); }
+.ai-settings > summary:hover, #colors:hover { background: var(--read-note-bg); }
 .ai-settings > summary::-webkit-details-marker { display: none; }
 .ai-controls { position: absolute; right: 0; top: 32px; min-width: 210px; display: grid; padding: 8px; border: 1px solid var(--read-ink); box-shadow: 3px 3px 0 var(--read-ink); background: var(--read-surface); z-index: 6; }
 .ai-controls button { text-align: left; overflow-wrap: anywhere; }
@@ -308,7 +309,7 @@ body.vscode-light:not([data-palette="slate"]) .brand img, body[data-palette="pap
 .segments button { font-size: 12px; padding: 4px 8px; border-bottom: 2px solid transparent; }
 .segments button[aria-pressed="true"] { font-weight: 700; border-bottom-color: var(--read-ink); }
 #refresh { margin-left: auto; font-size: 12px; border: 1px solid var(--read-border); }
-#colors { font-size: 11px; color: var(--read-muted); }
+#colors { font-size: 12px; font-weight: 600; color: var(--read-ink); border: 1px solid var(--read-ink); background: var(--read-surface); padding: 3px 8px; }
 .crumb { min-width: 0; flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 6px; color: var(--read-muted); font: 12px/1.6 ui-monospace, monospace; }
 .crumb strong { color: var(--read-ink); font-weight: 700; }
 .control-label { font: 600 10px/1.6 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; color: var(--read-muted); }
@@ -542,11 +543,11 @@ body.vscode-light:not([data-palette="slate"]), body[data-palette="paper"] { --di
 .code-line .diff-sign, .block-diff .diff-sign { color: var(--diff-ink); font-weight: 700; }
 .block-diff { display: inline-flex; gap: .35em; margin-inline-end: .55em; }
 .comparison-label { margin: 0 0 14px; color: var(--read-muted); font-size: 12px; overflow-wrap: anywhere; }
-body[data-comparison] .ai-settings, body[data-comparison] #colors, body[data-comparison] #map, body[data-comparison] #plan { display: none; }
+body[data-comparison] .ai-settings, body[data-comparison] #colors, body[data-comparison] #map, body[data-comparison] #stages, body[data-comparison] #plan { display: none; }
 
 ${LOGIC_STYLE}</style></head><body data-palette="${palette}">
 <header><div class="top"><span class="brand"><img src="${logo}" alt="Pixel gecko samurai"><span class="wordmark">yamori</span></span>
-<nav class="workspace-nav" aria-label="Yamori navigation"><button aria-current="page" class="current-view" disabled>Read</button><button id="map" title="Explore project files and connections">Map</button><button id="plan" title="Plan changes with Codex or Claude">Plan</button></nav>
+<nav class="workspace-nav" aria-label="Yamori navigation"><button aria-current="page" class="current-view" disabled>Read</button><button id="map" title="Which files use which, grouped by folder">File links</button><button id="stages" title="How the whole project works: its parts, their steps and how they connect">Your System</button><button id="plan" title="Plan changes with Codex or Claude">Plan</button></nav>
 <button id="source" class="crumb" title="Show this file in the editor">No file yet</button>
 <details class="ai-settings"><summary id="ai-summary" title="Which AI writes explanations, and how hard it thinks">AI ▾</summary><div class="ai-controls"><button id="provider" title="Choose AI provider">Codex ▾</button><button id="model" title="Choose model for new requests" aria-label="Choose model for new requests">Default ▾</button><button id="effort" title="Choose reasoning effort for new requests" aria-label="Choose reasoning effort">Effort: Default ▾</button><button id="refinement" title="Choose refinement steps" aria-label="Choose refinement steps">Refine: 1 ▾</button><button id="setup-ai" title="Install, sign in to or switch between Claude and ChatGPT">Set up AI…</button></div></details>
 <button id="colors" title="Choose reading colors" aria-label="Choose reading colors">Theme</button></div>
@@ -1266,6 +1267,7 @@ document.getElementById('colors').addEventListener('click', () => send('palette'
 document.getElementById('source').addEventListener('click', () => send('showSource'));
 document.getElementById('files').addEventListener('click', () => send('switchFile'));
 document.getElementById('map').addEventListener('click', () => send('map'));
+document.getElementById('stages')?.addEventListener('click', () => send('stages'));
 document.getElementById('plan')?.addEventListener('click', () => send('plan'));
 refresh.addEventListener('click', () => { flushDrafts(); send(state.busy ? 'stop' : 'refresh'); });
 document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => send('level', { level: b.dataset.level })));

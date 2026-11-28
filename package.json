@@ -15,7 +15,8 @@
   ],
   "main": "./src/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onUri"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -24,6 +25,7 @@
       "restrictedConfigurations": [
         "yamori.codexPath",
         "yamori.claudePath",
+        "yamori.cursorPath",
         "yamori.refinementSteps",
         "yamori.reviewModel",
         "yamori.parallelRequests",
@@ -33,7 +35,13 @@
         "yamori.pseudocodeMirror",
         "yamori.planBudget",
         "yamori.tokenBudgetPerFilePerDay",
-        "yamori.planModel"
+        "yamori.planModel",
+        "yamori.stages.autoUpdate",
+        "yamori.obsidian.vaultPath",
+        "yamori.obsidian.auto",
+        "yamori.chatInTerminal",
+        "yamori.chatAutoStart",
+        "yamori.agentPlanMode"
       ]
     }
   },
@@ -76,11 +84,11 @@
       },
       {
         "command": "yamori.connectAgents",
-        "title": "Yamori: Connect Claude Code & Codex"
+        "title": "Yamori: Connect Claude Code, Codex & Cursor"
       },
       {
         "command": "yamori.disconnectAgents",
-        "title": "Yamori: Disconnect Claude Code & Codex"
+        "title": "Yamori: Disconnect Claude Code, Codex & Cursor"
       },
       {
         "command": "yamori.connectClaude",
@@ -139,6 +147,22 @@
         "command": "yamori.cancelSelectionQuestion",
         "title": "Dismiss",
         "icon": "$(close)"
+      },
+      {
+        "command": "yamori.stages.open",
+        "title": "Yamori: Open System Map"
+      },
+      {
+        "command": "yamori.stages.fromEntry",
+        "title": "Yamori: Map How This Project Works"
+      },
+      {
+        "command": "yamori.stages.regenerate",
+        "title": "Yamori: Map the System Again"
+      },
+      {
+        "command": "yamori.agentSession",
+        "title": "Yamori: Chat with Your Agent in the Terminal"
       }
     ],
     "menus": {
@@ -284,6 +308,12 @@
           "scope": "machine",
           "description": "Optional absolute path to Claude Code CLI. Otherwise detected automatically, including the copy inside Claude Desktop."
         },
+        "yamori.cursorPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional absolute path to the Cursor CLI (cursor-agent). Otherwise detected automatically."
+        },
         "yamori.tokenBudgetPerFilePerDay": {
           "type": "integer",
           "minimum": 0,
@@ -392,6 +422,36 @@
           "type": "boolean",
           "default": true,
           "description": "Show a native inline question field after highlighting code. Sends the question and exact selected snapshot to read-only Yamori chat only when you press Ask Yamori. Disable to use the selection context-menu action or keyboard shortcut instead."
+        },
+        "yamori.stages.autoUpdate": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "After saves settle (about 2 seconds, longer while an agent edits many files), update only the stages whose code changed: one cheap-model call per affected stage. Off: mark them **Needs update** and wait for **Update changed**."
+        },
+        "yamori.obsidian.vaultPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Obsidian vault for system notes. Empty (default): Yamori uses the vault this project is in, or else the vault Obsidian has open or opened last; with neither, notes go to `.yamori/notes/`. Notes go to `<vault>/Yamori/<repo>/`. Yamori rewrites only the section between `<!-- yamori:start -->` and `<!-- yamori:end -->`."
+        },
+        "yamori.obsidian.auto": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Find your Obsidian vault automatically for system notes. Off: notes stay in `.yamori/notes/` unless `yamori.obsidian.vaultPath` is set."
+        },
+        "yamori.chatInTerminal": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Chat, plan and ask for changes with your own Claude Code or Codex session in the VS Code terminal (one per project, it stays open). It sees what you have open in the editor and in Yamori, and plans it saves appear on the Plan canvas. Off: use the chat inside the Plan tab and the request box in System."
+        },
+        "yamori.chatAutoStart": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Start your agent session in the terminal by itself when you open Yamori's project panel, without showing it or taking focus, so **Chat** opens at once. It uses no AI until you write to it."
+        },
+        "yamori.agentPlanMode": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show plans made in your agent's own plan mode (`/plan` in Claude Code, Plan mode in Codex) for this project on Yamori's **Plan** canvas. Yamori reads the new lines of this project's Claude Code and Codex session logs on this computer; no AI is used."
         }
       }
     },
@@ -407,7 +467,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js",
+    "check": "node --check src/extension.js && node --check src/ai/engine.js && node --check src/ai/planning-session.js && node --check src/ai/schemas.js && node --check src/ai/verify.js && node --check src/ai/validation.min.js && node --check src/views/reader.js && node --check src/views/diff-review.js && node --check src/views/logic-workspace.js && node --check src/views/guide.js && node --check src/views/setup.js && node --check src/project/graph.js && node --check src/project/diff-review.js && node --check src/project/reader-workspace.js && node --check src/project/step-preview.js && node --check src/project/token-estimates.js && node --check src/project/plan.js && node --check src/project/mcp.js && node --check src/storage/cache.js && node --check src/project/conversation.js && node --check src/project/sessions.js && node --check src/stages/db.js && node --check src/stages/budget.js && node --check src/stages/generate.js && node --check src/stages/scheduler.js && node --check src/stages/controller.js && node --check src/stages/review.js && node --check src/stages/vault.js && node --check src/stages/mcp-tools.js && node --check src/stages/steer.js && node --check src/views/stages.js && node --check src/stages/system.js && node --check src/project/session-tools.js",
     "build:validation": "node src/ai/schemas.js",
     "build:parser": "node src/project/graph.js",
     "package": "npx --yes @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/cowana-ai/yamori/blob/main --baseImagesUrl https://raw.githubusercontent.com/cowana-ai/yamori/main"
