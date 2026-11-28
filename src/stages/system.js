@@ -302,7 +302,8 @@ function stepShape(graph, step) {
   const same = defs.filter(def => def.name === step.symbol);
   const def = same.find(item => at(item) === step.line_start) || same.slice().sort((a, b) => Math.abs(at(a) - (step.line_start || 0)) - Math.abs(at(b) - (step.line_start || 0)))[0];
   if (!def) return {};
-  const owner = defs.filter(other => other.kind === 'class' && other !== def && at(other) < at(def) && (other.end || at(other)) >= (def.end || at(def))).sort((a, b) => at(b) - at(a))[0];
+  // Go and Rust name their type on the method; elsewhere the class around it.
+  const owner = def.owner ? { name: def.owner } : defs.filter(other => other.kind === 'class' && other !== def && at(other) < at(def) && (other.end || at(other)) >= (def.end || at(def))).sort((a, b) => at(b) - at(a))[0];
   return { kind: def.kind === 'class' ? 'class' : owner ? 'method' : 'function', ...(owner ? { owner: owner.name } : {}), line_start: at(def) };
 }
 // One part up close: its files, what each is for, which step it serves, how the

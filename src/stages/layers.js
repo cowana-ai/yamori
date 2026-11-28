@@ -6,7 +6,9 @@ const dataflow = require('./dataflow');
 // of repeated blocks, dicts of parts), in the order its main method uses them
 // (forward/call for a model, else the method that uses the most parts), with
 // shortcuts (x = x + part(x)) and plain words for common built-in ML layers.
-// Python (PyTorch, Keras, Flax, plain classes) and JavaScript/TypeScript classes.
+// Python (PyTorch, Keras, Flax, plain classes), JavaScript/TypeScript, Java
+// (constructors and field initializers), Go (a NewX function filling the struct)
+// and Rust (an impl function that builds Self { ... }).
 
 const LIMITS = { layers: 24, plain: 160 };
 
@@ -97,9 +99,10 @@ function listOf(name, list, depth) {
 const pairsOf = (items, pattern, depth) => items.flatMap(item => { const pair = pattern.exec(item); return pair ? layersOf(pair[1], pair[2], depth + 1) : []; });
 
 // The parts one expression creates, named `name`.
-function layersOf(name, expr, depth = 0) {
+function layersOf(name, expr, depth = 0, lang) {
   expr = expr.trim().replace(/^new\s+/, '');
   if (depth > 4 || !expr) return [];
+  if (BRACED_LANGS.has(lang)) return bracedLayers(name, expr, depth, lang);
   if (expr.startsWith('[')) return listOf(name, balanced(expr, 0), depth);
   if (expr.startsWith('{')) return pairsOf(topLevel(balanced(expr, 0)), /^['"]?(\w+)['"]?\s*:\s*([\s\S]+)$/, depth);
   const conditional = /^(.+?)\s+if\s+.+\s+else\s+.+$/s.exec(expr) || /^[^?]+\?\s*(.+?)\s*:\s*.+$/s.exec(expr);
@@ -169,25 +172,251 @@ function partsAssigned(init, braces, line = 0) {
   return parts;
 }
 
+// ---- Java, Go and Rust ------------------------------------------------------
+const BRACED_LANGS = new Set(['java', 'go', 'rust']);
+// Values and wrappers, not parts.
+const NOT_PARTS = /^(ArrayList|LinkedList|HashMap|HashSet|TreeMap|TreeSet|LinkedHashMap|ConcurrentHashMap|CopyOnWriteArrayList|StringBuilder|String|Object|Integer|Long|Double|Float|Boolean|Vec|VecDeque|BTreeMap|BTreeSet|Option|Some|None|Ok|Err|Duration|Instant|PathBuf|Path|AtomicInteger|AtomicLong|AtomicBoolean|AtomicUsize|AtomicBool|PhantomData|Default)$/;
+const WRAPPERS = /^(Box|Arc|Rc|RefCell|Cell|Mutex|RwLock|Some|Ok|Optional|Collections)$/;
+// Names that build a value of the type before them: Linear::new, Config::default.
+const BUILDERS = /^(new|default|from|load|init|create|build|of|getInstance|instance)$|^(new|from|with|load|create)_\w+$/;
+const cap = text => text.charAt(0).toUpperCase() + text.slice(1);
+const pascal = text => text.split('_').filter(Boolean).map(cap).join('');
+// An expression as one call or literal: Rust paths and Java generics simplified,
+// error plumbing (?, unwrap, expect, await) dropped.
+function plainExpr(expr) {
+  let text = expr.trim().replace(/^&\s*(mut\s+)?/, '').replace(/^new\s+/, '').replace(/::<[^()]*?>/g, '').replace(/::/g, '.');
+  for (let before; before !== text;) {
+    before = text;
+    text = text.replace(/\s*\?\s*$/, '').replace(/\.(unwrap|expect|unwrap_or_default|unwrap_or_else|await|clone|into|to_owned|build)\s*\((?:[^()]|\([^()]*\))*\)\s*$/, '').replace(/\.await\s*$/, '').replace(/\s*;\s*$/, '');
+  }
+  // Generic arguments before a call or a literal: new ArrayList<Foo>(), Vec::<T>::new().
+  return text.replace(/<(?:[^<>()]|<[^<>()]*>)*>(?=\s*[({])/g, '');
+}
+function bracedLayers(name, expr, depth, lang) {
+  const text = plainExpr(expr);
+  if (!text) return [];
+  // Rust: (0..n).map(|i| Block::new(...)).collect() is one part repeated n times.
+  const range = /^\(\s*0\s*\.\.=?\s*([^)]+?)\s*\)\s*\.(?:into_iter\(\)\.)?map\s*\(/.exec(text);
+  if (range) {
+    const inner = balanced(text, range[0].length - 1).replace(/^\s*(?:move\s+)?\|[^|]*\|\s*/, '');
+    return bracedLayers(name, inner.replace(/^\{([\s\S]*)\}$/, '$1').trim().split(/;\s*/).filter(Boolean).pop() || '', depth + 1, lang).map(layer => ({ ...layer, name, repeat: range[1].trim() }));
+  }
+  const conditional = /^if\s+[\s\S]+?\{\s*([\s\S]+?)\s*\}\s*else\b/.exec(text) || /^[^?]+\?\s*(.+?)\s*:\s*.+$/s.exec(text);
+  if (conditional && depth < 4) return bracedLayers(name, conditional[1], depth + 1, lang).map(layer => ({ ...layer, optional: true }));
+  // A literal: Encoder{...}, &pkg.Encoder{...}, Self { ... } is not a part of itself.
+  const literal = /^([A-Za-z_][\w.]*)\s*\{/.exec(text);
+  if (literal && !/\($/.test(literal[0])) {
+    const type = literal[1].split('.').pop();
+    return /^[A-Z]/.test(type) && type !== 'Self' && !NOT_PARTS.test(type) ? [{ name, type }] : [];
+  }
+  const match = /^([A-Za-z_$][\w.$]*)\s*\(/.exec(text);
+  if (!match) return [];
+  const path = match[1].split('.'), args = balanced(text, match[0].length - 1);
+  let type = path.pop();
+  if (BUILDERS.test(type) && path.length) type = path.pop();
+  // Box::new(Linear::new(..)), Arc::new(..), Optional.of(..): the part is inside.
+  if (WRAPPERS.test(type) && topLevel(args).length === 1) return bracedLayers(name, args, depth + 1, lang);
+  else if (lang === 'go' && /^[Nn]ew[A-Z_]/.test(type)) type = cap(type.slice(3).replace(/^_/, ''));
+  else if (/^[a-z]/.test(type)) {
+    // candle-style helpers: linear(...), layer_norm(...), conv2d(...) name a known layer.
+    const known = pascal(type.replace(/_(no_bias|b|bias|with_bias)$/, ''));
+    if (!plainFor(known)) return [];
+    type = known;
+  }
+  if (!/^[A-Z]/.test(type) || NOT_PARTS.test(type)) return [];
+  return [{ name, type, args }];
+}
+// Comments out, line count kept (block comments become blank lines).
+function stripBraced(text) {
+  return String(text || '').replace(/\/\*[\s\S]*?\*\//g, block => block.replace(/[^\n]/g, ' ')).replace(/(^|[^:\\])\/\/.*$/gm, '$1');
+}
+const lineAt = (text, index) => text.slice(0, index).split('\n').length;
+// The body of a function whose parameter list opens at `open`: from its '{' to the matching '}'.
+function bodyAfter(text, open) {
+  const params = balanced(text, open), after = open + params.length + 2;
+  const brace = text.indexOf('{', after);
+  if (brace < 0 || /;/.test(text.slice(after, brace))) return undefined;
+  return { params, head: brace, body: '{' + balanced(text, brace) + '}' };
+}
+// Statements `target = value;` (value may span lines) in a function body.
+function assignments(body, pattern) {
+  const out = [];
+  for (const match of body.matchAll(pattern)) {
+    const from = match.index + match[0].length;
+    let depth = 0, end = from;
+    for (; end < body.length; end++) {
+      const c = body[end];
+      if ('([{'.includes(c)) depth++;
+      else if (')]}'.includes(c)) { if (--depth < 0) break; }
+      // A statement ends at ';', or (Go) at a line break unless the expression goes on.
+      else if (depth === 0 && (c === ';' || c === '\n' && !/[,(+\-*/.=&|]\s*$/.test(body.slice(from, end)) && !/^\s*[.?]/.test(body.slice(end + 1)))) break;
+    }
+    out.push({ name: match[1], expr: body.slice(from, end), at: match.index });
+  }
+  return out;
+}
+// Positions at brace depth 1 of a class body (its members, not code inside methods).
+function memberDepths(text) {
+  const depth = new Int16Array(text.length + 1); let level = 0, quote = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; }
+    else if (c === '"' || c === "'" && /^'(?:\\.|[^'\\])'/.test(text.slice(i, i + 4))) quote = c;
+    else if (c === '{') level++;
+    else if (c === '}') level--;
+    depth[i] = level;
+  }
+  return depth;
+}
+const JAVA_METHOD = /^[ \t]*(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|private|protected|static|final|synchronized|abstract|native|default)\s+)*(?:<[^>]*>\s+)?(?:([\w.$<>\[\], ?]+?)\s+)?([A-Za-z_$][\w$]*)\s*\(/gm;
+const NOT_METHODS = /^(if|for|while|switch|catch|synchronized|return|new|else|try|throw|do)$/;
+// Java: the constructor (named after the class) and field initializers.
+function javaClass(code, def) {
+  const lines = code.split('\n'), text = lines.slice(def.start - 1, def.end).join('\n'), depth = memberDepths(text);
+  const methods = [];
+  for (const match of text.matchAll(JAVA_METHOD)) {
+    const name = match[2];
+    if (NOT_METHODS.test(name) || match[1] && /^(new|return|throw|else)$/.test(match[1].trim()) || depth[match.index + match[0].length - 1] !== 1) continue;
+    const found = bodyAfter(text, match.index + match[0].length - 1);
+    if (!found) continue;
+    methods.push({ name, params: found.params, body: found.body, line: lineAt(text, match.index) - 1, constructor: name === def.name && !match[1] });
+  }
+  const fields = new Set(), parts = [];
+  const member = /^[ \t]*(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|private|protected|static|final|transient|volatile)\s+)*(?!return\b|throw\b)[\w.$<>\[\], ?]+?\s+([A-Za-z_$][\w$]*)\s*(=|;)/gm;
+  for (const match of text.matchAll(member)) {
+    if (depth[match.index + match[0].length - 1] !== 1 || /\bstatic\b/.test(match[0])) continue;
+    fields.add(match[1]);
+    if (match[2] !== '=') continue;
+    const from = match.index + match[0].length, end = text.indexOf(';', from);
+    for (const layer of bracedLayers(match[1], text.slice(from, end < 0 ? undefined : end), 0, 'java')) parts.push({ ...layer, line: def.start + lineAt(text, match.index) - 1 });
+  }
+  // Fields used without this. read the same as this.field.
+  const explicit = body => [...fields].reduce((text, field) => text.replace(new RegExp('(^|[^.\\w$])(' + field + ')(?![\\w$]|\\s*\\()', 'g'), '$1this.$2'), body);
+  for (const method of methods) method.body = explicit(method.body);
+  const init = methods.find(method => method.constructor);
+  if (init) for (const layer of loopParts(init.body, 'java')) if (!parts.some(other => other.name === layer.name)) parts.push({ ...layer, line: def.start + init.line + lineAt(init.body, layer.at) - 1 });
+  if (init) for (const item of assignments(init.body, /(?:^|[\n;{])\s*(?:this\.)?([A-Za-z_$][\w$]*)\s*=(?!=)\s*/g)) {
+    if (!fields.has(item.name) && !/this\.\s*$/.test(init.body.slice(0, item.at + item.name.length + 8))) continue;
+    for (const layer of bracedLayers(item.name, item.expr, 0, 'java')) if (!parts.some(other => other.name === layer.name)) parts.push({ ...layer, line: def.start + init.line + lineAt(init.body, item.at) - 1 });
+  }
+  return { methods: methods.filter(method => !method.constructor), init: init || { name: def.name, params: '', body: '', line: 0 }, parts, self: 'this' };
+}
+// Go: methods with this receiver anywhere in the file, and the NewX function that fills the struct.
+function goClass(code, def) {
+  const name = def.name, methods = [];
+  const head = new RegExp('^func\\s*\\(\\s*(?:([A-Za-z_]\\w*)\\s+)?\\*?\\s*' + name + '(?:\\[[^\\]]*\\])?\\s*\\)\\s*([A-Za-z_]\\w*)\\s*(?:\\[[^\\]]*\\])?\\(', 'gm');
+  for (const match of code.matchAll(head)) {
+    const found = bodyAfter(code, match.index + match[0].length - 1);
+    if (!found) continue;
+    // One name for the receiver, whatever each method calls it.
+    const body = match[1] ? found.body.replace(new RegExp('\\b' + match[1] + '\\.', 'g'), 'this.') : found.body;
+    methods.push({ name: match[2], params: found.params, body, line: lineAt(code, match.index) - def.start });
+  }
+  let init;
+  for (const match of code.matchAll(/^func\s+([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\(/gm)) {
+    const found = bodyAfter(code, match.index + match[0].length - 1);
+    if (!found || !new RegExp('&?\\b' + name + '\\s*(?:\\[[^\\]]*\\])?\\s*\\{').test(found.body)) continue;
+    const item = { name: match[1], params: found.params, body: found.body, line: lineAt(code, match.index) - def.start };
+    if (!init || match[1].toLowerCase() === 'new' + name.toLowerCase()) init = item;
+  }
+  const parts = [];
+  if (init) {
+    const literal = new RegExp('(?:([A-Za-z_]\\w*)\\s*:?=\\s*)?&?\\b' + name + '\\s*(?:\\[[^\\]]*\\])?\\s*\\{', 'g');
+    let holder;
+    for (const match of init.body.matchAll(literal)) {
+      holder ||= match[1];
+      for (const pair of topLevel(balanced(init.body, match.index + match[0].length - 1))) {
+        const field = /^([A-Za-z_]\w*)\s*:\s*([\s\S]+)$/.exec(pair);
+        if (field) for (const layer of bracedLayers(field[1], field[2], 0, 'go')) if (!parts.some(other => other.name === layer.name)) parts.push({ ...layer, line: def.start + init.line + lineAt(init.body, match.index) - 1 });
+      }
+    }
+    for (const layer of loopParts(holder ? init.body.replace(new RegExp('\\b' + holder + '\\.', 'g'), 'this.') : init.body, 'go')) if (!parts.some(other => other.name === layer.name)) parts.push({ ...layer, line: def.start + init.line + lineAt(init.body, layer.at) - 1 });
+    if (holder) for (const item of assignments(init.body, new RegExp('(?:^|[\\n;{])\\s*' + holder + '\\.([A-Za-z_]\\w*)\\s*=(?!=)\\s*', 'g')))
+      for (const layer of bracedLayers(item.name, item.expr, 0, 'go')) if (!parts.some(other => other.name === layer.name)) parts.push({ ...layer, line: def.start + init.line + lineAt(init.body, item.at) - 1 });
+  }
+  return { methods, init: init || { name: 'New' + name, params: '', body: '', line: 0 }, parts, self: 'this' };
+}
+// Rust: functions in impl blocks for this type; the one that builds Self { ... } is the constructor.
+function rustClass(code, def) {
+  const name = def.name, methods = [];
+  const impl = new RegExp('^[ \\t]*impl\\b(?:\\s*<[^{]*?>)?\\s+(?:[\\w:<>, ]+?\\s+for\\s+)?(?:[\\w]+::)*' + name + '\\b[^{;]*\\{', 'gm');
+  for (const block of code.matchAll(impl)) {
+    const open = block.index + block[0].length - 1, body = balanced(code, open), offset = open + 1;
+    for (const match of body.matchAll(/^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(/gm)) {
+      const found = bodyAfter(body, match.index + match[0].length - 1);
+      if (found) methods.push({ name: match[1], params: found.params, body: found.body, line: lineAt(code, offset + match.index) - def.start });
+    }
+  }
+  const builds = method => new RegExp('\\b(?:Self|' + name + ')\\s*\\{').test(method.body);
+  const init = methods.find(method => method.name === 'new' && builds(method)) || methods.find(builds);
+  const parts = [];
+  if (init) {
+    const literal = new RegExp('\\b(?:Self|' + name + ')\\s*\\{', 'g'), found = [...init.body.matchAll(literal)].pop();
+    for (const pair of topLevel(balanced(init.body, found.index + found[0].length - 1))) {
+      if (/^\.\./.test(pair)) continue;
+      const field = /^([A-Za-z_]\w*)\s*(?::\s*([\s\S]+))?$/.exec(pair);
+      if (!field) continue;
+      // Shorthand `attn` takes the value of `let attn = ...;` above.
+      const expr = field[2] ?? assignments(init.body, new RegExp('\\blet\\s+(?:mut\\s+)?(' + field[1] + ')\\s*(?::[^=]+)?=\\s*', 'g')).pop()?.expr;
+      if (!expr) continue;
+      for (const layer of bracedLayers(field[1], expr, 0, 'rust')) if (!parts.some(other => other.name === layer.name)) parts.push({ ...layer, line: def.start + init.line + lineAt(init.body, found.index) - 1 });
+    }
+  }
+  return { methods: methods.filter(method => method !== init), init: init || { name: 'new', params: '', body: '', line: 0 }, parts, self: 'self' };
+}
+const BRACED = { java: javaClass, go: goClass, rust: rustClass };
+// Parts made in a counted loop: for (int i = 0; i < n; i++) blocks.add(new Block());
+// for i := 0; i < n; i++ { m.blocks = append(m.blocks, NewBlock()) } (or m.blocks[i] = ...).
+function loopParts(body, lang) {
+  const out = [];
+  const head = lang === 'java' ? /\bfor\s*\(\s*\w+\s+\w+\s*=\s*0\s*;\s*\w+\s*<\s*([^;]+?)\s*;[^)]*\)\s*/g : /\bfor\s+(?:\w+\s*:=\s*0\s*;\s*\w+\s*<\s*([^;{]+?)\s*;[^{]*|(?:\w+\s*:=\s*)?range\s+([^{]+?)\s*)\{/g;
+  for (const match of body.matchAll(head)) {
+    const count = (match[1] || match[2] || '').trim().replace(/^this\./, '');
+    const from = match.index + match[0].length, inner = lang === 'java' && body[from] !== '{' ? body.slice(from, body.indexOf(';', from) + 1) : balanced(body, lang === 'java' ? from : from - 1);
+    const added = /(?:this\.)?(\w+)\.add\s*\(([\s\S]+)\)\s*;?\s*$/.exec(inner.trim()) || /this\.(\w+)(?:\[\w+\])?\s*=\s*(?:append\s*\(\s*this\.\w+\s*,\s*([\s\S]+)\)|([\s\S]+))\s*;?\s*$/.exec(inner.trim());
+    if (!added) continue;
+    for (const layer of bracedLayers(added[1], added[2] || added[3] || '', 0, lang)) out.push({ ...layer, repeat: count || 'each item', at: match.index });
+  }
+  return out;
+}
+// Parameter names of a method, by language.
+function paramNames(params, lang, self) {
+  return topLevel(params || '').map(param => {
+    const text = param.replace(/^@\w+\s+/, '').trim();
+    if (lang === 'java') return text.replace(/\.\.\./, ' ').split(/\s+/).pop();
+    if (lang === 'go') return text.split(/\s+/)[0];
+    if (lang === 'rust') return /^&?\s*(?:'\w+\s+)?(?:mut\s+)?self$/.test(text) ? self : text.split(':')[0].replace(/^mut\s+/, '').trim();
+    return text.split(/[:=]/)[0].trim().replace(/^[*.]+/, '').replace(/\?$/, '');
+  }).filter(param => param && param !== self && param !== '_');
+}
+
 // What one class is made of, or undefined when its constructor creates no parts.
-function classLayers(source, def, { braces = false, scope } = {}) {
-  const code = braces ? String(source || '').replace(/(^|[^:])\/\/.*$/gm, '$1') : stripComments(String(source || ''));
-  const text = code.split('\n').slice(def.start - 1, def.end).join('\n');
-  const methods = methodsOf(text, braces);
-  const init = methods.find(method => INIT.includes(method.name));
-  if (!init) return undefined;
-  const layers = partsAssigned(init.body, braces, def.start + init.line);
-  if (!layers.length) return undefined;
-  const self = braces ? 'this' : 'self', base = layer => layer.via || layer.name.replace(/\[\d+\]$/, '');
+function classLayers(source, def, { braces = false, scope, lang = braces ? 'js' : 'python' } = {}) {
+  let methods, init, layers, self;
+  if (BRACED[lang]) {
+    ({ methods, init, parts: layers, self } = BRACED[lang](stripBraced(source), def));
+    braces = true;
+    if (!layers.length) return undefined;
+  } else {
+    const code = braces ? String(source || '').replace(/(^|[^:])\/\/.*$/gm, '$1') : stripComments(String(source || ''));
+    const text = code.split('\n').slice(def.start - 1, def.end).join('\n');
+    methods = methodsOf(text, braces);
+    init = methods.find(method => INIT.includes(method.name));
+    if (!init) return undefined;
+    layers = partsAssigned(init.body, braces, def.start + init.line);
+    if (!layers.length) return undefined;
+    self = braces ? 'this' : 'self';
+  }
+  const base = layer => layer.via || layer.name.replace(/\[\d+\]$/, '');
   // The method that runs the parts: forward/call when there is one, else the one using the most of them.
   const candidates = methods.filter(method => !INIT.includes(method.name));
   const count = method => layers.filter(layer => new RegExp('\\b' + self + '\\.(?:\\w+\\.)*' + base(layer) + '\\b').test(method.body)).length;
-  const runner = candidates.find(method => RUNNERS.includes(method.name))
+  const runner = candidates.find(method => RUNNERS.includes(method.name) || BRACED[lang] && /^(forward|call|run|apply)$/i.test(method.name))
     || candidates.map(method => ({ method, uses: count(method) })).filter(item => item.uses >= 2).sort((a, b) => b.uses - a.uses)[0]?.method;
   const body = runner?.body || '';
   // Where a part is used; a call counts where it closes, so in a(b(x)) b comes first.
   const used = layer => {
-    const found = new RegExp('\\.' + base(layer) + '\\b(\\s*\\()?').exec(body);
+    const found = new RegExp('\\.' + base(layer) + '\\b' + (BRACED[lang] ? '(?:\\s*\\.\\s*\\w+)?' : '') + '(\\s*\\()?').exec(body);
     if (!found) return Infinity;
     const open = found.index + found[0].length - 1;
     return (found[1] ? open + balanced(body, open).length + 1 : found.index) + (Number(/\[(\d+)\]$/.exec(layer.name)?.[1]) || 0) / 1000;
@@ -195,7 +424,7 @@ function classLayers(source, def, { braces = false, scope } = {}) {
   const steps = layers.map((layer, index) => ({ layer, at: used(layer), index }));
   if (runner) for (const step of steps) if (step.at === Infinity) step.layer.unused = true;
   // Known math between parts (softmax, a loss), placed where it happens.
-  for (const found of body.matchAll(/(?:\b(?:F|functional|torch|tf|jnp|nn|ops)\.|\.)(\w+)\s*\(/g)) {
+  for (const found of body.matchAll(/(?:\b(?:F|functional|torch|tf|jnp|nn|ops)(?:\.|::)|\.|::)(\w+)\s*\(/g)) {
     const name = found[1];
     if (!Object.prototype.hasOwnProperty.call(OPS, name) || layers.some(layer => base(layer) === name) || steps.some(step => step.layer.op && step.layer.type === name)) continue;
     const open = found.index + found[0].length - 1;
@@ -203,7 +432,7 @@ function classLayers(source, def, { braces = false, scope } = {}) {
   }
   steps.sort((a, b) => a.at - b.at || a.index - b.index);
   const ordered = steps.map(step => step.layer);
-  const inputs = topLevel(runner?.params || '').map(param => param.split(/[:=]/)[0].trim().replace(/^[*.]+/, '').replace(/\?$/, '')).filter(param => param && param !== self);
+  const inputs = paramNames(runner?.params, lang, self);
   const returns = [...body.matchAll(/^\s*return\s+(.+?);?\s*$/gm)].pop()?.[1].trim().replace(/^\((.*)\)$/, '$1');
   const shown = ordered.slice(0, LIMITS.layers);
   // How data moves through the main method (Python): what feeds each part, merges, conditions, loops.
@@ -278,12 +507,15 @@ function flowWords() {
 }
 
 // The first sentence of a class's docstring (Python) or the comment above it (JS/TS).
-function classDoc(source, def, braces) {
+function classDoc(source, def, braces, lang) {
   const lines = String(source || '').split('\n');
   const clip = text => { const clean = text.replace(/\s+/g, ' ').trim(); return (/^(.+?[.!?])(\s|$)/.exec(clean)?.[1] || clean).slice(0, LIMITS.plain) || undefined; };
   if (braces) {
     const above = [];
-    for (let i = def.start - 2; i >= 0 && /^\s*(\/\/|\*|\/\*)/.test(lines[i]); i--) above.unshift(lines[i].replace(/^\s*(\/\/+|\/\*\*?|\*\/?)\s?/, '').replace(/\*\/\s*$/, ''));
+    // Rust attributes and Java annotations may sit between the comment and the class.
+    let top = def.start - 2;
+    if (BRACED_LANGS.has(lang)) while (top >= 0 && /^\s*(#\[|@\w)/.test(lines[top])) top--;
+    for (let i = top; i >= 0 && /^\s*(\/\/|\*|\/\*)/.test(lines[i]); i--) above.unshift(lines[i].replace(/^\s*(\/\/+|\/\*\*?|\*\/?)\s?/, '').replace(/\*\/\s*$/, ''));
     return above.length ? clip(above.filter(line => !/^\s*@/.test(line)).join(' ')) : undefined;
   }
   const quotes = '"'.repeat(3) + '|' + "'".repeat(3);
@@ -346,17 +578,23 @@ function scopes(classes, texts) {
   };
 }
 
+const LANG_FOR = [[/\.(py|ipynb)$/i, 'python'], [/\.(m?[jt]sx?|cjs)$/i, 'js'], [/\.java$/i, 'java'], [/\.go$/i, 'go'], [/\.rs$/i, 'rust']];
+const langFor = file => LANG_FOR.find(([pattern]) => pattern.test(file))?.[1];
 function partLayers(classes, texts) {
-  const out = {}, bracesFor = file => /\.(m?[jt]sx?|cjs)$/i.test(file), scopeOf = scopes(classes, texts);
+  const out = {}, bracesFor = file => langFor(file) !== 'python', scopeOf = scopes(classes, texts);
   for (const { file, def } of classes) {
-    if (!texts.has(file) || !(bracesFor(file) || /\.(py|ipynb)$/i.test(file))) continue;
+    const lang = langFor(file);
+    if (!texts.has(file) || !lang) continue;
     let found;
-    try { found = classLayers(texts.get(file), def, { braces: bracesFor(file), scope: bracesFor(file) ? undefined : scopeOf(file, def) }); } catch { found = undefined; }
-    if (found) out[file + '#' + def.name] = { ...found, doc: classDoc(texts.get(file), def, bracesFor(file)) };
+    try { found = classLayers(texts.get(file), def, { braces: bracesFor(file), lang, scope: lang === 'python' ? scopeOf(file, def) : undefined }); } catch { found = undefined; }
+    if (found) out[file + '#' + def.name] = { ...found, doc: classDoc(texts.get(file), def, bracesFor(file), lang) };
   }
-  const known = new Map(classes.map(({ file, def }) => [def.name, { key: file + '#' + def.name, doc: texts.has(file) ? classDoc(texts.get(file), def, bracesFor(file)) : undefined }]));
-  for (const found of Object.values(out)) for (const layer of found.layers) {
-    const own = !layer.op && known.get(layer.type);
+  // A part's class: in the same file first, then in the same language, then anywhere.
+  const known = new Map();
+  for (const { file, def } of classes) (known.get(def.name) || known.set(def.name, []).get(def.name)).push({ file, key: file + '#' + def.name, doc: texts.has(file) ? classDoc(texts.get(file), def, bracesFor(file), langFor(file)) : undefined });
+  const ownOf = (type, file) => { const all = known.get(type) || []; return all.find(item => item.file === file) || all.find(item => langFor(item.file) === langFor(file)) || all[0]; };
+  for (const [key, found] of Object.entries(out)) for (const layer of found.layers) {
+    const own = !layer.op && ownOf(layer.type, key.slice(0, key.lastIndexOf('#')));
     if (!own) continue;
     layer.own = own.key;
     if (own.doc) layer.doc = own.doc;
