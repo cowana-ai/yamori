@@ -144,6 +144,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const graph = item.entry.graph || { files: {} };
     const db = dbFor(item, false), vault = vaultFor(item);
     const base = { terminalChat: map.chatInTerminal ? map.chatInTerminal() : false, agentSession: !!map.agentSessionAlive?.(item.entry), layouts: layoutsFor(item), repo: path.basename(item.root), busy: item.busy, error: item.error, notice: item.notice, budget: budget(),
+      changes: { pending: item.scheduler?.pending.length || 0, auto: autoUpdate() },
       vault: { obsidian: vault.obsidian, where: vault.obsidian ? path.basename(vault.vaultPath) + ' › Yamori › ' + vault.repo : '.yamori/notes in this project', dir: vault.dir, lastSync: item.lastSync } };
     if (!db || !db.workflows().length) return { ...base, estimate: estimateFor(item), system: undefined, activity: db ? activity(db) : undefined };
     const view = system.systemView(db, graph, item.entry.notes);
@@ -512,7 +513,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
       case 'steerCancel': item.steerController?.abort(); item.steer = undefined; break;
       case 'steerDiff': { const file = item.steer?.preview?.files.find(entry => entry.file === message.file); if (file) await map.openProposed(item.entry, file.file, file.after, item.steer.preview.summary); break; }
       case 'handToAgent': handToAgent(item, message.intent, message.targets); break;
-      case 'agentSession': await map.openAgentSession?.(item.entry, { prefill: typeof message.prefill === 'string' ? message.prefill.slice(0, 300) : '' }); break;
+      case 'agentSession': await map.openAgentSession?.(item.entry, { prefill: typeof message.prefill === 'string' ? message.prefill.slice(0, 300) : '' })?.catch(() => {}); break;
       case 'layout': {
         const layouts = layoutsFor(item), key = String(message.key || '').slice(0, 200);
         if (!key) break;
@@ -634,6 +635,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (!db || !rel || rel.startsWith('.yamori/')) return;
     if (!db.all('SELECT 1 FROM files WHERE path = ? LIMIT 1', rel).length) return;
     item.scheduler.saved(rel);
+    post(item);
   }
   async function settled(item, files, signal) {
     const db = dbFor(item);

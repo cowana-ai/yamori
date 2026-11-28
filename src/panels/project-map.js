@@ -746,7 +746,7 @@ module.exports = function projectMapPanel({ engine, vscode, setting, cliPathFor,
       entry.plans.current = clean; entry.planNotes = (entry.planNotes || []).filter(item => item.kind !== 'problem');
       if (setting(api, 'chatInTerminal', true) !== false) {
         const typed = planComments(plan, clean);
-        if (typed) void agentSessions?.open(entry, { prefill: typed, preserveFocus: true }).catch(() => {});
+        if (typed) void agentSessions?.open(entry, { prefill: typed, preserveFocus: true, quiet: true }).catch(() => {});
       }
       void planEffects(entry).then(() => post(entry)).catch(() => {});
       void planEstimate(entry).then(() => post(entry)).catch(() => {});
@@ -808,7 +808,7 @@ module.exports = function projectMapPanel({ engine, vscode, setting, cliPathFor,
         plan.approvedAt = Date.now(); entry.planError = ''; projectConversation(entry).mode = 'work';
         journal.add(entry.plans, { role: 'user', mode: 'work', kind: 'approval', text: 'Approved the plan: ' + (plan.summary || plan.goal), details: { planId: plan.id } });
         bump(entry); await savePlanNow(entry); post(entry);
-        try { await agentSessions.open(entry, { prefill: APPROVED_PROMPT(steps.length), submit: true }); }
+        try { await agentSessions.open(entry, { prefill: APPROVED_PROMPT(steps.length), submit: true, quiet: true }); }
         catch (error) { plan.approvedAt = undefined; entry.planError = 'Could not reach your agent session: ' + error.message + ' Your plan was kept.'; bump(entry); planSave(entry); post(entry); }
         return;
       }
@@ -981,7 +981,7 @@ module.exports = function projectMapPanel({ engine, vscode, setting, cliPathFor,
         case 'ready': post(entry); break;
         case 'stages': await stagesHost?.message(entry, message.message); break;
         case 'viewChanged': noteView(entry, { tab: { start: 'Files', map: 'File links', plan: 'Plan', stages: 'Your System' }[message.view] }); break;
-        case 'agentSession': await agentSessions?.open(entry, { prefill: typeof message.prefill === 'string' ? message.prefill : '' }); break;
+        case 'agentSession': await agentSessions?.open(entry, { prefill: typeof message.prefill === 'string' ? message.prefill : '' }).catch(() => {}); post(entry); break;
         case 'readCurrent': await api.commands.executeCommand?.('yamori.read'); break;
         case 'openFile': if (file) await openFile(fileUri(entry, file)); break;
         case 'revealSource': if (file) await reveal(entry, file, message.line); break;

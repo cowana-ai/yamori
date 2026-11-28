@@ -55,6 +55,8 @@ body.vscode-light:not([data-palette="slate"]) #stages-view, body[data-palette="p
 #stages-view .st-badge { font: 700 10px/16px ui-monospace, monospace; padding: 0 6px; border: 1px solid var(--read-border); background: var(--read-page); color: var(--read-ink); }
 #stages-view .st-badge.plus { border-color: var(--st-add); color: var(--st-add); }
 #stages-view .st-badge.stale { border-color: var(--st-warn); color: var(--st-warn); }
+#stages-view .st-outdated { border-color: var(--st-warn); }
+#stages-view .st-outdated b { color: var(--st-warn); }
 #stages-view .st-edge { flex: 0 0 76px; display: flex; flex-direction: column; justify-content: center; align-items: center; font: 10px/1.3 ui-monospace, monospace; color: var(--read-muted); text-align: center; padding: 0 4px; }
 #stages-view .st-edge b { font-size: 16px; color: var(--read-ink); }
 #stages-view .st-card { margin: 14px 0; padding: 14px 16px; border: 1px solid var(--read-ink); background: var(--read-surface); }
@@ -1089,6 +1091,19 @@ function mountStages(root, post) {
         ui.blocks[key(index)] ? h('pre', {}, block.pseudocode) : undefined))));
   }
   // --- header, request box, review, notes, AI use ---
+  // Tells you when the map no longer matches the code: edits in progress, or
+  // steps whose code changed (from the editor, your agent, git) and are not updated yet.
+  function changesBanner(sys) {
+    const pending = state.changes?.pending || 0, auto = state.changes?.auto !== false;
+    if (state.busy) return undefined;
+    if (pending) return h('p', { class: 'st-notice st-changing' }, 'Your code is changing (' + plural(pending, 'file') + ' edited). ', auto ? 'The map updates by itself once the edits stop.' : 'Update the map when you are done.');
+    const stale = sys.parts.filter(part => part.stale);
+    if (!stale.length) return undefined;
+    const steps = stale.reduce((sum, part) => sum + part.stale, 0), names = stale.map(part => part.name);
+    return h('div', { class: 'st-upgrade st-outdated', role: 'status' },
+      h('div', {}, h('b', {}, 'Your code changed since this map was made.'), ' ', muted(plural(steps, 'step') + ' in ' + (names.length > 3 ? names.slice(0, 3).join(', ') + ' and ' + plural(names.length - 3, 'more part') : names.join(', ')) + (steps === 1 ? ' is' : ' are') + ' out of date (dashed boxes). Update re-reads only those steps.')),
+      go('refresh', {}, 'Update now', { title: 'Update only the steps whose code changed' }));
+  }
   function header() {
     const total = state.activity?.total, sys = state.system;
     return h('div', { class: 'st-bar' },
@@ -1204,6 +1219,7 @@ function mountStages(root, post) {
       state.busy ? h('p', { class: 'st-notice' }, state.busy) : undefined,
       state.notice ? h('p', { class: 'st-notice' }, state.notice) : undefined,
       sys?.newFiles ? h('p', { class: 'st-notice' }, 'Files were added or removed since the map was made. ', link('buildSystem', {}, 'Update the map')) : undefined,
+      sys ? changesBanner(sys) : undefined,
       sys && !state.busy && !sys.parts.some(part => part.outdated) && sys.parts.some(part => part.undescribed) ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, plural(sys.parts.reduce((sum, part) => sum + (part.undescribed || 0), 0), 'step') + ' across ' + plural(sys.parts.filter(part => part.undescribed).length, 'part') + ' have no description yet.'), ' ', muted('A run stopped before writing them. This only fills them in.')),
         go('describeParts', {}, 'Describe the missing steps', { disabled: !!state.busy })) : undefined,
       sys && !state.busy && sys.parts.some(part => part.outdated) ? h('div', { class: 'st-upgrade' }, h('div', {}, h('b', {}, plural(sys.parts.filter(part => part.outdated).length, 'part') + ' mapped the old way.'), ' ', muted('Map them again to see inner steps, decisions, AI calls and files on the diagrams. A few cents with the cheap model; unchanged functions are reused.')),

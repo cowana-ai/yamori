@@ -403,3 +403,23 @@ test('when step writers are refused, the gap is shown and can be filled without 
     assert.equal(ctx.calls.slice(before).filter(prompt => /Yamori's planner|system mapper/.test(prompt)).length, 0, 'no re-planning');
   } finally { ctx.cleanup(); }
 });
+
+test('Your System says when the map no longer matches the code: edits in progress, then steps to update', { skip }, async () => {
+  const saved = { ...timing };
+  Object.assign(timing, { delay: 10, idle: 30 });
+  const ctx = await setup();
+  try {
+    await ctx.send({ type: 'buildSystem' });
+    ctx.settings['stages.autoUpdate'] = false;
+    assert.equal(ctx.screen.state(ctx.item).system.parts.some(part => part.stale), false);
+    // An edit from outside the editor (the terminal agent) arrives the same way as a save.
+    fs.appendFileSync(path.join(ctx.root, 'agents', 'email', 'run.py'), '\n\ndef retry(message):\n    return triage_loop()\n');
+    await ctx.screen.saved({ scheme: 'file', fsPath: path.join(ctx.root, 'agents', 'email', 'run.py') });
+    assert.deepEqual(ctx.last().changes, { pending: 1, auto: false }, 'the view hears about the edit at once');
+    await new Promise(resolve => setTimeout(resolve, 60)); await ctx.item.scheduler.running;
+    const state = ctx.screen.state(ctx.item);
+    assert.equal(state.changes.pending, 0);
+    assert.ok(state.system.parts.find(part => part.name === 'Email helper').stale > 0, 'the changed steps are marked out of date');
+    assert.equal(ctx.calls.filter(prompt => /Code behind one stage changed/.test(prompt)).length, 0, 'with auto update off nothing is re-read until you press Update');
+  } finally { Object.assign(timing, saved); ctx.cleanup(); }
+});

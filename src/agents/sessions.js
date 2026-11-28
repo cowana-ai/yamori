@@ -8,7 +8,7 @@ const { render, text: promptText } = require('../prompts');
 const { MCP_SERVER_NAME, NODE_RUNTIME_ENV, LAUNCHER, AGENT_SESSION } = require('../config');
 
 module.exports = function agentSessions({ vscode, os, engine, connectionOptions, cliPathFor }) {
-  const { PROVIDERS, cliLaunch, findCLI, runProcess } = engine;
+  const { PROVIDERS, BINARIES, cliLaunch, findCLI, runProcess } = engine;
   // ---- Your own Claude Code and Codex sessions use Yamori ----
   // A stable launcher in Yamori's storage starts the knowledge server from the
   // installed extension, so extension updates never break the registration.
@@ -62,10 +62,20 @@ module.exports = function agentSessions({ vscode, os, engine, connectionOptions,
     };
     // A Claude Code conversation exists once it has a transcript on disk.
     const claudeTranscript = id => { try { const dir = path.join(os.homedir(), '.claude', 'projects'); return require('node:fs').readdirSync(dir).some(folder => require('node:fs').existsSync(path.join(dir, folder, id + '.jsonl'))); } catch { return false; } };
+    // The chosen AI's CLI, else the first other one installed (Claude Code, Codex,
+    // Cursor), so Chat still opens; you are told which one it used and why.
+    async function installedAgent() {
+      const chosen = PROVIDERS[context.globalState.get('provider')] ? context.globalState.get('provider') : 'claude';
+      for (const provider of [chosen, ...Object.keys(PROVIDERS).filter(id => id !== chosen)]) {
+        const binary = await find(provider, connectionOptions(context.globalState, provider, api).cliPath).catch(() => undefined);
+        if (binary) return { provider, binary, chosen };
+      }
+      throw new Error('No agent CLI is installed: ' + PROVIDERS[chosen] + ' needs `' + BINARIES[chosen] + '` on your PATH. Use Yamori: Set Up AI to install one.');
+    }
     async function start(entry) {
-      const provider = PROVIDERS[context.globalState.get('provider')] ? context.globalState.get('provider') : 'claude';
-      const { model, cliPath } = connectionOptions(context.globalState, provider, api);
-      const binary = await find(provider, cliPath);
+      const { provider, binary, chosen } = await installedAgent();
+      const { model } = connectionOptions(context.globalState, provider, api);
+      if (provider !== chosen) api.window.showInformationMessage?.('Yamori: ' + PROVIDERS[chosen] + '’s terminal CLI (`' + BINARIES[chosen] + '`) is not installed, so your chat uses ' + PROVIDERS[provider] + '. Install it or pick another AI in Yamori: Set Up AI.');
       const launcher = await writeLauncher(context, api);
       const server = { command: launcher.runtime, args: [launcher.launcher], env: { ...NODE_RUNTIME_ENV } };
       let args;
@@ -95,10 +105,17 @@ module.exports = function agentSessions({ vscode, os, engine, connectionOptions,
         if (!PROVIDERS[context.globalState.get('provider')]) return;
         await start(entry);
       },
-      async open(entry, { prefill = '', submit = false, preserveFocus = false } = {}) {
-        if (api.workspace.isTrusted === false) throw new Error('Trust this workspace to start an agent session.');
-        if (!api.window.createTerminal) throw new Error('The integrated terminal is unavailable.');
-        const existing = alive(entry), terminal = existing || await start(entry);
+      // Errors are shown to you (quiet callers handle their own) and passed on.
+      async open(entry, { prefill = '', submit = false, preserveFocus = false, quiet = false } = {}) {
+        let existing, terminal;
+        try {
+          if (api.workspace.isTrusted === false) throw new Error('Trust this workspace to start an agent session.');
+          if (!api.window.createTerminal) throw new Error('The integrated terminal is unavailable.');
+          existing = alive(entry); terminal = existing || await start(entry);
+        } catch (error) {
+          if (!quiet) api.window.showErrorMessage?.('Yamori: could not open your agent in the terminal. ' + error.message);
+          throw error;
+        }
         terminal.show(preserveFocus);
         // Puts words on the agent's prompt; without submit they wait there for you to send.
         // Enter goes separately, so the agent's prompt takes the text as typed, not as a paste.

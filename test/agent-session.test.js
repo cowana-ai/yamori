@@ -116,3 +116,29 @@ test('plan comments become one line for the agent prompt; only what was added si
   assert.equal(planComments({ steps: [{ ...step, note: 'One' }] }, { steps: [{ ...step, note: 'One\nTwo' }] }), '[Plan comment · step 1 “Retry” (a.py:3-9)] Two ');
   assert.doesNotMatch(APPROVED_PROMPT(2), /\n/); assert.match(APPROVED_PROMPT(2), /get_plan.*done/);
 });
+
+test('Chat opens even when the chosen AI has no terminal CLI: another installed agent is used, and you are told', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yamori-home-')), storage = path.join(home, 'storage');
+  const created = [], info = [], errors = [];
+  const api = {
+    workspace: { isTrusted: true, getConfiguration: () => ({ get: (_, fallback) => fallback }) },
+    window: { terminals: [], showInformationMessage: text => info.push(text), showErrorMessage: text => errors.push(text),
+      createTerminal(options) { const terminal = { name: options.name, options, show() {}, sendText() {} }; created.push(terminal); api.window.terminals.push(terminal); return terminal; } }
+  };
+  const stub = { exports: {} };
+  const srcRequire = id => require(id.startsWith('.') ? path.join(__dirname, '..', 'src', id) : id);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'src', 'extension.js'), 'utf8'), { module: stub, require: id => id === 'vscode' ? api : id === 'node:os' ? { ...os, homedir: () => home } : srcRequire(id), Buffer, AbortController, setTimeout, clearTimeout, process, __dirname: path.join(__dirname, '..', 'src'), console, URL, URLSearchParams });
+  const values = new Map([['provider', 'cursor']]), context = { globalStorageUri: { fsPath: storage }, extensionUri: { fsPath: path.join(__dirname, '..') }, globalState: { get: (key, fallback) => values.has(key) ? values.get(key) : fallback, update: async (key, value) => values.set(key, value) } };
+  const entry = { root: { fsPath: path.join(home, 'shop'), toString: () => 'file://' + path.join(home, 'shop') } };
+  try {
+    // Cursor's app is installed but not cursor-agent; Claude Code is.
+    const sessions = stub.exports.createAgentSessions(context, api, { find: async provider => { if (provider === 'claude') return '/usr/local/bin/claude'; throw new Error(provider + ' not found'); } });
+    await sessions.open(entry);
+    assert.equal(created.length, 1); assert.equal(created[0].options.shellPath, '/usr/local/bin/claude');
+    assert.match(info[0], /Cursor.*cursor-agent.*not installed.*Claude Code/);
+    // No agent CLI at all: a clear error instead of nothing.
+    const none = stub.exports.createAgentSessions(context, api, { find: async () => { throw new Error('not found'); } });
+    await assert.rejects(none.open({ root: { fsPath: path.join(home, 'other'), toString: () => 'file://other' } }), /No agent CLI is installed/);
+    assert.match(errors[0], /could not open your agent in the terminal\. No agent CLI is installed: Cursor needs `cursor-agent`/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

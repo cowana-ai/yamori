@@ -44,7 +44,10 @@ const AGENT_SESSION = {
 // Files Yamori reads as source, folders it never scans, and the largest
 // source it sends to a model in one request.
 const SOURCE_GLOB = '**/*.{ipynb,py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,h,hpp,rb,php,swift,dart,r,R,sh,bash,lua,pl,sql,vue,svelte,md,mdx,txt,rst,json,yaml,yml,toml,ini,cfg}';
-const EXCLUDED_GLOB = '**/{node_modules,.git,.venv,venv,env,dist,build,out,vendor,.next,coverage,__pycache__}/**';
+const EXCLUDED_DIRS = ['node_modules', '.git', '.venv', 'venv', 'env', 'dist', 'build', 'out', 'vendor', '.next', 'coverage', '__pycache__'];
+const EXCLUDED_GLOB = '**/{' + EXCLUDED_DIRS.join(',') + '}/**';
+// A changed path inside an excluded folder or Yamori's own folder never changes a map.
+const IGNORED_CHANGE = new RegExp('[\\\\/](' + [...EXCLUDED_DIRS, '.yamori'].map(dir => dir.replace(/\./g, '\\.')).join('|') + ')[\\\\/]');
 const MAX_SOURCE_BYTES = 120000;
 
-module.exports = { SOURCE_GLOB, EXCLUDED_GLOB, MAX_SOURCE_BYTES, STORE_FILES, RELOADED_STORE_FILES, PROJECT_DIR, PROJECT_FILES, MCP_SERVER_NAME, NODE_RUNTIME_ENV, LAUNCHER, MIGRATION_FILE, AGENT_SESSION };
+module.exports = { SOURCE_GLOB, EXCLUDED_GLOB, IGNORED_CHANGE, MAX_SOURCE_BYTES, STORE_FILES, RELOADED_STORE_FILES, PROJECT_DIR, PROJECT_FILES, MCP_SERVER_NAME, NODE_RUNTIME_ENV, LAUNCHER, MIGRATION_FILE, AGENT_SESSION };

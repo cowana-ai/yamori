@@ -9,7 +9,7 @@ const autoRefreshing = require('./project/auto-refresh');
 const { createDiffReview } = require('./views/diff-review');
 const { dependencyFingerprint, refreshSupport } = require('./storage/cache');
 const project = require('./project/graph');
-const { SOURCE_GLOB, EXCLUDED_GLOB, MAX_SOURCE_BYTES, MIGRATION_FILE } = require('./config');
+const { SOURCE_GLOB, EXCLUDED_GLOB, IGNORED_CHANGE, MAX_SOURCE_BYTES, MIGRATION_FILE } = require('./config');
 
 async function openNotebookAt(api, uri, cells, line = 1, viewColumn, preserveFocus = false) {
   if (!api.workspace.openNotebookDocument || !api.window.showNotebookDocument) return false;
@@ -620,6 +620,13 @@ async function activate(context) {
   command('yamori.stages.fromEntry', async () => stageScreen.fromEntry(await stageEntry()));
   command('yamori.stages.regenerate', async () => stageScreen.regenerate(await stageEntry()));
   if (vscode.workspace.onDidSaveTextDocument) context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => { void stageScreen.saved(doc.uri).catch(() => {}); }));
+  // Edits made outside VS Code's editor (your terminal agent, git pull, a branch
+  // switch) reach Your System too. Only files already in a map do any work.
+  if (vscode.workspace.createFileSystemWatcher) {
+    const watcher = vscode.workspace.createFileSystemWatcher(SOURCE_GLOB);
+    const changed = uri => { if (!IGNORED_CHANGE.test(uri?.fsPath || '')) void stageScreen.saved(uri).catch(() => {}); };
+    context.subscriptions.push(watcher, watcher.onDidChange(changed), watcher.onDidCreate(changed), watcher.onDidDelete(changed));
+  }
   // Deep links from Obsidian notes: vscode://cowana-ai.yamori/open?file=<repo-relative>&line=N[&root=<abs>]
   if (vscode.window.registerUriHandler) context.subscriptions.push(vscode.window.registerUriHandler({
     async handleUri(uri) {
