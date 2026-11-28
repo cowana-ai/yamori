@@ -254,7 +254,7 @@ function connectionOptions(globalState, provider, api = vscode) {
   // Without a choice, both providers think at low effort. On a dense 162-line
   // file Opus started writing after 2 s at low, against 77 s at medium.
   const effort = override === 'auto' ? null : typeof override === 'string' ? override : model ? choice.effort ?? null : 'low';
-  return { provider, model, effort, cliPath: setting(api, provider === 'claude' ? 'claudePath' : 'codexPath') };
+  return { provider, model, effort: provider === 'cursor' ? null : effort, cliPath: cliPathFor(api, provider) };
 }
 
 // Project map: one local graph (plus optional AI notes and moved node
@@ -1233,7 +1233,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     const chosen = await api.window.showQuickPick?.([
       { label: 'Continue a Codex conversation', action: 'codex', description: 'Import a local conversation from this project and resume its native context' },
       { label: 'Continue a Claude Code conversation', action: 'claude', description: 'Import a local conversation from this project and resume its native context' },
-      { label: 'Open current conversation in agent terminal', action: 'open', description: 'Resume the same native session in Codex or Claude Code' },
+      { label: 'Open current conversation in agent terminal', action: 'open', description: 'Resume the same native session in Codex, Claude Code or Cursor' },
       { label: 'Sync linked conversation', action: 'sync', description: 'Read external updates locally, without an AI call' },
       { label: 'Copy project context', action: 'copy', description: 'For moving to another provider or a web-only chat' },
       { label: 'Paste a conversation handoff', action: 'paste', description: 'Import context from a web-only or exported chat' }
@@ -1462,7 +1462,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     },
     async connection(tier) {
       const provider = context.globalState.get('provider');
-      if (!PROVIDERS[provider]) throw new Error('Set up Claude Code or Codex first (Yamori: Set Up AI).');
+      if (!PROVIDERS[provider]) throw new Error('Set up Claude Code, Codex or Cursor first (Yamori: Set Up AI).');
       const main = connectionOptions(context.globalState, provider, api);
       return tier === 'main' ? main : { ...main, ...(await quickModel(provider, main.cliPath, api) || {}) };
     },
@@ -1692,9 +1692,11 @@ async function migratePreferences(context) {
 }
 
 // ---- Setup: which AI explains code, and one button to make it ready ----
-const OWNERS = ['claude', 'codex'];
-const AI_NAMES = { claude: 'Claude', codex: 'ChatGPT' };
-function cliPathFor(api, owner) { return setting(api, owner === 'claude' ? 'claudePath' : 'codexPath'); }
+const OWNERS = ['claude', 'codex', 'cursor'];
+const AI_NAMES = { claude: 'Claude', codex: 'ChatGPT', cursor: 'Cursor' };
+const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' };
+const PATH_SETTINGS = { claude: 'claudePath', codex: 'codexPath', cursor: 'cursorPath' };
+function cliPathFor(api, owner) { return setting(api, PATH_SETTINGS[owner] || 'codexPath'); }
 // The terminal behind Sign in / Install. Commands are fixed here; the webview
 // only names the provider. A failed install waits so its messages stay visible.
 function setupTerminal(context, api, owner, kind, binary, system = {}) {
@@ -1704,7 +1706,16 @@ function setupTerminal(context, api, owner, kind, binary, system = {}) {
   let options;
   if (kind === 'signIn' && binary) {
     const launch = cliLaunch(binary, owner === 'claude' ? ['auth', 'login'] : ['login']);
-    options = { name: owner === 'claude' ? 'Yamori · Claude sign-in' : 'Yamori · ChatGPT sign-in', shellPath: launch.command, shellArgs: launch.args, env: launch.env, cwd: home };
+    options = { name: 'Yamori · ' + AI_NAMES[owner] + ' sign-in', shellPath: launch.command, shellArgs: launch.args, env: launch.env, cwd: home };
+  } else if (owner === 'cursor') {
+    // Cursor's official installer (cursor.com/install), then its browser sign-in.
+    options = windows ? {
+      name: 'Yamori · Install Cursor CLI', cwd: home, shellPath: powershell,
+      shellArgs: ['-NoProfile', '-NoExit', '-Command', '$ErrorActionPreference = "Stop"; irm \'https://cursor.com/install?win32=true\' | iex; cursor-agent login']
+    } : {
+      name: 'Yamori · Install Cursor CLI', cwd: home, shellPath: '/bin/bash',
+      shellArgs: ['-lc', 'set -o pipefail; { curl -fsSL https://cursor.com/install | /bin/bash && "$HOME/.local/bin/cursor-agent" login; }' + pause]
+    };
   } else if (owner === 'claude') {
     options = windows ? {
       name: 'Yamori · Install Claude Code', cwd: home, shellPath: powershell,
@@ -1748,7 +1759,7 @@ require(path.join(current.extension, 'src', 'project', 'mcp.js')).main(process.a
 `);
   return { launcher, runtime: process.execPath, env: { ELECTRON_RUN_AS_NODE: '1' } };
 }
-// One agent session per project in the VS Code terminal: Claude Code or Codex,
+// One agent session per project in the VS Code terminal: Claude Code, Codex or Cursor,
 // connected to Yamori's MCP server, told to look at what the founder has open
 // and to plan onto Yamori's canvas. It survives closing Yamori's panels; with
 // Claude Code the same conversation resumes after a restart.
@@ -1803,6 +1814,10 @@ function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
       const resume = id && claudeTranscript(id);
       if (!resume) { id = require('node:crypto').randomUUID(); await context.globalState.update(key, id); }
       args = [...(resume ? ['--resume', id] : ['--session-id', id]), '--append-system-prompt', SESSION_RULES, '--mcp-config', JSON.stringify({ mcpServers: { yamori: { type: 'stdio', ...server } } }), ...(model ? ['--model', model] : [])];
+    } else if (provider === 'cursor') {
+      // Cursor's CLI takes no system prompt or per-run MCP config: the rules are its
+      // first message, and Yamori's tools come from ~/.cursor/mcp.json (Connect agents).
+      args = ['--approve-mcps', ...(model ? ['--model', model] : []), '--', SESSION_RULES + '\n\nReply only "Ready." now.'];
     } else {
       args = ['-c', 'developer_instructions=' + JSON.stringify(SESSION_RULES), '-c', 'mcp_servers.yamori.command=' + JSON.stringify(server.command), '-c', 'mcp_servers.yamori.args=' + JSON.stringify(server.args), '-c', 'mcp_servers.yamori.env={ELECTRON_RUN_AS_NODE="1"}', ...(model ? ['--model', model] : [])];
     }
@@ -1897,7 +1912,7 @@ async function connectAgents(context, api = vscode, { run = runProcess, discover
 // Cards for the setup screen, most ready first. Pure, so tests can read it.
 function setupView(statuses, { chosen, working = {}, pending, done } = {}) {
   const card = owner => {
-    const s = statuses[owner] || {}, name = AI_NAMES[owner], cli = owner === 'claude' ? 'Claude Code' : 'Codex';
+    const s = statuses[owner] || {}, name = AI_NAMES[owner], cli = CLI_NAMES[owner];
     const lines = [s.installed
       ? { state: 'yes', text: cli + ' installed' + (s.source && s.source !== 'Command line' ? ' · from ' + s.source : '') }
       : { state: 'no', text: cli + ' not installed' }];
@@ -1906,18 +1921,18 @@ function setupView(statuses, { chosen, working = {}, pending, done } = {}) {
     let action;
     if (working[owner]) action = { label: 'Show the ' + (working[owner] === 'install' ? 'install' : 'sign-in') + ' terminal', hint: 'Finish there (and in your browser). This page updates when you come back.' };
     else if (s.ready) action = { label: 'Use ' + name, hint: 'Explanations use your ' + name + ' plan. Yamori never asks for an API key.' };
-    else if (s.installed) action = { label: owner === 'claude' ? 'Sign in to Claude' : 'Sign in with ChatGPT', hint: 'Opens a terminal and your browser. Sign in there; this page updates when you come back.' };
-    else action = { label: 'Install ' + cli, hint: owner === 'claude' ? 'Runs Anthropic’s official installer in a terminal, then opens sign-in. About a minute.' : 'Installs OpenAI’s Codex CLI in a terminal (with npm or Homebrew), then opens sign-in.' };
+    else if (s.installed) action = { label: owner === 'codex' ? 'Sign in with ChatGPT' : 'Sign in to ' + name, hint: 'Opens a terminal and your browser. Sign in there; this page updates when you come back.' };
+    else action = { label: 'Install ' + cli, hint: owner === 'claude' ? 'Runs Anthropic’s official installer in a terminal, then opens sign-in. About a minute.' : owner === 'cursor' ? 'Runs Cursor’s official CLI installer in a terminal, then opens sign-in. About a minute.' : 'Installs OpenAI’s Codex CLI in a terminal (with npm or Homebrew), then opens sign-in.' };
     const alt = s.installed && s.signedIn !== false && !working[owner] ? { label: s.signedIn === true ? 'Use a different account' : 'Sign in' } : undefined;
     return { id: owner, name, product: cli + ' · uses your ' + name + ' plan', lines, action, alt, ready: !!s.ready, badge: s.ready ? (chosen === owner ? 'In use' : 'Ready') : '' };
   };
   const rank = owner => (statuses[owner]?.ready ? 0 : statuses[owner]?.installed ? 2 : 4) + (owner === chosen ? 0 : 1);
   const cards = [...OWNERS].sort((a, b) => rank(a) - rank(b)).map(card);
-  const other = OWNERS.find(owner => owner !== chosen);
+  const other = OWNERS.find(owner => owner !== chosen && statuses[owner]?.ready) || OWNERS.find(owner => owner !== chosen);
   const notice = PROVIDERS[chosen] && statuses[chosen] && !statuses[chosen].ready && statuses[other]?.ready ? `${AI_NAMES[chosen]} isn’t ready (${statuses[chosen].problem || 'not set up'}). ${AI_NAMES[other]} is ready to use instead.`
-    : OWNERS.every(owner => statuses[owner] && !statuses[owner].installed) ? 'Neither is on this computer yet. Pick the one whose plan you have; the install runs in a terminal you can watch.' : '';
-  const view = { title: 'Set up Yamori', lead: 'Yamori explains code with an AI you already use: Claude or ChatGPT. Choose one; setup takes about a minute and uses your own sign-in.',
-    next: pending?.label || '', notice, cards, foot: 'Yamori runs Claude Code or Codex on this computer with your sign-in and plan limits.' };
+    : OWNERS.every(owner => statuses[owner] && !statuses[owner].installed) ? 'None of them is on this computer yet. Pick the one whose plan you have; the install runs in a terminal you can watch.' : '';
+  const view = { title: 'Set up Yamori', lead: 'Yamori explains code with an AI you already use: Claude, ChatGPT or Cursor. Choose one; setup takes about a minute and uses your own sign-in.',
+    next: pending?.label || '', notice, cards, foot: 'Yamori runs Claude Code, Codex or the Cursor CLI on this computer with your sign-in and plan limits.' };
   if (done) {
     const s = statuses[done] || {};
     view.done = { title: '✓ Yamori will use ' + AI_NAMES[done], text: (s.account ? 'Signed in · ' + s.account + '. ' : '') + 'Change it any time from AI ▾ in a Yamori tab, or with Yamori: Set Up AI.',
@@ -2007,8 +2022,8 @@ function createSetup(context, { api = vscode, system = {}, status = providerStat
 
 async function chooseInstalledProvider(context, api = vscode, discover = findCLI) {
   if (context.globalState.get('provider') !== undefined) return;
-  const owners = ['codex', 'claude'];
-  const installed = await Promise.allSettled(owners.map(owner => discover(owner, setting(api, owner === 'claude' ? 'claudePath' : 'codexPath'))));
+  const owners = ['codex', 'claude', 'cursor'];
+  const installed = await Promise.allSettled(owners.map(owner => discover(owner, cliPathFor(api, owner))));
   const index = installed.findIndex(result => result.status === 'fulfilled');
   if (index >= 0 && context.globalState.get('provider') === undefined) await context.globalState.update('provider', owners[index]);
 }
@@ -2131,9 +2146,11 @@ async function activate(context) {
     const { model, effort, cliPath } = connectionOptions(context.globalState, owner);
     const binary = await findCLI(owner, cliPath);
     const reasoning = !effort ? [] : owner === 'claude' ? ['--effort', effort] : ['-c', 'model_reasoning_effort=' + JSON.stringify(effort)];
-    const sessionContext = owner === 'claude' ? ['--append-system-prompt', firstTurn.readingContext] :
+    // Cursor's CLI has no system-prompt option, so its first message carries the reading context.
+    const sessionContext = owner === 'claude' ? ['--append-system-prompt', firstTurn.readingContext] : owner === 'cursor' ? [] :
       ['-c', 'developer_instructions=' + JSON.stringify(firstTurn.readingContext).replace(/\x7f/g, '\\u007f')];
-    const launch = cliLaunch(binary, [...(model ? ['--model', model] : []), ...reasoning, ...sessionContext, '--', firstTurn.question]);
+    const question = owner === 'cursor' ? firstTurn.readingContext + '\n\n' + firstTurn.question : firstTurn.question;
+    const launch = cliLaunch(binary, [...(model ? ['--model', model] : []), ...(owner === 'cursor' ? [] : reasoning), ...sessionContext, '--', question]);
     current = readerTerminals.get(key)?.terminal;
     if (current && !current.exitStatus) { current.show(); return; }
     // The Python extension skips auto-activation for terminals created with this
@@ -3987,7 +4004,8 @@ function createReader(context, navigation) {
   async function chooseProvider() {
     const picked = await vscode.window.showQuickPick([
       { label: 'Codex', description: 'Use your local Codex sign-in', value: 'codex' },
-      { label: 'Claude Code', description: 'Use your local Claude Code sign-in', value: 'claude' }
+      { label: 'Claude Code', description: 'Use your local Claude Code sign-in', value: 'claude' },
+      { label: 'Cursor', description: 'Use your local Cursor CLI sign-in', value: 'cursor' }
     ], { title: 'Choose a provider', placeHolder: 'CLI providers use their own saved sign-in and plan limits.' });
     if (!picked || picked.value === provider || !PROVIDERS[picked.value]) return;
     cancel(); codePreview.cancel();

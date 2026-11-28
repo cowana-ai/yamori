@@ -190,13 +190,16 @@ test('Overview opens Setup without a provider, one click continues, and readers 
     // Cards: most ready first, exactly one primary action each, plain text.
     const missing = { claude: { installed: false, signedIn: false, ready: false, problem: 'Not installed' }, codex: { installed: true, signedIn: false, ready: false, problem: 'Not signed in', source: 'ChatGPT app' } };
     let view = setupView(missing, {});
-    assert.deepEqual(view.cards.map(card => card.id), ['codex', 'claude']);
-    assert.deepEqual(view.cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code']);
+    assert.deepEqual(view.cards.map(card => card.id), ['codex', 'claude', 'cursor']);
+    assert.deepEqual(view.cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code', 'Install Cursor CLI']);
+    assert.equal(view.cards[2].product, 'Cursor CLI · uses your Cursor plan');
+    assert.equal(setupView({ ...missing, cursor: { installed: true, signedIn: false, ready: false, problem: 'Not signed in' } }, {}).cards.find(card => card.id === 'cursor').action.label, 'Sign in to Cursor');
     assert.deepEqual(view.cards[0].lines.map(line => line.text), ['Codex installed · from ChatGPT app', 'Not signed in']);
     view = setupView({ claude: { installed: true, signedIn: true, ready: true, account: 'reader@example.com · max plan', source: 'Claude Desktop' }, codex: missing.codex }, { chosen: 'codex', pending: { label: 'explain plan.py' } });
     assert.equal(view.cards[0].action.label, 'Use Claude'); assert.equal(view.cards[0].badge, 'Ready'); assert.equal(view.cards[0].lines[0].text, 'Claude Code installed · from Claude Desktop');
     assert.match(view.notice, /ChatGPT isn’t ready \(Not signed in\)\. Claude is ready to use instead\./); assert.equal(view.next, 'explain plan.py');
-    assert.match(setupView({ claude: missing.claude, codex: { installed: false, ready: false } }).notice, /Neither is on this computer yet/);
+    assert.match(setupView({ claude: missing.claude, codex: { installed: false, ready: false }, cursor: { installed: false, ready: false } }).notice, /None of them is on this computer yet/);
+    assert.match(setupView({ claude: missing.claude, codex: missing.codex, cursor: { installed: true, signedIn: true, ready: true } }, { chosen: 'codex' }).notice, /ChatGPT isn’t ready \(Not signed in\)\. Cursor is ready to use instead\./);
     // A first-time user (no AI chosen) gets Setup instead of an empty reader.
     const state = new Map([['detail', 'overview']]); h.context.globalState.get = (k, f) => state.get(k) ?? f; h.context.globalState.update = async (k, v) => state.set(k, v);
     const readersBefore = h.readers().length;
@@ -1353,7 +1356,7 @@ test('first use chooses an installed provider without overwriting an explicit pr
   const {chooseInstalledProvider}=module.exports;const values=new Map(),context={globalState:{get:key=>values.get(key),update:async(key,value)=>values.set(key,value)}};
   const api={workspace:{isTrusted:false,getConfiguration:()=>({get:()=>'/project/evil',inspect:()=>undefined})}};
   const calls=[];await chooseInstalledProvider(context,api,async(owner,configured)=>{calls.push(owner);assert.equal(configured,'');if(owner==='codex')throw new Error('not installed');return '/user/claude';});
-  assert.equal(values.get('provider'),'claude');assert.deepEqual(calls,['codex','claude']);
+  assert.equal(values.get('provider'),'claude');assert.deepEqual(calls,['codex','claude','cursor']);
   await chooseInstalledProvider(context,api,async()=>{throw new Error('An explicit choice must skip detection');});assert.equal(values.get('provider'),'claude');
 });
 
@@ -3048,7 +3051,7 @@ test('a sign-in started in Setup continues by itself once it works, and coming b
   await setup.show({ pending: { label: 'explain a.py', run: async () => { opened++; } } });
   const panel = panels[0], last = () => panel.messages.at(-1).state;
   assert.match(panel.webview.html, /<title>Set up Yamori<\/title>/); assert.doesNotMatch(panel.webview.html, /innerHTML/);
-  assert.deepEqual(last().cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code']);
+  assert.deepEqual(last().cards.map(card => card.action.label), ['Sign in with ChatGPT', 'Install Claude Code', 'Install Cursor CLI']);
   await panel.receive({ type: 'primary', provider: 'codex' });
   assert.deepEqual([...terminals[0].options.shellArgs], ['login']);
   const before = checks; await focusWindow({ focused: true }); await new Promise(resolve => setTimeout(resolve, 10));
