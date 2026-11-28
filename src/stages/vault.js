@@ -9,6 +9,7 @@
 // this is plain file IO: nothing in this module calls a model.
 const fs = require('node:fs');
 const path = require('node:path');
+const { PROJECT_DIR, PROJECT_FILES } = require('../config');
 
 const START = '<!-- yamori:start -->', END = '<!-- yamori:end -->';
 const NOTES_HEADING = '## Your notes';
@@ -16,7 +17,7 @@ const MAX_NOTE = 4000;
 
 function vaultRoot({ vaultPath, root }) {
   const repo = path.basename(root);
-  return vaultPath ? path.join(vaultPath, 'Yamori', safeName(repo)) : path.join(root, '.yamori', 'notes');
+  return vaultPath ? path.join(vaultPath, 'Yamori', safeName(repo)) : path.join(root, PROJECT_DIR, PROJECT_FILES.notes);
 }
 // File names Obsidian and every OS accept.
 function safeName(text) {

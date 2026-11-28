@@ -629,7 +629,7 @@ async function claudeCapabilities(binary, signal) {
 }
 async function claudeSettingsArgs(binary, signal) { return (await claudeCapabilities(binary, signal)).settings; }
 // Yamori's read-only MCP server, as each CLI expects it.
-const MCP_NAME = 'yamori';
+const MCP_NAME = require('../config').MCP_SERVER_NAME;
 const tomlString = value => JSON.stringify(String(value));
 function codexMcpConfig(tools) {
   return { command: tools.command, args: tools.args, env: tools.env || {}, default_tools_approval_mode: 'approve', startup_timeout_sec: 20, tool_timeout_sec: 30 };

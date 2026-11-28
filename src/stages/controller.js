@@ -7,6 +7,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { PROJECT_DIR, PROJECT_FILES } = require('../config');
 const { openStageDb, closeStageDb, dbPath, available, StageDbUnavailable } = require('./db');
 const { createRun, normalizeBudget, activity } = require('./budget');
 const stages = require('./generate');
@@ -38,11 +39,11 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     if (!available()) throw new StageDbUnavailable();
     item.db = openStageDb(file);
     // The database is derived and local: keep it out of commits.
-    try { const ignore = path.join(item.root, '.yamori', '.gitignore'); if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'yamori.db\nyamori.db-*\nagent-done\n'); } catch { /* Best effort. */ }
+    try { const ignore = path.join(item.root, PROJECT_DIR, '.gitignore'); if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, [PROJECT_FILES.db, PROJECT_FILES.db + '-*', PROJECT_FILES.agentDone, ''].join('\n')); } catch { /* Best effort. */ }
     if (!item.workflowId) item.workflowId = item.db.meta('last_workflow') || undefined;
     try { item.db.setMeta('vault_root', vaultFor(item).dir); } catch { /* Notes are optional. */ }
     // An agent's MCP `done` touches .yamori/agent-done: settle the burst now.
-    try { item.doneWatch = fs.watch(path.dirname(file), (_event, name) => { if (String(name) === 'agent-done') item.scheduler.done(); }); }
+    try { item.doneWatch = fs.watch(path.dirname(file), (_event, name) => { if (String(name) === PROJECT_FILES.agentDone) item.scheduler.done(); }); }
     catch { /* Without the watch, the idle timer still settles the burst. */ }
     return item.db;
   }
@@ -66,7 +67,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     const before = item.vault?.dir;
     item.vault = new Vault({ vaultPath, root: item.root });
     // Notes written before the vault was found come along; nothing there is overwritten.
-    const local = path.join(item.root, '.yamori', 'notes');
+    const local = path.join(item.root, PROJECT_DIR, PROJECT_FILES.notes);
     for (const from of new Set([before, local].filter(dir => dir && dir !== item.vault.dir))) {
       try { if (fs.existsSync(from)) { fs.cpSync(from, item.vault.dir, { recursive: true, force: false, errorOnExist: false }); fs.rmSync(from, { recursive: true, force: true }); } } catch { /* The old notes stay where they were. */ }
     }

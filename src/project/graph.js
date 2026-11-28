@@ -6,6 +6,7 @@
 // AI notes (purposes and a project glossary) are layered on top by the extension.
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { PROJECT_DIR } = require('../config');
 const crypto = require('node:crypto');
 
 const GRAMMAR_DIR = path.join(__dirname, '..', '..', 'vendor', 'tree-sitter');
@@ -1077,7 +1078,7 @@ class ProjectStore {
 // Code or Codex) read and write the same project store. An index maps each
 // project folder to its store, so a process outside VS Code can find it.
 const SCAN_EXTENSIONS = new Set('ipynb py js jsx ts tsx mjs cjs go rs java kt scala cs c cpp cc h hpp rb php swift dart r sh bash lua pl sql vue svelte md mdx txt rst json yaml yml toml ini cfg'.split(' '));
-const SCAN_SKIP = new Set(['node_modules', '.git', '.venv', 'venv', 'env', 'dist', 'build', 'out', 'vendor', '.next', 'coverage', '__pycache__', '.yamori']);
+const SCAN_SKIP = new Set(['node_modules', '.git', '.venv', 'venv', 'env', 'dist', 'build', 'out', 'vendor', '.next', 'coverage', '__pycache__', PROJECT_DIR]);
 const indexFile = cacheRoot => path.join(cacheRoot, 'projects', 'index.json');
 const realOr = async value => { try { return await fs.realpath(value); } catch { return path.resolve(value); } };
 async function readJsonFile(file) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return undefined; } }
@@ -1263,7 +1264,7 @@ function pseudocodeText(rel, saved, { hash: currentHash, sourceLines, sourceToke
 }
 // The .yamori/ mirror in the project: one text file per explained source file,
 // an index of every mapped file, and a README. Kept out of git locally.
-const MIRROR = '.yamori';
+const MIRROR = PROJECT_DIR;
 async function syncMirror(root, graph, notes, explanations) {
   const base = path.join(root, MIRROR), pseudo = path.join(base, 'pseudocode'), written = new Set();
   await fs.mkdir(pseudo, { recursive: true });

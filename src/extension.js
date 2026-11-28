@@ -22,6 +22,7 @@ const { mapHTML } = require('./views/guide');
 const { setupHTML } = require('./views/setup');
 const project = require('./project/graph');
 const { render, text: promptText } = require('./prompts');
+const { STORE_FILES, RELOADED_STORE_FILES, MCP_SERVER_NAME, NODE_RUNTIME_ENV, LAUNCHER, MIGRATION_FILE, AGENT_SESSION } = require('./config');
 
 const INCLUDE = '**/*.{ipynb,py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,h,hpp,rb,php,swift,dart,r,R,sh,bash,lua,pl,sql,vue,svelte,md,mdx,txt,rst,json,yaml,yml,toml,ini,cfg}';
 const EXCLUDE = '**/{node_modules,.git,.venv,venv,env,dist,build,out,vendor,.next,coverage,__pycache__}/**';
@@ -341,7 +342,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     clearTimeout(entry.viewTimer);
     entry.viewTimer = setTimeout(() => {
       const value = { at: new Date().toISOString(), project: path.basename(entry.root.fsPath), ...entry.view };
-      void fs.mkdir(entry.store.dir, { recursive: true }).then(() => fs.writeFile(path.join(entry.store.dir, 'view.json'), JSON.stringify(value))).catch(() => {});
+      void fs.mkdir(entry.store.dir, { recursive: true }).then(() => fs.writeFile(path.join(entry.store.dir, STORE_FILES.view), JSON.stringify(value))).catch(() => {});
     }, 250);
   }
   const mappedEntry = uri => uri?.scheme === 'file' ? [...maps.values()].filter(entry => entry.store && relative(entry.root.fsPath, uri.fsPath)).sort((a, b) => b.root.fsPath.length - a.root.fsPath.length)[0] : undefined;
@@ -487,17 +488,17 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       const reload = {};
       require('node:fs').mkdirSync(entry.store.dir, { recursive: true, mode: 0o700 });
       entry.storeWatch = require('node:fs').watch(entry.store.dir, (event, name) => {
-        if (name === 'show.json') { clearTimeout(reload[name]); reload[name] = setTimeout(() => void showRequest(entry).catch(() => {}), 80); return; }
-        if (!['explanations.json', 'graph.json', 'notes.json', 'plan.json'].includes(name)) return;
+        if (name === STORE_FILES.show) { clearTimeout(reload[name]); reload[name] = setTimeout(() => void showRequest(entry).catch(() => {}), 80); return; }
+        if (!RELOADED_STORE_FILES.includes(name)) return;
         clearTimeout(reload[name]);
         reload[name] = setTimeout(async () => {
           if (entry.closed) return;
           const value = await cache.json(entry.store.file(name.slice(0, -5)));
           if (!value || typeof value !== 'object') return;
-          if (name === 'plan.json') { if (entry.planController || entry.planDirty || !value.conversation || JSON.stringify(entry.plans) === JSON.stringify(value)) return; entry.plans = value; entry.planError = ''; bump(entry); }
-          else if (name === 'explanations.json') entry.explanations = value;
-          else if (name === 'notes.json' && value.files && !entry.notesController) entry.notes = value;
-          else if (name === 'graph.json' && value.version === project.GRAPH_VERSION && !entry.scanning) entry.graph = value;
+          if (name === STORE_FILES.plan) { if (entry.planController || entry.planDirty || !value.conversation || JSON.stringify(entry.plans) === JSON.stringify(value)) return; entry.plans = value; entry.planError = ''; bump(entry); }
+          else if (name === STORE_FILES.explanations) entry.explanations = value;
+          else if (name === STORE_FILES.notes && value.files && !entry.notesController) entry.notes = value;
+          else if (name === STORE_FILES.graph && value.version === project.GRAPH_VERSION && !entry.scanning) entry.graph = value;
           else return;
           post(entry); changed();
         }, 150);
@@ -890,7 +891,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     built.text += '\n' + journal.context(entry.plans);
     built.text += indexHeader + index + '\nPROJECT ROOT: ' + JSON.stringify(entry.root.fsPath) + '\nProject access is already configured through the read-only Yamori MCP server. Use list_files, search_name, read_source and git_changes yourself. Markdown profiles and prompt/config files are available too. Previous assistant claims about missing access may be stale; check the tools now. Do not ask the user to attach files already in this project or to enable tools. Ask only about a requirement you cannot resolve from project evidence. Native shell access is intentionally disabled while planning; use Yamori tools instead.'; built.tokens += indexTokens;
     // Bundled static lookups execute no project code, so planning can use them in Restricted Mode.
-    const tools = { command: process.execPath, args: [path.join(__dirname, 'project', 'mcp.js'), '--store', entry.store.dir, '--root', entry.root.fsPath], env: { ELECTRON_RUN_AS_NODE: '1' }, projectRoot: entry.root.fsPath };
+    const tools = { command: process.execPath, args: [path.join(__dirname, 'project', 'mcp.js'), '--store', entry.store.dir, '--root', entry.root.fsPath], env: { ...NODE_RUNTIME_ENV }, projectRoot: entry.root.fsPath };
     built.tokens = project.tokensOf(built.text);
     return { built, files, tools, editor };
   }
@@ -1544,7 +1545,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       if (api.workspace.isTrusted === false || setting(api, 'agentTools', true) === false || !snapshot?.uri?.startsWith('file:')) return undefined;
       const entry = await entryForFile(api.Uri.parse(snapshot.uri));
       if (!entry?.graph) return undefined;
-      return { command: process.execPath, args: [path.join(__dirname, 'project', 'mcp.js'), '--store', entry.store.dir, '--root', entry.root.fsPath], env: { ELECTRON_RUN_AS_NODE: '1' } };
+      return { command: process.execPath, args: [path.join(__dirname, 'project', 'mcp.js'), '--store', entry.store.dir, '--root', entry.root.fsPath], env: { ...NODE_RUNTIME_ENV } };
     },
     async recordExplanation(snapshot, level, value) {
       if (!snapshot?.uri?.startsWith('file:') || snapshot.selected || !Array.isArray(value?.sections) || !LEVELS[level]) return;
@@ -1684,7 +1685,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
 }
 
 async function migratePreferences(context) {
-  const file = path.join(context.globalStorageUri.fsPath, 'migration.json');
+  const file = path.join(context.globalStorageUri.fsPath, MIGRATION_FILE);
   let saved;
   try { saved = JSON.parse(await fs.readFile(file, 'utf8')); } catch { return; }
   if (LEVELS[saved.detail] && context.globalState.get('detail') === undefined) await context.globalState.update('detail', saved.detail);
@@ -1734,20 +1735,20 @@ function setupTerminal(context, api, owner, kind, binary, system = {}) {
 // A stable launcher in Yamori's storage starts the knowledge server from the
 // installed extension, so extension updates never break the registration.
 async function writeLauncher(context, api = vscode) {
-  const bin = path.join(context.globalStorageUri.fsPath, 'bin'), cacheRoot = path.join(context.globalStorageUri.fsPath, 'cache');
+  const bin = path.join(context.globalStorageUri.fsPath, LAUNCHER.dir), cacheRoot = path.join(context.globalStorageUri.fsPath, LAUNCHER.cache);
   await fs.mkdir(bin, { recursive: true });
   const extension = context.extensionUri?.fsPath || path.join(__dirname, '..');
-  await fs.writeFile(path.join(bin, 'current.json'), JSON.stringify({ extension, cache: cacheRoot, updatedAt: Date.now() }));
-  const launcher = path.join(bin, 'yamori-mcp.js');
+  await fs.writeFile(path.join(bin, LAUNCHER.current), JSON.stringify({ extension, cache: cacheRoot, updatedAt: Date.now() }));
+  const launcher = path.join(bin, LAUNCHER.script);
   await fs.writeFile(launcher, `#!/usr/bin/env node
 // Written by the Yamori extension: starts Yamori's knowledge server
 // from the installed extension. Safe to delete; Connect writes it again.
 'use strict';
 const fs = require('fs'), path = require('path');
-const current = JSON.parse(fs.readFileSync(path.join(__dirname, 'current.json'), 'utf8'));
+const current = JSON.parse(fs.readFileSync(path.join(__dirname, '${LAUNCHER.current}'), 'utf8'));
 require(path.join(current.extension, 'src', 'project', 'mcp.js')).main(process.argv.slice(2), { cache: current.cache });
 `);
-  return { launcher, runtime: process.execPath, env: { ELECTRON_RUN_AS_NODE: '1' } };
+  return { launcher, runtime: process.execPath, env: { ...NODE_RUNTIME_ENV } };
 }
 // One agent session per project in the VS Code terminal: Claude Code or Codex,
 // connected to Yamori's MCP server, told to look at what the founder has open
@@ -1772,7 +1773,7 @@ function planComments(before, after) {
 }
 function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
   const open = new Map();
-  const name = entry => 'Yamori chat · ' + path.basename(entry.root.fsPath);
+  const name = entry => AGENT_SESSION.terminalPrefix + path.basename(entry.root.fsPath);
   const alive = entry => {
     const known = open.get(entry.root.toString());
     if (known && !known.exitStatus) return known;
@@ -1786,10 +1787,10 @@ function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
     const { model, cliPath } = connectionOptions(context.globalState, provider, api);
     const binary = await find(provider, cliPath);
     const launcher = await writeLauncher(context, api);
-    const server = { command: launcher.runtime, args: [launcher.launcher], env: { ELECTRON_RUN_AS_NODE: '1' } };
+    const server = { command: launcher.runtime, args: [launcher.launcher], env: { ...NODE_RUNTIME_ENV } };
     let args;
     if (provider === 'claude') {
-      const key = 'agentSession:' + entry.root.toString();
+      const key = AGENT_SESSION.stateKey + entry.root.toString();
       let id = context.globalState.get(key);
       const resume = id && claudeTranscript(id);
       if (!resume) { id = require('node:crypto').randomUUID(); await context.globalState.update(key, id); }
@@ -1817,7 +1818,7 @@ function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
       terminal.show(preserveFocus);
       // Puts words on the agent's prompt; without submit they wait there for you to send.
       // Enter goes separately, so the agent's prompt takes the text as typed, not as a paste.
-      if (prefill) setTimeout(() => { terminal.sendText(prefill, false); if (submit) setTimeout(() => terminal.sendText('\r', false), 150); }, existing ? 0 : 2500);
+      if (prefill) setTimeout(() => { terminal.sendText(prefill, false); if (submit) setTimeout(() => terminal.sendText('\r', false), AGENT_SESSION.submitDelayMs); }, existing ? 0 : AGENT_SESSION.firstPrefillDelayMs);
       return terminal;
     }
   };
@@ -1826,10 +1827,10 @@ function createAgentSessions(context, api = vscode, { find = findCLI } = {}) {
 // registration of Yamori's knowledge server with each CLI.
 function agentPlan(launch, { claude, codex, home = os.homedir() } = {}) {
   return {
-    claude: claude && { cli: claude, add: ['mcp', 'add', '--scope', 'user', 'yamori', '-e', 'ELECTRON_RUN_AS_NODE=1', '--', launch.runtime, launch.launcher], remove: ['mcp', 'remove', '--scope', 'user', 'yamori'],
+    claude: claude && { cli: claude, add: ['mcp', 'add', '--scope', 'user', MCP_SERVER_NAME, '-e', 'ELECTRON_RUN_AS_NODE=1', '--', launch.runtime, launch.launcher], remove: ['mcp', 'remove', '--scope', 'user', MCP_SERVER_NAME],
       // Earlier versions also wrote these; Connect and Disconnect remove them.
       legacy: { settings: path.join(home, '.claude', 'settings.json'), instructions: path.join(home, '.claude', 'CLAUDE.md') } },
-    codex: codex && { cli: codex, add: ['mcp', 'add', 'yamori', '--env', 'ELECTRON_RUN_AS_NODE=1', '--', launch.runtime, launch.launcher], remove: ['mcp', 'remove', 'yamori'], legacy: { instructions: path.join(home, '.codex', 'AGENTS.md') } }
+    codex: codex && { cli: codex, add: ['mcp', 'add', MCP_SERVER_NAME, '--env', 'ELECTRON_RUN_AS_NODE=1', '--', launch.runtime, launch.launcher], remove: ['mcp', 'remove', MCP_SERVER_NAME], legacy: { instructions: path.join(home, '.codex', 'AGENTS.md') } }
   };
 }
 // The marked rules block an earlier version added to an instructions file.
@@ -1841,7 +1842,7 @@ function stripRulesBlock(text) {
 function stripHooks(settings) {
   const next = { ...(settings || {}) }, all = { ...(next.hooks || {}) };
   for (const event of Object.keys(all)) {
-    all[event] = (all[event] || []).map(group => ({ ...group, hooks: (group.hooks || []).filter(hook => !String(hook.command || '').includes('yamori-mcp.js')) })).filter(group => group.hooks.length);
+    all[event] = (all[event] || []).map(group => ({ ...group, hooks: (group.hooks || []).filter(hook => !String(hook.command || '').includes(LAUNCHER.script)) })).filter(group => group.hooks.length);
     if (!all[event].length) delete all[event];
   }
   if (Object.keys(all).length) next.hooks = all; else delete next.hooks;
@@ -1875,7 +1876,7 @@ async function connectAgents(context, api = vscode, { run = runProcess, discover
       const file = path.join(cursorDir, 'mcp.json'), before = await fs.readFile(file, 'utf8').catch(() => undefined);
       const config = before === undefined ? {} : JSON.parse(before);
       const servers = { ...(config.mcpServers || {}) };
-      if (disconnect) delete servers.yamori; else servers.yamori = { command: launch.runtime, args: [launch.launcher], env: { ELECTRON_RUN_AS_NODE: '1' } };
+      if (disconnect) delete servers[MCP_SERVER_NAME]; else servers[MCP_SERVER_NAME] = { command: launch.runtime, args: [launch.launcher], env: { ...NODE_RUNTIME_ENV } };
       const after = JSON.stringify({ ...config, mcpServers: servers }, null, 2) + '\n';
       if (after !== before && !(before === undefined && disconnect)) await fs.writeFile(file, after);
       results.push('Cursor' + (disconnect ? ': disconnected' : ': connected'));

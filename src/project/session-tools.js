@@ -7,7 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const describe = require('../prompts').descriptions('session/tools');
 
-const VIEW_FILE = 'view.json', SHOW_FILE = 'show.json';
+const { STORE_FILES } = require('../config');
+const VIEW_FILE = STORE_FILES.view, SHOW_FILE = STORE_FILES.show;
 const object = (properties, required = []) => ({ type: 'object', properties, additionalProperties: false, ...(required.length ? { required } : {}) });
 
 const SESSION_READ_TOOLS = [

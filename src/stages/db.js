@@ -10,6 +10,7 @@
 // the founder last accepted the stage so a change can be shown red/green.
 const fs = require('node:fs');
 const path = require('node:path');
+const { PROJECT_DIR, PROJECT_FILES } = require('../config');
 
 const SCHEMA_VERSION = 2;
 const SCHEMA = `
@@ -134,7 +135,7 @@ const dayOf = (at = new Date()) => (typeof at === 'string' ? new Date(at) : at).
 const row = value => value && { ...value };
 
 // The database file for a project folder.
-const dbPath = root => path.join(root, '.yamori', 'yamori.db');
+const dbPath = root => path.join(root, PROJECT_DIR, PROJECT_FILES.db);
 
 class StageDb {
   constructor(file) {

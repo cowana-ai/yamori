@@ -5,6 +5,7 @@
 // one costly tool: rate-limited and counted against the token budget.
 const fs = require('node:fs');
 const path = require('node:path');
+const { PROJECT_DIR, PROJECT_FILES } = require('../config');
 const { openStageDb, closeStageDb, dbPath, available, dayOf } = require('./db');
 const { createRun, normalizeBudget, estimatePrompt } = require('./budget');
 const { render } = require('../prompts');
@@ -125,7 +126,7 @@ function createStageTools({ root, requestStructured, now = () => Date.now() }) {
       return `Added a note to ${found.name}. The founder sees it on the stage card.`;
     },
     done() {
-      const marker = path.join(root(), '.yamori', 'agent-done');
+      const marker = path.join(root(), PROJECT_DIR, PROJECT_FILES.agentDone);
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(marker, String(now()));
       return 'Thanks. Yamori will summarize the stages you changed once, now.';

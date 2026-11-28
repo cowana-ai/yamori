@@ -1418,6 +1418,7 @@ test('packaged validators work with no Ajv installation, schema compilation or d
     const files=['ai/engine.js','ai/cards.js','ai/schemas.js','ai/validation.min.js','project/token-estimates.js'];
     await Promise.all(files.map(file=>fs.copyFile(path.join(__dirname,'..','src',file),path.join(root,file))));
     await fs.cp(path.join(__dirname,'..','src','prompts'),path.join(root,'prompts'),{recursive:true});
+    await fs.copyFile(path.join(__dirname,'..','src','config.js'),path.join(root,'config.js'));
     const script=`const Module=require('node:module'),load=Module._load;Module._load=function(id,...args){if(id==='ajv'||id.startsWith('ajv/')||id==='esbuild')throw new Error('Build-only dependency loaded at runtime');return load.call(this,id,...args);};global.Function=function(){throw new Error('Runtime schema compilation is forbidden');};const {parseResult}=require('./engine');const source=${JSON.stringify(source)},value=${JSON.stringify(valid)};if(parseResult(JSON.stringify(value),source).title!==value.title)process.exit(2);process.stdout.write('Standalone validation works');`;
     const output=await runProcess(process.execPath,['-e',script],'',{cwd:path.join(root,'ai')});assert.equal(output,'Standalone validation works');
   }finally{await fs.rm(root,{recursive:true,force:true});}

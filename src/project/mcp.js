@@ -18,6 +18,7 @@ const project = require('./graph');
 const { createStageTools, STAGE_READ_TOOLS, STAGE_WRITE_TOOLS } = require('../stages/mcp-tools');
 const { createSessionTools, SESSION_READ_TOOLS, SESSION_WRITE_TOOLS } = require('./session-tools');
 const prompts = require('../prompts');
+const { STORE_FILES, MCP_SERVER_NAME } = require('../config');
 const describe = prompts.descriptions('mcp/tools'), agentDescribe = prompts.descriptions('mcp/agent-tools');
 
 const MAX_OUTPUT = 16000, MAX_LINES = 200, RESCAN_MS = 15000;
@@ -104,9 +105,9 @@ function createServer({ store, root, log, cache }) {
   const refresh = async (force = false) => {
     located ||= await standingStore({ root, cache });
     if (!force && Date.now() - lastScan < RESCAN_MS) return;
-    const previous = readJson(path.join(located.dir, 'graph.json'));
+    const previous = readJson(path.join(located.dir, STORE_FILES.graph));
     let graph = await project.scanFolder(located.root, previous?.version === project.GRAPH_VERSION ? previous : undefined, indexer, located.key);
-    const referenced = (readJson(path.join(located.dir, 'plan.json'))?.current?.steps || []).filter(step => !step.newFile).map(step => step.file);
+    const referenced = (readJson(path.join(located.dir, STORE_FILES.plan))?.current?.steps || []).filter(step => !step.newFile).map(step => step.file);
     if (referenced.length) graph = await project.includeSourceFiles(located.root, graph, referenced, indexer);
     const same = previous && JSON.stringify(Object.entries(previous.files || {}).map(([rel, file]) => [rel, file.hash])) === JSON.stringify(Object.entries(graph.files).map(([rel, file]) => [rel, file.hash]));
     if (!same) await project.updateStoreFile(located.dir, 'graph', () => graph);
@@ -114,8 +115,8 @@ function createServer({ store, root, log, cache }) {
     await syncMirror().catch(() => {});
   };
   const load = () => {
-    const graph = readJson(path.join(located.dir, 'graph.json'));
-    return { graph: graph?.version === project.GRAPH_VERSION && graph.files ? graph : undefined, notes: readJson(path.join(located.dir, 'notes.json')) || { files: {} }, explanations: readJson(path.join(located.dir, 'explanations.json')) || {} };
+    const graph = readJson(path.join(located.dir, STORE_FILES.graph));
+    return { graph: graph?.version === project.GRAPH_VERSION && graph.files ? graph : undefined, notes: readJson(path.join(located.dir, STORE_FILES.notes)) || { files: {} }, explanations: readJson(path.join(located.dir, STORE_FILES.explanations)) || {} };
   };
   // .yamori/ text copies are opt-in: the extension drops mirror.on in the store when the setting is on.
   const mirrorOn = () => !!located && fs.existsSync(path.join(located.dir, 'mirror.on'));
@@ -148,7 +149,7 @@ function createServer({ store, root, log, cache }) {
   const status = (graph, explanations, rel) => { const view = explanations[rel]?.logic || explanations[rel]?.overview; return !view ? 'none' : view.hash === graph.files[rel].hash ? 'current' : 'outdated'; };
   const handlers = {
     get_plan({ graph }, { path: file, include_pseudocode = false, include_skipped = false }) {
-      const plan = readJson(path.join(located.dir, 'plan.json'))?.current;
+      const plan = readJson(path.join(located.dir, STORE_FILES.plan))?.current;
       if (!plan) return { available: false, hint: 'No saved plan yet. The human can create one in Yamori’s Plan canvas.' };
       const rel = file === undefined ? undefined : plan.steps?.some(step => step.file === file && step.newFile) ? file : mapped(graph, file);
       return { available: true, proposal: true, approved: !!plan.approvedAt, goal: plan.goal, summary: plan.summary, updatedAt: plan.updatedAt, rejectedFiles: plan.dismissed || [],
@@ -174,7 +175,7 @@ function createServer({ store, root, log, cache }) {
       const links = graph.edges.filter(edge => inFolder(edge.from, folder) || inFolder(edge.to, folder)).slice(0, 300).map(edge => edge.from + ' → ' + edge.to + (edge.names?.length ? ' (' + edge.names.slice(0, 6).join(', ') + ')' : ''));
       return { folders, uses: links };
     },
-    get_conversation(_data, args) { return require('./conversation').page(readJson(path.join(located.dir, 'plan.json')) || {}, args); },
+    get_conversation(_data, args) { return require('./conversation').page(readJson(path.join(located.dir, STORE_FILES.plan)) || {}, args); },
     list_files({ graph, notes, explanations }, { folder } = {}) {
       const groups = {};
       for (const rel of Object.keys(graph.files).sort()) {
@@ -402,7 +403,7 @@ FORMAT FOR save_pseudocode
         // Map the project as soon as an agent connects, so its first tool call is fast.
         if (standing) void ready().catch(() => {});
         return reply({ protocolVersion: typeof message.params?.protocolVersion === 'string' ? message.params.protocolVersion : '2025-06-18', capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: 'yamori', title: 'Yamori project knowledge', version: '2.0.0' },
+          serverInfo: { name: MCP_SERVER_NAME, title: 'Yamori project knowledge', version: '2.0.0' },
           instructions: standing ? AGENT_RULES : 'Read-only project knowledge from Yamori: the project map, file notes, glossary, cached pseudocode and source lines of mapped files.' });
       case 'ping': return reply({});
       case 'tools/list': return reply({ tools: tools.filter(tool => !HIDDEN.includes(tool.name)).map(({ name, description, inputSchema }) => ({ name, description, inputSchema,
