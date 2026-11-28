@@ -1,7 +1,7 @@
 'use strict';
 // One-call answers to "where / how does X happen" for agents. Ranks the
 // project's functions, classes and script sections against the question
-// using everything Yamori already knows about them (the How it works steps,
+// using everything Yamori already knows about them (the steps in Your System,
 // names, pseudocode and the code itself) and returns the best few with their
 // source lines, so an agent can answer without a search-then-read loop.
 // No model calls; plain text out, sized to a budget.

@@ -1,12 +1,12 @@
-# How it works (system map)
+# Your System (system map)
 
-The panel's tabs: **Files** (which files to read first), **File links** (which files use which, grouped by folder; formerly Map), **How it works** (formerly System) and **Chat & plan**.
+The panel's tabs: **Files** (which files to read first), **File links** (which files use which, grouped by folder; formerly Map), **Your System** (formerly How it works, before that System) and **Chat & plan**.
 
-The **How it works** tab (in Yamori's project panel, or the **How it works** button in Read) shows how the whole project works: its **parts** (each workflow, agent, server or tool), the few **steps** each part goes through, and how the parts work together. It is written in plain words; the code is there when you ask for it.
+The **Your System** tab (in Yamori's project panel, or the **Your System** button in Read) shows how the whole project works: its **parts** (each workflow, agent, server or tool), the few **steps** each part goes through, and how the parts work together. It is written in plain words; the code is there when you ask for it.
 
 ## Map it
 
-Open the How it works tab and click **Map my system**. The tab says up front about how many small AI calls and tokens that takes. You never pick entry points:
+Open the Your System tab and click **Map my system**. The tab says up front about how many small AI calls and tokens that takes. You never pick entry points:
 
 1. Without AI, Yamori looks in every folder (two levels deep, so `agents/email` and `agents/sales` count separately) for functions that could start something: a function nothing else in its file calls, that reaches the most of the project, runs at startup, or is named like a starter (`main`, `run_*`, `*_loop`, handlers).
 2. One cheap AI call reads those candidates with the files' AI notes, decides which are real parts, names them, and says how they connect ("the web server starts the email helper"). It can only choose among the candidates, so it cannot invent code.
@@ -56,9 +56,9 @@ Inside a part:
 
 ## Chat, plan and change things in the terminal
 
-Opening Yamori's project panel starts one agent session for the project in the VS Code terminal by itself, in the background (`yamori.chatAutoStart`); it uses no AI until you write to it. **Chat** (top of the How it works tab), **Show chat** (in How it works and in Plan), or **Yamori: Chat with Your Agent in the Terminal** brings it up: Claude Code or Codex, whichever Yamori uses. It stays open while you work; with Claude Code the same conversation resumes after VS Code restarts. You can enlarge a diagram and chat beside it.
+Opening Yamori's project panel starts one agent session for the project in the VS Code terminal by itself, in the background (`yamori.chatAutoStart`); it uses no AI until you write to it. **Chat** (top of the Your System tab), **Show chat** (in Your System and in Plan), or **Yamori: Chat with Your Agent in the Terminal** brings it up: Claude Code or Codex, whichever Yamori uses. It stays open while you work; with Claude Code the same conversation resumes after VS Code restarts. You can enlarge a diagram and chat beside it.
 
-The session is connected to Yamori and knows what you are looking at: the file, line and selected text in the editor, the file open in Read, the Yamori tab, and the part, step or file you selected in How it works (MCP `get_view`). So "why does this retry?" works without naming the file. It reads the map and your notes (`list_stages`, `get_stage`), writes plans onto Yamori's **Plan** canvas (`save_plan`), and can bring a part, step, file or plan into view in Yamori (`show_in_yamori`). **Ask in terminal…** on a step or file opens the session with that step or file already on the prompt.
+The session is connected to Yamori and knows what you are looking at: the file, line and selected text in the editor, the file open in Read, the Yamori tab, and the part, step or file you selected in Your System (MCP `get_view`). So "why does this retry?" works without naming the file. It reads the map and your notes (`list_stages`, `get_stage`), writes plans onto Yamori's **Plan** canvas (`save_plan`), and can bring a part, step, file or plan into view in Yamori (`show_in_yamori`). **Ask in terminal…** on a step or file opens the session with that step or file already on the prompt.
 
 **Plan mode works too.** A plan made in the agent's own plan mode (`/plan` in Claude Code, Plan mode in Codex) appears on the **Plan** canvas by itself, and Yamori brings the Plan tab into view. This covers the session Yamori started and any other Claude Code or Codex session in this project folder. Neither agent calls `save_plan` in plan mode. Claude Code ends with `ExitPlanMode` carrying the plan, and Codex with a `<proposed_plan>` block. Yamori reads the new lines of those sessions' logs on this computer (`~/.claude/projects`, `~/.codex/sessions`) every few seconds. It then turns the plan's Markdown into steps without AI:
 - each item that names a mapped file (`model.py`, `src/a.js:40-60`) becomes a step on that file;
@@ -70,7 +70,7 @@ The session is connected to Yamori and knows what you are looking at: the file, 
 
 The full plan text is in the conversation, with any items that name no mapped file. A plan the agent also saved with `save_plan` is not added twice. Turn this off with `yamori.agentPlanMode`.
 
-`yamori.chatInTerminal` (default on): turn it off to use the chat inside the Plan tab and the **What should change** box in How it works instead.
+`yamori.chatInTerminal` (default on): turn it off to use the chat inside the Plan tab and the **What should change** box in Your System instead.
 
 ## Review
 
@@ -86,7 +86,7 @@ Notes connect to Obsidian with nothing to set up:
 - Otherwise, if Obsidian is installed, they go to the vault Obsidian has open (or opened last), found in Obsidian's own list of vaults.
 - Otherwise they go to `.yamori/notes/` in the project. Notes written there move into the vault once Yamori finds one; nothing in the vault is overwritten.
 
-Notes update by themselves: when you open Yamori, save code, map, review, or ask your agent. The top of the How it works tab says where they are and when they last synced; click it for the folder, **Open in Obsidian** and **Show the folder**. **Update** also says what it did, including when nothing changed. `yamori.obsidian.vaultPath` picks a vault by hand; `yamori.obsidian.auto` turns the search off.
+Notes update by themselves: when you open Yamori, save code, map, review, or ask your agent. The top of the Your System tab says where they are and when they last synced; click it for the folder, **Open in Obsidian** and **Show the folder**. **Update** also says what it did, including when nothing changed. `yamori.obsidian.vaultPath` picks a vault by hand; `yamori.obsidian.auto` turns the search off.
 
 In the vault, under `Yamori/<repo>/`:
 
@@ -139,6 +139,6 @@ node scripts/bench-mcp/report.js
 
 ## Storage
 
-`.yamori/yamori.db` (SQLite, git-ignored) holds the parts, their steps, how parts connect, file hashes, the review queue and the AI-use log. It is derived from code and can be deleted; your renames and merges are the only edits it keeps. The How it works tab needs the editor's built-in SQLite (VS Code 1.101 or newer).
+`.yamori/yamori.db` (SQLite, git-ignored) holds the parts, their steps, how parts connect, file hashes, the review queue and the AI-use log. It is derived from code and can be deleted; your renames and merges are the only edits it keeps. The Your System tab needs the editor's built-in SQLite (VS Code 1.101 or newer).
 
 Links from notes into the code use `vscode://cowana-ai.yamori/open?file=<path>&line=<n>`.

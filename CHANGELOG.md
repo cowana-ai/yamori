@@ -2,6 +2,8 @@
 
 ### Unreleased
 
+- **How it works is now Your System.** The tab in Yamori's project panel and the button in Read are renamed.
+- **Plan tab works with your terminal agent.** Comments on plan steps gather on the agent's prompt until you send them; Approve tells the terminal agent to implement, and the plan moves to history when it finishes.
 - **Cheaper, more useful agent tools.** A new `find` tool answers where or how something happens in one call. It returns the matching functions with what they do, their part and step, and their code, ranked from the How it works map, names, pseudocode and source, so agents can skip the grep-then-read loop. Agents now see 13 tools instead of 27, with definitions about half the size. `list_stages` and `get_stage` answer in brief text unless asked for `detail: "full"`. Read tools carry `readOnlyHint` and `read_source` can read one function by name. `scripts/bench-mcp/` measures agents with and without Yamori.
 - **Plans from `/plan` show in Yamori.** A plan made in Claude Code's plan mode (`/plan`) or Codex's Plan mode now appears on the **Plan** canvas by itself, from Yamori's terminal session or any other session in the project folder. Each item that names a mapped file, function or lines becomes a step there, and the full plan text goes into the conversation. No AI is used. Turn it off with `yamori.agentPlanMode`.
 - **Code before docs in big projects.** Over the 500-file map limit, code files now come before Markdown and data files, so a large content folder no longer pushes whole services out of the map. Python packages that live elsewhere in a monorepo (`packages/x/src/pkg`) now resolve, so their imports show up as links.

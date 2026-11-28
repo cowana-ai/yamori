@@ -17,7 +17,7 @@ const STAGE = { type: 'string', description: 'Stage id or name, as list_stages s
 const DETAIL = { type: 'string', enum: ['brief', 'full'], description: 'brief (default): compact text; full: every field as JSON.' };
 
 const STAGE_READ_TOOLS = [
-  { name: 'list_stages', description: "How it works: what the system does, its parts and how they connect; with workflow, that part's steps in order. Brief by default.", inputSchema: object({ workflow: WORKFLOW, detail: DETAIL }) },
+  { name: 'list_stages', description: "Your System: what the system does, its parts and how they connect; with workflow, that part's steps in order. Brief by default.", inputSchema: object({ workflow: WORKFLOW, detail: DETAIL }) },
   { name: 'get_stage', description: "One step of a part: what it does, its functions (file:lines, what each does) and the founder's notes, which are rules for edits there. Brief by default; detail full adds behaviors and pseudocode.", inputSchema: object({ workflow: WORKFLOW, stage: STAGE, detail: DETAIL, include_pseudocode: { type: 'boolean', description: 'With detail full: include cached pseudocode (default true).' } }, ['stage']) },
   { name: 'what_changed', description: 'Behavior changes per stage since the founder last reviewed (or all with since_review=false): one plain sentence each, status (pending, approved, rejected), the founder\'s why and the commit range. No model call.', inputSchema: object({ workflow: WORKFLOW, since_review: { type: 'boolean', description: 'Only changes since the last review (default true).' } }) }
 ];
@@ -88,7 +88,7 @@ function createStageTools({ root, requestStructured, now = () => Date.now() }) {
         'get_stage gives a step\'s functions and the founder\'s notes; find answers where/how questions with code.'].join('\n');
       if (workflow) { const value = summary(workflowOf(workflow), graph); return full ? value : brief(value); }
       const list = database().workflows();
-      if (!list.length) throw new Error('No map yet. The founder maps the system in Yamori (How it works tab).');
+      if (!list.length) throw new Error('No map yet. The founder maps the system in Yamori (Your System tab).');
       if (list.length === 1) { const value = summary(list[0].id, graph), system = database().meta('system_summary') || undefined; return full ? { system, ...value } : (system ? system + '\n\n' : '') + brief(value); }
       const names = new Map(list.map(item => [item.id, item.name || item.id]));
       if (!full) {

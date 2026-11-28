@@ -1287,7 +1287,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
     switch (message.type) {
       case 'ready': post(entry); break;
       case 'stages': await stagesHost?.message(entry, message.message); break;
-      case 'viewChanged': noteView(entry, { tab: { start: 'Files', map: 'File links', plan: 'Plan', stages: 'How it works' }[message.view] }); break;
+      case 'viewChanged': noteView(entry, { tab: { start: 'Files', map: 'File links', plan: 'Plan', stages: 'Your System' }[message.view] }); break;
       case 'agentSession': await agentSessions?.open(entry, { prefill: typeof message.prefill === 'string' ? message.prefill : '' }); break;
       case 'readCurrent': await api.commands.executeCommand?.('yamori.read'); break;
       case 'openFile': if (file) await openFile(fileUri(entry, file)); break;
@@ -1752,7 +1752,7 @@ require(path.join(current.extension, 'src', 'project', 'mcp.js')).main(process.a
 // connected to Yamori's MCP server, told to look at what the founder has open
 // and to plan onto Yamori's canvas. It survives closing Yamori's panels; with
 // Claude Code the same conversation resumes after a restart.
-const SESSION_RULES = `You are the founder's agent for this project, started from Yamori. Yamori shows them how the system works (How it works tab), plans on a canvas (Plan), and pseudocode beside the code (Read).
+const SESSION_RULES = `You are the founder's agent for this project, started from Yamori. Yamori shows them how the system works (Your System tab), plans on a canvas (Plan), and pseudocode beside the code (Read).
 - When they say this, here, that, or what I'm looking at, call the yamori get_view tool first: it tells you the file, lines, selection, Read file, and the System part, step or file they have open.
 - For where or how questions, call the yamori find tool: it returns the matching functions with their current code, callers and callees, so you can usually answer from it without grep or reading files, and its code needs no re-reading. Say what the code shows, not what you assume.
 - To explain how the parts fit together, use list_stages and get_stage; notes there are the founder's rules, follow them.

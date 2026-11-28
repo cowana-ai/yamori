@@ -321,7 +321,7 @@ function layeredLayout(nodes, edges, { width = 220, height = 100, gapX = 90, gap
   return { positions, width: Math.max(hasChain ? columns.length : 0, Math.min(alone.length, perRow)) * (width + gapX) - gapX, height: ((hasChain ? tallest : 0) + rows) * (height + gapY) - gapY + (rows && hasChain ? 24 : 0) };
 }
 
-// Loose word search over a part's steps, for the How it works search bar:
+// Loose word search over a part's steps, for the search bar in Your System:
 // lower case, simple endings dropped ("selection" finds "selects"), one typo
 // allowed in longer words, and a few plain verbs that mean the same thing.
 function stepSearch() {

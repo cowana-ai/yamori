@@ -296,7 +296,7 @@ function createStages({ api, context, map, setting, gitOperationInProgress, exte
     item.callLinks[workflowId] = { signature, links, builtFrom, layers };
   }
   // What classes are made of, read from code (no AI), cached by the files' content:
-  // the How it works view and the Obsidian notes ask for the same files often.
+  // the Your System tab and the Obsidian notes ask for the same files often.
   const CODE = /\.(py|ipynb|m?[jt]sx?|cjs)$/i;
   function layersSignature(item, files) {
     const graph = item.entry.graph || { files: {} };
