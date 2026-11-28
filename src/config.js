@@ -41,4 +41,10 @@ const AGENT_SESSION = {
   submitDelayMs: 150
 };
 
-module.exports = { STORE_FILES, RELOADED_STORE_FILES, PROJECT_DIR, PROJECT_FILES, MCP_SERVER_NAME, NODE_RUNTIME_ENV, LAUNCHER, MIGRATION_FILE, AGENT_SESSION };
+// Files Yamori reads as source, folders it never scans, and the largest
+// source it sends to a model in one request.
+const SOURCE_GLOB = '**/*.{ipynb,py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,h,hpp,rb,php,swift,dart,r,R,sh,bash,lua,pl,sql,vue,svelte,md,mdx,txt,rst,json,yaml,yml,toml,ini,cfg}';
+const EXCLUDED_GLOB = '**/{node_modules,.git,.venv,venv,env,dist,build,out,vendor,.next,coverage,__pycache__}/**';
+const MAX_SOURCE_BYTES = 120000;
+
+module.exports = { SOURCE_GLOB, EXCLUDED_GLOB, MAX_SOURCE_BYTES, STORE_FILES, RELOADED_STORE_FILES, PROJECT_DIR, PROJECT_FILES, MCP_SERVER_NAME, NODE_RUNTIME_ENV, LAUNCHER, MIGRATION_FILE, AGENT_SESSION };
