@@ -1,0 +1,20 @@
+VOICE AND INFORMATION DENSITY:
+- Use direct, casual action words: pick, get, copy, keep, try, use. Prefer 'Pick K different pool items' to 'Randomly select distinct pool entries'. Prefer 'Try the next state' to 'Form the provisional next state'. Avoid formal filler such as obtain, corresponding, configured, supplied and in order to when it adds no distinction.
+- Most action lines should be 3–9 words; allow a few more for a necessary condition or relationship. Put separate operations on separate lines. Do not shorten by hiding what the object is or deleting correctness-critical details.
+- Spend words on what distinguishes executions: how many, random versus ordered selection, without repeats, original versus updated values, teacher versus student, fixed versus changing, and when something runs. Keep random or uniform sampling explicit when present. Shorten connective prose, not these qualifiers. Use a name consistently rather than repeating a long description.
+- Define unfamiliar data nouns in a short # note at first use: what a pool item represents, what its state stores, and what its level indexes. Ground definitions in this source; do not silently substitute a class label for a timestep index. Reuse the short names afterward. A definition note normally needs one short phrase per term.
+- Use **double asterisks** around at most one or two short, behavior-defining phrases per line, sparingly across the block (e.g. **without repeats**, **teacher targets**, **before refresh**). Never emphasize filler words, whole sentences, or every variable. Keep emphasis balanced; do not split a formula's delimiters.
+- Put a blank line between meaningful phases, normally after 2–4 actions. Put short definition/insight notes beside their phase. Do not add phase-heading sentences that merely restate the next action.
+READER-FIRST RULES:
+- Explain the purpose and sequence of the logic, rather than merely capitalizing the source.
+- Give each idea a short, purpose-based title and the original symbol once for navigation. Prefer verbs and everyday names over dense noun phrases. Group related operations by purpose, not automatically one section per method.
+- Use one action or structuring element per line, actual line breaks, four-space indentation, and blank lines between phases.
+- Put IF, ELSE and each consequence on separate lines. No inline conditional expressions or semicolon-packed statements.
+- Keep meaningful names and concise formulas in Logic. Explain unfamiliar abbreviations and programming concepts once where they matter, not on every use. For example, explain a callback as an action the training framework triggers, EMA as a smoothed model copy, and a trajectory as a state followed through successive times.
+- Keep one level of abstraction within a block; give a complicated sub-idea its own block. Prefer short phrases with clarity taking priority. Use natural If/Otherwise/For each phrasing, explicit scope and blank lines between phases.
+- A block should answer one reader question. Do not combine independent jobs such as changing learning rates and measuring validation error merely because both are callbacks. Define domain objects (for example, latent state) by their role, not only their dimensions. Prefer 'keep weights fixed' to unexplained 'freeze', and 'record where settings came from' to jargon such as 'provenance'.
+- Make hidden programming mechanics explicit when they affect meaning: when an action runs, what changes in place, what remains fixed, whether a selection is a copy, and whether a returned loss is later used by the framework to update weights. Preserve actual ordering; do not put precision settings after the computation they govern.
+- Keep exact conditions when a simpler term would broaden them: CUDA is not every graphics device. Distinguish exclusion from gradient updates from immutable weights; a smoothed model copy may still change through explicit averaging. Explain technical distinctions briefly instead of smoothing them away.
+- Do not reproduce framework boilerplate, unused arguments or long access chains. Group trivial hooks by lifecycle event.
+{{LABEL_RULE}}
+

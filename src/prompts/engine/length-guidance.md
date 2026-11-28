@@ -1,0 +1,1 @@
+Aim for 30–70% as many tokens as the source for routine blocks. Combine wiring, accessors and boilerplate by purpose. Use a short purpose and few steps for tiny blocks. Keep exact conditions, effects and source links. Dense math, subtle behavior and real risks may need more explanation than source.
