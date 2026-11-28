@@ -5,15 +5,16 @@
 // File IO on the project store only; no model calls.
 const fs = require('node:fs');
 const path = require('node:path');
+const describe = require('../prompts').descriptions('session/tools');
 
 const VIEW_FILE = 'view.json', SHOW_FILE = 'show.json';
 const object = (properties, required = []) => ({ type: 'object', properties, additionalProperties: false, ...(required.length ? { required } : {}) });
 
 const SESSION_READ_TOOLS = [
-  { name: 'get_view', description: "What the founder is looking at right now: the open file and cursor (and selected text) in the editor, the file open in Yamori Read, the Yamori tab (Files, File links, Your System, Plan), and in Your System the part, step or file they selected. Call it whenever they say this, here, that or what I'm looking at. No model call.", inputSchema: object({}) }
+  { name: 'get_view', description: describe('get_view'), inputSchema: object({}) }
 ];
 const SESSION_WRITE_TOOLS = [
-  { name: 'save_plan', description: "Save a plan on Yamori's Plan canvas, where the founder reviews it beside the code: one step per change, each naming a mapped file (and lines), what changes and why, in plain words. Replaces the current plan (the old one stays in history). Use this when the founder asks you to plan, instead of only writing the plan in the chat.",
+  { name: 'save_plan', description: describe('save_plan'),
     inputSchema: object({
       goal: { type: 'string', description: 'What the founder wants, in their words.' },
       summary: { type: 'string', description: 'One or two plain sentences: what the plan does.' },
@@ -25,7 +26,7 @@ const SESSION_WRITE_TOOLS = [
         why: { type: 'string', description: 'Why, in plain words.' },
         newFile: { type: 'boolean', description: 'True when the step creates this file.' } }, ['file', 'title', 'change']) }
     }, ['goal', 'steps']) },
-  { name: 'show_in_yamori', description: "Bring something into view in Yamori for the founder: Your System, the system map (optionally a part, step or file in it), the Plan canvas, or a file in Read at a line. Use it after answering, so they see what you mean.",
+  { name: 'show_in_yamori', description: describe('show_in_yamori'),
     inputSchema: object({
       tab: { type: 'string', enum: ['system', 'plan', 'read', 'map'] },
       part: { type: 'string', description: 'System: a part id or name from list_stages.' },

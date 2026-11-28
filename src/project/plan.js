@@ -6,6 +6,7 @@
 // plan is drafted from, the gate that decides whether a cheap model's draft is
 // good enough, and the plan as an agent prompt or Markdown.
 const project = require('./graph');
+const { text: promptText } = require('../prompts');
 
 const safeNewFilePath = file => typeof file === 'string' && file.length > 0 && file.length <= 500 && !/[\\:\0]/.test(file) && !file.startsWith('/') && file.split('/').every(part => part && !['.', '..', '__proto__', 'constructor', 'prototype'].includes(part));
 const newFileStep = step => step?.startLine === 0 && step?.endLine === 0 && safeNewFilePath(step.file);
@@ -245,7 +246,7 @@ function validatePlan(plan, graph, { starting = plan.starting || [], dismissed =
 const rangeText = step => step.newFile ? step.file + ' (new file proposal; no source lines yet)' : step.file + ' lines ' + step.startLine + '–' + step.endLine;
 function promptFromPlan(plan, { only } = {}) {
   const steps = plan.steps.map((step, index) => ({ step, number: index + 1 })).filter(({ step, number }) => (only === undefined || number === only) && step.status !== 'skipped');
-  const lines = ['Goal: ' + plan.goal, '', only === undefined ? 'Do these steps in order. After each step, check it against the project\'s tests where they exist, and tell me what changed in plain language.' : 'Do this step only. Check it against the project\'s tests where they exist, and tell me what changed in plain language.', ''];
+  const lines = ['Goal: ' + plan.goal, '', only === undefined ? promptText('planning/steps-all') : promptText('planning/step-one'), ''];
   for (const { step, number } of steps) {
     lines.push(number + '. ' + step.title + (step.status === 'done' ? ' (already done)' : ''), '   Where: ' + rangeText(step), '   Change: ' + step.change);
     if (step.why) lines.push('   Why: ' + step.why);
@@ -254,8 +255,8 @@ function promptFromPlan(plan, { only } = {}) {
     if (step.note) lines.push('   My note: ' + step.note);
     lines.push('');
   }
-  if (plan.steps.some(step => step.newFile)) lines.push('Proposed new files have no source ranges; verify the destination is absent before creating them.');
-  lines.push('Read the real source of each range before editing it.');
+  if (plan.steps.some(step => step.newFile)) lines.push(promptText('planning/new-files-note'));
+  lines.push(promptText('planning/read-before-edit'));
   return lines.join('\n');
 }
 function planToMarkdown(plan) {

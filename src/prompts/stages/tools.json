@@ -1,0 +1,8 @@
+{
+  "list_stages": "Your System: what the system does, its parts and how they connect; with workflow, that part's steps in order. Brief by default.",
+  "get_stage": "One step of a part: what it does, its functions (file:lines, what each does) and the founder's notes, which are rules for edits there. Brief by default; detail full adds behaviors and pseudocode.",
+  "what_changed": "Behavior changes per stage since the founder last reviewed (or all with since_review=false): one plain sentence each, status (pending, approved, rejected), the founder's why and the commit range. No model call.",
+  "add_note": "Append a note to a stage's free notes (the founder sees it on the stage card and in Obsidian). Use for decisions and constraints you discovered, not for progress logs.",
+  "propose_change": "Costly (one model call, rate-limited, counted against the founder's token budget). For an intent on a stage, return the files and steps to touch, with the founder's notes as constraints. Call get_stage first; call this only when the stage alone does not tell you where to edit.",
+  "done": "Tell Yamori your editing run is finished, so it summarizes the stages you changed once instead of after every file. Call once at the end of a run that edited code."
+}

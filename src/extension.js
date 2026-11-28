@@ -21,6 +21,7 @@ const { LocalCache, currentSnapshot, analyzeSource, dependencyBlocks, dependency
 const { mapHTML } = require('./views/guide');
 const { setupHTML } = require('./views/setup');
 const project = require('./project/graph');
+const { render, text: promptText } = require('./prompts');
 
 const INCLUDE = '**/*.{ipynb,py,js,jsx,ts,tsx,mjs,cjs,go,rs,java,kt,scala,cs,c,cpp,cc,h,hpp,rb,php,swift,dart,r,R,sh,bash,lua,pl,sql,vue,svelte,md,mdx,txt,rst,json,yaml,yml,toml,ini,cfg}';
 const EXCLUDE = '**/{node_modules,.git,.venv,venv,env,dist,build,out,vendor,.next,coverage,__pycache__}/**';
@@ -963,7 +964,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
   async function planRequest(entry, plan, tier, signal, { previous, feedback } = {}) {
     const { built, files, tools, editor } = await buildPlanningContext(entry, plan);
     const connection = await planConnection(entry, tier), session = planningSession(entry, plan, connection);
-    const context = (session.ready ? 'Use the project investigation already retained in this session. Re-read source only for genuinely new evidence.' : built.text) + planningChanges(entry, session) + '\n' + editor;
+    const context = (session.ready ? promptText('planning/reuse-investigation') : built.text) + planningChanges(entry, session) + '\n' + editor;
     const started = Date.now();
     entry.planBusy = { ...entry.planBusy, contextTokens: built.tokens }; post(entry);
     const response = await requestStructured({ ...connection, planning: true, session, recoveryContext: session.ready ? built.text : '', onQuestion: request => planNativeQuestion(entry, request, signal), onProgress: update => {
@@ -1130,7 +1131,7 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       await entry.store?.save('plan', entry.plans);
       const connection = await planConnection(entry, 'main'), { tools, editor } = await buildPlanningContext(entry, plan);
       const result = await implementPlan({ ...connection, provider: planningProvider(), cwd: entry.root.fsPath, signal: controller.signal, tools, session: projectConversation(entry).sessions[planningProvider()], onSession: session => rememberNative(entry, session),
-        prompt: 'The user approved this Yamori plan. Implement it now in this project. Read current source before editing; cached line numbers may have moved. Respect existing user changes and rejected files. Do not commit, push, publish, deploy or delete unrelated files. Run relevant checks. If anything remains incomplete, a check fails, or permission is missing, report status blocked and explain. Report completed only when every active step and its relevant checks are finished.\n\n' + editor + '\n\n' + journal.context(entry.plans, 12000, projectConversation(entry).sessions[planningProvider()]?.lastMessageId, { includePlan: false }) + '\n\n' + planner.promptFromPlan(approved) + '\n\nRejected files (do not modify): ' + JSON.stringify(plan.dismissed || []),
+        prompt: promptText('planning/implement-approved') + '\n\n' + editor + '\n\n' + journal.context(entry.plans, 12000, projectConversation(entry).sessions[planningProvider()]?.lastMessageId, { includePlan: false }) + '\n\n' + planner.promptFromPlan(approved) + '\n\nRejected files (do not modify): ' + JSON.stringify(plan.dismissed || []),
         onProgress: update => { if (controller.signal.aborted || entry.planController !== controller) return; if (postReply(entry, update)) return; if (update.phase) { entry.planBusy.text = update.phase; entry.planActivity.push(update.phase); entry.planActivity = entry.planActivity.slice(-100); } if (typeof update.reply === 'string') entry.planBusy.reply = update.reply; if (update.usage) entry.planBusy.usage = update.usage; post(entry); } });
       if (controller.signal.aborted || currentPlan(entry) !== plan) return;
       rememberNative(entry, result.session);
@@ -1177,13 +1178,13 @@ function createProjectMap(context, { openFile, openSetup, api = vscode, indexer 
       let result;
       if (mode === 'chat' && api.workspace.isTrusted === false) {
         const session = planningSession(entry, view, connection);
-        const response = await requestStructured({ ...connection, planning: true, session, tools, signal: controller.signal, schema: CHAT_SCHEMA, showPreview: false, onProgress: progress, onQuestion: request => planNativeQuestion(entry, request, controller.signal), prompt: 'Discuss this project using read-only Yamori tools. Answer the current question; do not draft a plan unless requested. Do not run code or modify files. Return JSON with one message string.\n' + built.text + '\n' + editorSnapshot + '\nCURRENT QUESTION: ' + JSON.stringify(text) });
+        const response = await requestStructured({ ...connection, planning: true, session, tools, signal: controller.signal, schema: CHAT_SCHEMA, showPreview: false, onProgress: progress, onQuestion: request => planNativeQuestion(entry, request, controller.signal), prompt: promptText('planning/chat-read-only') + '\n' + built.text + '\n' + editorSnapshot + '\nCURRENT QUESTION: ' + JSON.stringify(text) });
         const value = JSON.parse(response.raw); if (typeof value.message !== 'string' || !value.message.trim()) throw new Error('The agent returned an empty answer.'); result = { summary: value.message, usage: response.usage, session: response.nativeSession, planningSession: true };
       } else {
         disposePlanningSession(entry.planSession); entry.planSession = undefined;
         const prior = chat.sessions[planningProvider()];
-        const instruction = mode === 'chat' ? 'Answer the current question about this project. Read files and use Yamori tools as needed. Never edit files or run project code. Return a message.' : 'Continue as the project coding agent. Answer questions directly without changing files. When the user explicitly requests a task, perform it and run relevant checks. Do not automatically implement an unapproved draft plan. Do not commit, push, publish, deploy or delete unrelated files unless the current user request explicitly asks. Report completed only when the requested task is finished; otherwise report blocked with the reason.';
-        const evidence = '\nCheck current files when facts may have changed. Earlier reported test results are history, not proof that current changes pass. Prefer concise explanations with relevant file paths.\n';
+        const instruction = mode === 'chat' ? promptText('planning/chat') : promptText('planning/work');
+        const evidence = '\n' + promptText('planning/evidence') + '\n';
         const prompt = instruction + evidence + '\n' + editorSnapshot + '\n' + journal.context(entry.plans, 24000, prior?.lastMessageId) + '\nCURRENT USER REQUEST: ' + JSON.stringify(text);
         result = await implementPlan({ ...connection, provider: planningProvider(), cwd: entry.root.fsPath, mode, tools, session: prior, prompt, fallbackPrompt: instruction + evidence + '\n' + editorSnapshot + '\n' + journal.context(entry.plans) + '\nCURRENT USER REQUEST: ' + JSON.stringify(text), signal: controller.signal, onProgress: progress, onSession: session => rememberNative(entry, session) });
       }
@@ -1752,19 +1753,9 @@ require(path.join(current.extension, 'src', 'project', 'mcp.js')).main(process.a
 // connected to Yamori's MCP server, told to look at what the founder has open
 // and to plan onto Yamori's canvas. It survives closing Yamori's panels; with
 // Claude Code the same conversation resumes after a restart.
-const SESSION_RULES = `You are the founder's agent for this project, started from Yamori. Yamori shows them how the system works (Your System tab), plans on a canvas (Plan), and pseudocode beside the code (Read).
-- When they say this, here, that, or what I'm looking at, call the yamori get_view tool first: it tells you the file, lines, selection, Read file, and the System part, step or file they have open.
-- For where or how questions, call the yamori find tool: it returns the matching functions with their current code, callers and callees, so you can usually answer from it without grep or reading files, and its code needs no re-reading. Say what the code shows, not what you assume.
-- To explain how the parts fit together, use list_stages and get_stage; notes there are the founder's rules, follow them.
-- When they ask for a plan, write it with save_plan so it appears on Yamori's Plan canvas, then call show_in_yamori with tab "plan". Do not edit code until they approve.
-- Words on your prompt that start with [Plan comment] are the founder's comments on the canvas, gathered until they send them: answer them and, if they change the plan, save it again with save_plan.
-- When they press Approve in Yamori you get a message saying so: read the plan with get_plan (its steps, comments and rejected files), implement it, run the relevant checks, then call done; done clears the plan from the canvas.
-- In your own plan mode (/plan), finish the plan the usual way; Yamori puts it on the Plan canvas by itself. Name each file by its path in the project (and the function or lines) so every step lands on the right file.
-- After you explain a part, step or file, you may call show_in_yamori to bring it into view.
-- After a run that edited code, call done once.
-Keep answers short and plain; the founder may not read code.`;
+const SESSION_RULES = promptText('agent/session-rules');
 // What the terminal agent is told when the founder presses Approve in Yamori.
-const APPROVED_PROMPT = count => 'I approved the plan on Yamori\'s Plan canvas (' + count + ' change' + (count === 1 ? '' : 's') + '). Read it with get_plan, including my comments and rejected files, implement it, run the relevant checks, then call done.';
+const APPROVED_PROMPT = count => render('agent/approved', { count, plural: count === 1 ? '' : 's' });
 // Comments the founder added on the canvas since the last edit, as one line for
 // the agent's prompt. They gather there until the founder sends them.
 function planComments(before, after) {

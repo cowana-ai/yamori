@@ -16,12 +16,13 @@ function text(name) {
   return value;
 }
 // Values are inserted as given (never re-scanned), so data cannot add placeholders.
-function render(name, values = {}) {
-  return text(name).replace(/\{\{([\w.]+)\}\}/g, (_, key) => {
-    if (!Object.prototype.hasOwnProperty.call(values, key)) throw new Error('Prompt ' + name + ' needs a value for {{' + key + '}}.');
+function fill(template, values, label) {
+  return template.replace(/\{\{([\w.]+)\}\}/g, (_, key) => {
+    if (!Object.prototype.hasOwnProperty.call(values, key)) throw new Error('Prompt ' + label + ' needs a value for {{' + key + '}}.');
     return String(values[key]);
   });
 }
+function render(name, values = {}) { return fill(text(name), values, name); }
 // JSON data files (for example tool descriptions) stored with the prompts.
 function data(name) {
   const key = name + '.json';
@@ -29,4 +30,13 @@ function data(name) {
   return cache.get(key);
 }
 
-module.exports = { text, render, data };
+// Tool descriptions for one MCP tool list: describe(tool, values) gives one.
+function descriptions(name) {
+  return (tool, values = {}) => {
+    const value = data(name)[tool];
+    if (typeof value !== 'string') throw new Error('No description for tool ' + tool + ' in ' + name + '.json.');
+    return fill(value, values, name + ':' + tool);
+  };
+}
+
+module.exports = { text, render, data, descriptions };
